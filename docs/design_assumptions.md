@@ -60,7 +60,7 @@ We may want a data directory structure like:
 
 `{base_dir}/{task_code}/{participant_id}/{session}_run-0001.jsonl`
 
-... where `task_code` is supplied in the config file, `run-0001` is assigned by PI, and `participant_id` and `session` are supplied by the participant. It's critical that before we try to create files or directories, we check that the parameters are safe. As above: raise errors rather than trying to sanitize.
+... where `task_code` is supplied in the config file, `run-0001` is assigned by Pig, and `participant_id` and `session` are supplied by the participant. It's critical that before we try to create files or directories, we check that the parameters are safe. As above: raise errors rather than trying to sanitize.
 
 The rule for what counts as safe is in [configuration.md](configuration.md), and it's
 deliberately narrow: letters, digits, underscore, and a non-leading dash. Narrow enough
@@ -77,10 +77,10 @@ in a data file are hard to detect after the fact.
 The format is readable by humans, appendable one line at a time, and survives a
 truncated write with the loss of at most the last line.
 
-A repeated event ID is two different situations wearing one face, and PI tells them apart
+A repeated event ID is two different situations wearing one face, and Pig tells them apart
 by content rather than guessing.
 
-When PI stores an event it serializes it in a normalized way and records a hash of that
+When Pig stores an event it serializes it in a normalized way and records a hash of that
 serialization alongside the run ID and event ID:
 
 ```python
@@ -88,9 +88,9 @@ json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 ```
 
 An arriving event whose ID is already known is compared by hash. Matching hash means this
-is a retry: PI already has the event, writes nothing, and reports it as stored. A differing
+is a retry: Pig already has the event, writes nothing, and reports it as stored. A differing
 hash means two different events were given the same ID -- a broken counter, or two code
-paths that both think they own ID 5. PI keeps what it has, refuses the new one, and says
+paths that both think they own ID 5. Pig keeps what it has, refuses the new one, and says
 so, because that's the case where accepting silently would lose a trial and quietly corrupt
 a dataset.
 
@@ -132,7 +132,7 @@ one was refused. Deduplicating without that check would mean silently discarding
 genuinely different trials -- exactly the data loss this whole mechanism exists to prevent.
 The two halves hold each other up.
 
-The stored hash earns its place for the same reason. It's how PI answers "is this the same
+The stored hash earns its place for the same reason. It's how Pig answers "is this the same
 event I already have?" without opening the data file, which is the only alternative. Thirty-
 two bytes in the index beats scanning a JSONL on every arriving event.
 
@@ -160,7 +160,7 @@ run -- because an analyst who assumes IDs are unique will otherwise get a quietl
 answer. The run is still `complete`: it holds every event the task sent, which is what that
 word promises.
 
-The general shape here is deliberate. Every failure path PI has bends toward *duplicated
+The general shape here is deliberate. Every failure path Pig has bends toward *duplicated
 and visible* rather than *missing and silent*. Duplicates are recoverable by someone
 holding the data; a missing trial is not recoverable by anyone.
 
@@ -181,7 +181,7 @@ anything, and that the two halves can fail independently: an `rclone` push that 
 down nothing that a participant depends on.
 
 The cost is that a run reaches `complete` only when the sweep next runs, and that every
-deployment needs the command scheduled. Both are acceptable, because the promise PI makes to
+deployment needs the command scheduled. Both are acceptable, because the promise Pig makes to
 a task is fulfilled at `finalizing` — the events are on disk by then. `complete` is
 bookkeeping, and bookkeeping can wait for a cron job.
 
@@ -194,7 +194,7 @@ should require a redeploy or a restart if it can be avoided.
 
 ## Two rules that keep the study-shaped door open
 
-PI has no concept of a study, and doesn't need one. But the reasons to want one -- a
+Pig has no concept of a study, and doesn't need one. But the reasons to want one -- a
 participant roster shared across a project's tasks, an agreed list of timepoints -- are
 real, and they'll come up again. Two constraints make adding a study layer later a purely
 additive change rather than a migration. Both are free today.
@@ -221,13 +221,13 @@ Inlining is the version that hurts: adding studies later would mean restructurin
 configuration file and every task in it.
 
 Storage needs no rule. Paths are already per-task, so a task that wants to live under a
-project directory simply says so, and PI doesn't have to know why.
+project directory simply says so, and Pig doesn't have to know why.
 
 ## Tasks are static clients, hosted anywhere
 
-A task is normally HTML/JS/CSS with no server-side component, talking to PI over HTTPS.
-Never assume it shares a domain with PI. Every request a task makes is cross-origin, so
-anything depending on same-origin cookies is out, and PI's cross-origin headers have to be
+A task is normally HTML/JS/CSS with no server-side component, talking to Pig over HTTPS.
+Never assume it shares a domain with Pig. Every request a task makes is cross-origin, so
+anything depending on same-origin cookies is out, and Pig's cross-origin headers have to be
 permissive by default or ordinary tasks break. That's a deliberate position, not laziness —
 see [security.md](security.md). Some tasks may be standalone apps rather than web pages.
 
@@ -248,12 +248,12 @@ baseline." Tasks signal start and end. Per-task configuration governs what happe
 dataset that's never finalized, and whether repeat runs are allowed at all. Tasks can be
 open or closed to new data.
 
-The run is the only thing in PI with a lifecycle; see [definitions.md](definitions.md) for
+The run is the only thing in Pig with a lifecycle; see [definitions.md](definitions.md) for
 how it relates to participants, sessions, and datasets, and for the four states it moves
 through.
 
 Finalizing a run is real work — sorting the dataset, moving it, possibly copying it off the
-machine — and that work can fail for reasons outside PI. So it happens after the task has
+machine — and that work can fail for reasons outside Pig. So it happens after the task has
 been told its data is safe, never as a condition of saying so, and a run whose filing
 failed stays visible rather than being called done.
 
@@ -266,6 +266,6 @@ This must be friendly to run on minimal hardware. No server-based database — S
 mode is genuinely the right tool here — and no external queueing system unless something
 forces it.
 
-The test: someone should be able to test PI running on their laptop in an hour (or less) without becoming a sysadmin. Every added dependency is measured against that.
+The test: someone should be able to test Pig running on their laptop in an hour (or less) without becoming a sysadmin. Every added dependency is measured against that.
 
 For deployment, we can assume some sysadmin competency. Following modern systemd conventions and being friendly in that envirionment is the general goal.

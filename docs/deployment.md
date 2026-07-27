@@ -18,7 +18,7 @@ How often to run it is a judgment call. Every few minutes is plenty; the only th
 on it is somebody who wants to read a finished dataset. It must be safe to run twice at
 once, or to run while nothing needs doing, because a timer will do both.
 
-Trying PI out on a laptop, you can skip the timer and run the command by hand when you want
+Trying Pig out on a laptop, you can skip the timer and run the command by hand when you want
 to see a run reach `complete`.
 
 ## The health check

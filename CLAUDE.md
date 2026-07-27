@@ -14,7 +14,7 @@ This guidance applies generally -- when I've asked for something that conflicts 
 
 ## What this project is
 
-Psych Ingestor (PI): an HTTP API for ingesting, routing, and storing data from online
+Psych Ingestor (Pig): an HTTP API for ingesting, routing, and storing data from online
 behavioral-research tasks. Its parts:
 
 - A Python / FastAPI service handling data collection and storage
@@ -30,10 +30,10 @@ Read what the task at hand calls for rather than all of it.
 | Read | When |
 | --- | --- |
 | [docs/design_assumptions.md](docs/design_assumptions.md) | Before any design or implementation decision. These constraints are what to argue from when a choice is contested. |
-| [docs/definitions.md](docs/definitions.md) | Any time you use the words task, session, run, dataset, event, or participant. PI follows BIDS: a participant comes in for a *session*, does a *task*, and each time they do it is a *run*. "Session" never means the HTTP thing. |
+| [docs/definitions.md](docs/definitions.md) | Any time you use the words task, session, run, dataset, event, or participant. Pig follows BIDS: a participant comes in for a *session*, does a *task*, and each time they do it is a *run*. "Session" never means the HTTP thing. |
 | [docs/api.md](docs/api.md) | Working on endpoints, request/response shapes, or the client side of a task. |
 | [docs/configuration.md](docs/configuration.md) | Working on task definitions, the config file, storage paths, or the CLI. |
-| [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what PI does and doesn't defend against. |
+| [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what Pig does and doesn't defend against. |
 | [docs/deployment.md](docs/deployment.md) | Working on running the service — systemd, the health check. |
 | [docs/documentation_style.md](docs/documentation_style.md) | Writing any user-facing prose — docs, error messages, CLI help. Read `README.md` alongside it. |
 
@@ -52,7 +52,7 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
 - **Write for researchers, not programmers.** This applies to the API's shape as much as
   to its documentation.
 - **Few dependencies.** No server-based database, no external queue. Someone should be able
-  to run PI on a laptop in an afternoon.
+  to run Pig on a laptop in an afternoon.
 
 ## Settled, and not to be re-opened casually
 

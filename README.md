@@ -1,16 +1,16 @@
 # Psych Ingestor
-A simple API endpoint for ingesting, routing, and saving data from behavioral tasks in the psych research world
+A simple web server for ingesting, routing, and saving data from behavioral tasks in the psych research world
 
-**Status: being designed.** The documentation here describes what PI will do; the service
+**Status: being designed.** The documentation here describes what Pig will do; the service
 isn't built yet. If you're writing a task against it, read `docs/api.md` -- it ends with a
 list of what's still moving.
 
 ## Overview
-The Psych Ingestor (PI) is set up to handle data streams from a variety of online studies -- in principle, all of your lab's tasks can share this service. You'll set up a file containing a set of task definitions, and your tasks will send HTTPS requests to it to signal start and end of tasks, as well as send data. Data is sent as a series of JSON lines (one JSON object per recorded event) and stored with minimal processing.
+Psych Ingestor (Pig) is set up to handle data streams from a variety of online studies -- in principle, all of your lab's tasks can share this service. You'll set up a file containing a set of task definitions, and your tasks will send HTTPS requests to it to signal start and end of tasks, as well as send data. Data is sent as a series of JSON lines (one JSON object per recorded event) and stored with minimal processing.
 
 Your task itself will generally be statically-hostable; it will normally consist of HTML, javascript, and CSS. There's nothing saying you _can't_ have a separate server-side component to this, but you don't need one. Similarly, if you're building your tasks as standalone apps, that works too -- a task can collect a whole session offline and send everything at once when the device next has a network.
 
-Technically, PI consists of a few components:
+Technically, Pig consists of a few components:
 
 - A Python / FastAPI service that handles data collection and storage
 - A file, in version control, containing your task definitions
@@ -23,20 +23,20 @@ running one project with six tasks configures six tasks.
 
 ## The words
 
-PI uses BIDS' vocabulary, because most people here have already met it:
+Pig uses BIDS' vocabulary, because most people here have already met it:
 
 - A **participant** takes part in a study
 - They come in for a **session** -- `baseline`, `3mo`, whatever your study calls its timepoints
 - At each session they do a **task** -- a Stroop task, a delay-discounting game
 - Each time they do that task is a **run**, and a run records **events**
 
-A run is the thing PI tracks. It starts when a participant arrives, collects events while
+A run is the thing Pig tracks. It starts when a participant arrives, collects events while
 they work, and finishes when the task says so. If the same participant starts the same task
-twice, that's two runs, and PI keeps both -- nothing overwrites anything.
+twice, that's two runs, and Pig keeps both -- nothing overwrites anything.
 
 See `docs/definitions.md` if you need the precise version.
 
-## How a task talks to PI
+## How a task talks to Pig
 
 Four URLs, and you only need the first three. All of them take and return JSON.
 
@@ -44,16 +44,16 @@ Four URLs, and you only need the first three. All of them take and return JSON.
 | --- | --- |
 | `POST /task/{task_code}/run` | Start a run. Send the parameters from the participant's link; get back a run ID. |
 | `POST /task/{task_code}/run/{run_id}` | Send events. One JSON object per event, keyed by an event ID you make up. |
-| `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. PI files the data away. |
-| `GET /task/{task_code}/run/{run_id}` | Check on a run -- its status and which events PI has. |
+| `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig files the data away. |
+| `GET /task/{task_code}/run/{run_id}` | Check on a run -- its status and which events Pig has. |
 
 The event ID is the important part. You assign one to every event, unique within the run,
-and PI stores each ID exactly once. That means a failed request is always safe to send
-again: retry the whole batch and PI will keep what it's missing and ignore what it already
+and Pig stores each ID exactly once. That means a failed request is always safe to send
+again: retry the whole batch and Pig will keep what it's missing and ignore what it already
 has. It also means a flaky connection can't quietly put a duplicate trial in your data
 file.
 
-When you send events, PI replies with everything it's stored for the run so far, so you
+When you send events, Pig replies with everything it's stored for the run so far, so you
 always know where you stand. If the participant closes the tab before you finalize, the
 events you already sent are still saved.
 
@@ -64,9 +64,9 @@ See `docs/api.md` for the full detail, including a complete worked example.
 Each task gets an entry in a configuration file, kept in version control. The entry
 answers things like:
 
-- What parameters PI expects from the link to define a run (`participant_id`? plus a `session` for repeated visits?)
+- What parameters Pig expects from the link to define a run (`participant_id`? plus a `session` for repeated visits?)
 - Where data should be stored, and how the files should be named
-- What (if any) settings will PI send back to the task when a run starts?
+- What (if any) settings will Pig send back to the task when a run starts?
 - How long to wait for a run to conclude, and what to do if it's left open
 - Is the task accepting more data, or is it currently closed?
 
@@ -89,12 +89,12 @@ Still being spec'd, but that's the split.
 | File | What's in it |
 | --- | --- |
 | `docs/api.md` | The requests your task makes. Start here if you're writing a task. |
-| `docs/definitions.md` | What PI means by task, session, run, dataset, event, participant. |
+| `docs/definitions.md` | What Pig means by task, session, run, dataset, event, participant. |
 | `docs/configuration.md` | Task definitions, storage paths, the CLI. |
-| `docs/security.md` | What PI defends against and what it doesn't. |
+| `docs/security.md` | What Pig defends against and what it doesn't. |
 | `docs/deployment.md` | Running the service. |
-| `docs/design_assumptions.md` | Why PI is shaped the way it is. Read before arguing about a design decision. |
-| `docs/documentation_style.md` | How to write PI's user-facing prose. |
+| `docs/design_assumptions.md` | Why Pig is shaped the way it is. Read before arguing about a design decision. |
+| `docs/documentation_style.md` | How to write Pig's user-facing prose. |
 
 ## Deferred features
 

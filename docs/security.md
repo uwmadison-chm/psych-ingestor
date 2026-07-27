@@ -1,11 +1,11 @@
 # Security
 
-What PI defends against, what it doesn't, and why. This page is for whoever runs the
+What Pig defends against, what it doesn't, and why. This page is for whoever runs the
 service, not for people writing tasks.
 
 ## The threat model is smaller than you'd think
 
-PI receives behavioral data from online studies. Nobody steals an identity, commits fraud,
+Pig receives behavioral data from online studies. Nobody steals an identity, commits fraud,
 or advertises effectively by sending a research server unsolicited trial data. We are not a
 plausible target for clickjacking, and there is nothing here worth a targeted attack.
 
@@ -16,7 +16,7 @@ directory with junk.
 ## Cross-origin requests
 
 Tasks are static pages hosted anywhere — a lab web server, a university host, Pavlovia,
-someone's laptop during testing. They will essentially never share an origin with PI, so
+someone's laptop during testing. They will essentially never share an origin with Pig, so
 browsers will send cross-origin requests and preflights for everything a task does.
 
 Cross-origin headers give us very little security in practice. They constrain browsers, and
@@ -28,7 +28,7 @@ Where a specific task needs something tighter, it's set per task in that task's 
 See [configuration.md](configuration.md).
 
 The one exception is HSTS, which matters and should be handled by the web server in front
-of PI, not by the application.
+of Pig, not by the application.
 
 ## What actually limits unsolicited data
 
@@ -49,11 +49,11 @@ else's run. They're random UUIDs for that reason — see [definitions.md](defini
 
 ## Data on disk
 
-Datasets are plain files. PI's protection of them is filesystem permissions and nothing
+Datasets are plain files. Pig's protection of them is filesystem permissions and nothing
 else, which is the right amount for data that a researcher needs to read with ordinary
 tools.
 
-Two consequences worth stating: the account running PI needs write access to the data root
+Two consequences worth stating: the account running Pig needs write access to the data root
 and nothing beyond it, and link parameters that become path components must be checked
 before they're used, never sanitized into something safe-looking. See
 [design_assumptions.md](design_assumptions.md).

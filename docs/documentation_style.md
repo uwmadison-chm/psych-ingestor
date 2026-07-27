@@ -1,6 +1,6 @@
 # Writing for Psych Ingestor
 
-How to write PI's public-facing documentation — the API reference, configuration docs,
+How to write Pig's public-facing documentation — the API reference, configuration docs,
 error messages, and CLI help.
 
 Our readers run studies. They write enough code to make a task work, and they are reading
@@ -8,7 +8,7 @@ this because something needs to be collecting data, not because they find HTTP i
 Write for a competent person outside your field.
 
 This guide is for prose aimed at users. Internal documents like
-[design_assumptions.md](design_assumptions.md) can assume a reader who's working on PI
+[design_assumptions.md](design_assumptions.md) can assume a reader who's working on Pig
 itself.
 
 ## README.md is the reference
@@ -30,7 +30,7 @@ Describe actions the reader takes, not properties the system has.
 
 > No: Deduplication is performed on the client-supplied event identifier.
 >
-> Yes: PI uses your event ID to make sure it never stores the same event twice — so if a
+> Yes: Pig uses your event ID to make sure it never stores the same event twice — so if a
 > request fails, it's always safe to send it again.
 
 The second version of each is longer. That's fine. Length is cheap; a reader who has to
@@ -50,7 +50,7 @@ Not because they're wrong — because they cost the reader a lookup:
 | validate | check |
 | authenticate | check that the link came from you |
 | instantiate | create / start |
-| schema | the fields PI expects |
+| schema | the fields Pig expects |
 | atomic | either it all saves or none of it does |
 
 Some jargon has no plain equivalent worth inventing — JSON, HTTPS, CORS. Use those, and
@@ -113,4 +113,4 @@ not.
 - Don't document intentions as though they're features. If it isn't built, mark it.
 - Don't assume a terminal. Some readers will be on Windows, and some will do everything
   from a GUI editor.
-- Don't assume prior psych ingestor knowledge on any given page. Readers may arrive by search, in the middle.
+- Don't assume prior Pig knowledge on any given page. Readers may arrive by search, in the middle.

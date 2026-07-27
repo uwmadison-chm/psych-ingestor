@@ -6,7 +6,7 @@ Each task your lab runs gets an entry in your configuration. The entry answers a
 questions: how participants are identified, where their data goes, and when the task stops
 accepting data.
 
-One PI deployment serves all of your lab's tasks, so this file grows as you add tasks.
+One Pig deployment serves all of your lab's tasks, so this file grows as you add tasks.
 
 ## Where configuration lives
 
@@ -36,16 +36,16 @@ Consequences worth keeping in mind while building:
 
 ### Identifying the run
 
-Which parameters PI expects from the participant's link, and which of them make up the
+Which parameters Pig expects from the participant's link, and which of them make up the
 **run key** — the values that decide whether two runs are repeats of the same thing. A
 study that sees each participant once might use only `participant_id`; a study with
 repeated visits needs `session` as well, so `["participant_id", "session"]`.
 
-Parameters PI doesn't know about are ignored. They don't identify the run, they aren't
+Parameters Pig doesn't know about are ignored. They don't identify the run, they aren't
 required, and their presence is never an error — a link carrying a `utm_source` or a
 leftover `debug=1` still starts a run normally.
 
-PI records them anyway, on the run, because they cost almost nothing to keep and
+Pig records them anyway, on the run, because they cost almost nothing to keep and
 occasionally explain something months later. They're never used to identify or route
 anything, and they never appear in a path.
 
@@ -61,7 +61,7 @@ parameters and the run number — something like `{participant_id}/{session}_run
 - What's the full set of values available to the pattern? Link parameters, a timestamp, the
   run ID, the run number?
 - Must the pattern include the run number? Leaving it out means the second run of a key
-  would overwrite the first, which the reliability rule forbids — so either PI requires it
+  would overwrite the first, which the reliability rule forbids — so either Pig requires it
   or it refuses patterns that can collide.
 - Are paths relative to a configured data root, with escaping from it refused? They should
   be.
@@ -73,7 +73,7 @@ second run under the same run key. Run numbers keep the two datasets apart, so n
 overwritten and nothing needs merging.
 
 Today a task can't refuse a repeat run. A participant who starts a task fifty times
-produces fifty runs and PI keeps all of them.
+produces fifty runs and Pig keeps all of them.
 
 A `max_runs` setting is planned, capping how many runs a task will accept for one run key.
 When it arrives it needs an answer for what the run past the limit gets told — refusing a
@@ -82,7 +82,7 @@ to them.
 
 ### Settings sent back to the task
 
-Optional values PI returns when a run starts: condition assignment, a stimulus set, a
+Optional values Pig returns when a run starts: condition assignment, a stimulus set, a
 block order. Lets you change a task's behavior without redeploying it.
 
 **Open question:** is this a static blob per task, or can it vary per participant — a
@@ -91,12 +91,12 @@ much more to build.
 
 ### Abandoned runs
 
-How long PI waits before considering an unfinished run dead, and what happens then.
+How long Pig waits before considering an unfinished run dead, and what happens then.
 
 Whatever happens, it can't be "delete the data." Marking the run abandoned and leaving the
 file in place is the safe default; a run that turned out fine can be finalized by hand.
 
-Only `in_progress` runs are ever abandoned. A run sitting in `finalizing` is waiting on PI,
+Only `in_progress` runs are ever abandoned. A run sitting in `finalizing` is waiting on Pig,
 not on the participant — see [definitions.md](definitions.md).
 
 The reaping is done by the CLI, on a schedule, not by the service. See
@@ -104,11 +104,11 @@ The reaping is done by the CLI, on a schedule, not by the service. See
 
 ### Filing a completed dataset
 
-What PI does with a dataset once the task finalizes the run: sort it, move it to completed
+What Pig does with a dataset once the task finalizes the run: sort it, move it to completed
 storage, and possibly copy it somewhere else — an `rclone` push to S3 or similar. The run
 is `finalizing` while this happens and `complete` when it's done.
 
-This is the one place PI depends on something outside itself, so it's the one place that
+This is the one place Pig depends on something outside itself, so it's the one place that
 can be slow or broken for reasons no researcher can do anything about. It has to be
 retryable, and a run that can't be filed has to stay visible rather than quietly becoming
 `complete`.
@@ -145,7 +145,7 @@ letting existing runs finish.
 
 ### Parameter signing
 
-Off by default and set per task. When on, PI verifies that a participant's link parameters
+Off by default and set per task. When on, Pig verifies that a participant's link parameters
 were signed by you, so participants can't edit their own ID or condition.
 
 It complicates testing considerably — you can't just type a URL by hand — so it needs an
@@ -157,7 +157,7 @@ easy way to generate a valid signed link, presumably a CLI command.
 
 ### Allowed origins
 
-Which sites may make requests to PI for this task. Permissive by default; see
+Which sites may make requests to Pig for this task. Permissive by default; see
 [security.md](security.md) for why.
 
 ## The task code
@@ -194,7 +194,7 @@ A safe value contains only:
 
 and is between 1 and 64 characters long.
 
-Nothing else. No dots, no spaces, no other punctuation, no characters outside ASCII. PI
+Nothing else. No dots, no spaces, no other punctuation, no characters outside ASCII. Pig
 checks values against this rule when a run starts and refuses the run if one doesn't match
 — it never edits a value to make it fit. A participant who arrives with an unusable ID is a
 problem someone needs to know about, not one to paper over.
@@ -205,7 +205,7 @@ Each restriction is carrying weight:
   something to defend against. It's excluded by construction rather than by a check
   somebody might forget.
 - **No leading dash** keeps a value from being read as an option by whatever command
-  touches the file later. `rclone copy -rf/...` is a bad afternoon, and PI is designed
+  touches the file later. `rclone copy -rf/...` is a bad afternoon, and Pig is designed
   expecting an `rclone`-shaped thing to run over this data.
 - **No characters outside ASCII** is about normalization, not fear of other alphabets. `é`
   has two valid encodings; macOS rewrites filenames to one of them on write and Linux
@@ -222,11 +222,11 @@ Digits are fine at the start; participant IDs are frequently all digits.
 
 ### Case is normalized on the way to disk
 
-Values may contain either case, but **PI lowercases them when it builds a path**.
+Values may contain either case, but **Pig lowercases them when it builds a path**.
 `?session=Baseline`, `?session=baseline`, and `?session=BaseLine` all write to
 `baseline/`.
 
-This is the one place PI changes a value instead of refusing it, and it's deliberate. Case
+This is the one place Pig changes a value instead of refusing it, and it's deliberate. Case
 variation in link parameters is common — links get retyped, copied between REDCap
 instances, and edited by hand — and the failure it causes is bad in a specific way: two
 spellings of `baseline` are one directory on macOS and two on Linux, so a dataset that
@@ -244,7 +244,7 @@ Two consequences worth being explicit about:
 - `PPT-1003` and `ppt-1003` become the same participant as far as storage is concerned.
   That's the intended behavior, and the reason it's safe is that the alternative — treating
   them as two participants — silently breaks on half the machines that will touch the data.
-- Because a value can differ from the directory it's stored in, PI can notice when one task
+- Because a value can differ from the directory it's stored in, Pig can notice when one task
   has received IDs that differ only by case. That's a strong sign of a broken link
   template, and it's the sort of thing the health check should surface.
 
