@@ -1,0 +1,25 @@
+# An example Pig configuration. Copy it to local/pig.toml and edit.
+#
+# Paths are relative to this file, so with the file at local/pig.toml, everything a
+# working copy accumulates — the database, the data — lands under local/ too. That's the
+# one directory version control ignores.
+
+data_root = "./data"
+database = "./pig.db"
+
+# A study that sees each participant more than once, so `session` is part of what makes
+# two runs repeats of the same thing.
+[task.stroop]
+parameters = ["participant_id", "session"]
+run_key = ["participant_id", "session"]
+path = "{participant_id}/{session}_{run_number}.jsonl"
+open = true
+max_event_size = "1M"
+abandon_after = "24h"
+
+# A one-visit study. No session anywhere, and the run key is just the participant.
+[task.balloons]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+path = "{participant_id}/balloons_{run_number}.jsonl"
+open = true

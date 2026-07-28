@@ -1,5 +1,8 @@
 # Deployment Guidelines
 
+**Status: the two things below both exist (`pig serve` and `pig sweep`); the systemd units
+to run them don't. To try Pig on a laptop, see [trying_it.md](trying_it.md).**
+
 Systemd stuff here
 
 ## Two things to run
@@ -29,7 +32,14 @@ Status information about the service, as JSON, for monitoring and for answering 
 anything wrong right now." People writing tasks don't use this; see [api.md](api.md) for
 what they need.
 
-Can be deferred slightly, but not indefinitely — it's where a stuck run becomes visible.
+Partly built. What it reports today: whether the database and data root are writable, and
+for each task whether it's open, how many runs are in each status, how many are waiting to
+be filed, how many have been `finalizing` too long, and when data last arrived. It answers
+`503` rather than `200` when something is wrong, so a monitor can watch the status code.
+`pig health` prints the same report.
+
+The rest of this list isn't built yet — duplicate event IDs and case-variant parameters in
+particular, which are the two that need someone to go looking at the data.
 
 For the service generally:
 

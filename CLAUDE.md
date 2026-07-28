@@ -8,7 +8,9 @@ The main developer is Nate Vack. In these documents, "I" normally refers to him,
 
 ## Status
 
-Greenfield; being scoped. Much of `docs/` is draft, and open questions are marked as such in place. Don't treat a draft as a decision, and don't quietly resolve an open question — raise it.
+Early. Much of `docs/` is draft, and open questions are marked as such in place. Don't treat a draft as a decision, and don't quietly resolve an open question — raise it.
+
+There is now a working first implementation (the four API endpoints, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health|finalize`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
 
 This guidance applies generally -- when I've asked for something that conflicts with past decisions, or past decisions seem inappropriate for work you're doing, stop and ask rather than tying to brute-force your way through things, or guess what I mean. Sometimes I forget stuff. Sometimes I change my mind and forget to write it down.
 
@@ -74,6 +76,9 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
 Live, and worth flagging rather than assuming past:
 
 - **Run finalization** — whether it reports an event count, and whether a finalized run can
-  be reopened. Deferred deliberately.
+  be reopened. Deferred deliberately. *Provisionally: no count, no reopening from the API;
+  `pig finalize` can reopen an abandoned run from the CLI.*
 - **Settings returned at run start** — condition assignment and similar. Planned, unshaped.
+  Not built.
 - **Closing a task** — does it also refuse events for runs already in progress?
+  *Provisionally: no. Closing refuses new runs only.*

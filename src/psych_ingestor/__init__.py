@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from psych-ingestor!")
+"""Psych Ingestor (Pig): collecting data from online behavioral-research tasks."""

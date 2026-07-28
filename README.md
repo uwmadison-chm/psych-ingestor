@@ -1,9 +1,10 @@
 # Psych Ingestor
 A simple web server for ingesting, routing, and saving data from behavioral tasks in the psych research world
 
-**Status: being designed.** The documentation here describes what Pig will do; the service
-isn't built yet. If you're writing a task against it, read `docs/api.md` -- it ends with a
-list of what's still moving.
+**Status: early.** There's a working service you can run and point a task at -- see
+`docs/trying_it.md`. It does the four things in `docs/api.md` and not much else; the
+deferred features below are still deferred. If you're writing a task against it, read
+`docs/api.md` -- it ends with a list of what's still moving.
 
 ## Overview
 Psych Ingestor (Pig) is set up to handle data streams from a variety of online studies -- in principle, all of your lab's tasks can share this service. You'll set up a file containing a set of task definitions, and your tasks will send HTTPS requests to it to signal start and end of tasks, as well as send data. Data is sent as a series of JSON lines (one JSON object per recorded event) and stored with minimal processing.
@@ -82,12 +83,14 @@ copying them offsite, reaping runs that were never finalized.
 There's also a `check` command for configuration, because a typo in a task definition
 should surface before a participant hits the task, not during.
 
-Still being spec'd, but that's the split.
+The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, `pig health`, and
+`pig finalize`. See `docs/trying_it.md`.
 
 ## Documentation
 
 | File | What's in it |
 | --- | --- |
+| `docs/trying_it.md` | Getting a server running on your own machine. Start here if you want to poke at it. |
 | `docs/api.md` | The requests your task makes. Start here if you're writing a task. |
 | `docs/definitions.md` | What Pig means by task, session, run, dataset, event, participant. |
 | `docs/configuration.md` | Task definitions, storage paths, the CLI. |

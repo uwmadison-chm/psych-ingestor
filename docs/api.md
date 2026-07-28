@@ -1,8 +1,9 @@
 # The Psych Ingestor API
 
-**Status: draft, and not built yet.** This describes what Pig will do, so you can write a
-task against it. You can't test against it today. What's still moving is listed at the
-bottom of this page — if you're depending on one of those, ask before you build on it.
+**Status: early. Everything on this page works, and some of it will change.** There's a
+server you can point a task at — see [trying_it.md](trying_it.md) to run one. What's still
+moving is listed at the bottom of this page; if you're depending on one of those, ask
+before you build on it.
 
 This page is for people writing tasks — in jsPsych, PsychoPy, plain JavaScript, or a
 standalone app. It describes the requests your task makes to Psych Ingestor (Pig) and what

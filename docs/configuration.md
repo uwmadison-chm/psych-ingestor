@@ -1,6 +1,9 @@
 # Configuring tasks
 
-**Status: draft. The field names below are proposals, not decisions.**
+**Status: early. The fields marked *built* below are what the service reads today; the
+rest are still proposals.** A first implementation had to pick answers for some of the open
+questions on this page, and those picks are marked *provisional* where they appear. They're
+easy to change — nobody has data depending on them yet.
 
 Each task your lab runs gets an entry in your configuration. The entry answers a handful of
 questions: how participants are identified, where their data goes, and when the task stops
@@ -32,6 +35,42 @@ Consequences worth keeping in mind while building:
 - A task that appears in the database but no longer in the file is a real situation (someone
   deleted an entry). Its existing data must remain readable.
 
+## What a task entry looks like today
+
+The file the service actually reads. Everything here is built; everything in the next
+section that isn't mentioned here isn't.
+
+```toml
+# local/pig.toml
+data_root = "./data"
+database = "./pig.db"
+
+[task.stroop]
+parameters = ["participant_id", "session"]
+run_key = ["participant_id", "session"]
+path = "{participant_id}/{session}_{run_number}.jsonl"
+open = true
+max_event_size = "1M"      # optional, defaults to 1M
+abandon_after = "24h"      # optional, defaults to 24h
+```
+
+`data_root` and `database` are relative to the configuration file, so a checkout can move
+without editing anything. A working copy keeps the whole lot — file, database, and data —
+under `local/`, which is the one directory version control ignores; the commands default
+to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that. A real deployment
+puts the file wherever its configuration belongs and points `data_root` at real storage.
+
+Under the data root, Pig keeps three directories: `in_progress/`
+for runs still collecting, `complete/` for datasets of runs that finalized, and
+`abandoned/` for the rest. A task's `path` places its file within `complete/{task_code}/`
+or `abandoned/{task_code}/`.
+
+`{run_number}` renders as `run-0001`. The service reads this file once, at startup, so
+changing a definition means restarting the service — a defined moment, if a blunt one.
+
+`pig check` validates the file and prints where each task's data will land. Run it before
+you restart anything.
+
 ## What a task entry covers
 
 ### Identifying the run
@@ -51,6 +90,7 @@ anything, and they never appear in a path.
 
 **Open question:** do parameter values get checked for shape beyond the [safe
 value](#safe-values) rule — digits only, a required prefix — or is any safe value accepted?
+*Provisional: any safe value is accepted. There's no way to ask for more.*
 
 ### Where data goes and what it's called
 
@@ -59,12 +99,16 @@ parameters and the run number — something like `{participant_id}/{session}_run
 
 **Open questions**
 - What's the full set of values available to the pattern? Link parameters, a timestamp, the
-  run ID, the run number?
+  run ID, the run number? *Provisional: link parameters and `{run_number}`, nothing else.
+  A pattern naming anything the task doesn't have is refused by `pig check`.*
 - Must the pattern include the run number? Leaving it out means the second run of a key
   would overwrite the first, which the reliability rule forbids — so either Pig requires it
-  or it refuses patterns that can collide.
+  or it refuses patterns that can collide. *Provisional: required, and its absence is a
+  configuration error. Requiring it is the check that's obviously right; refusing only the
+  patterns that can collide needs an argument about which those are.*
 - Are paths relative to a configured data root, with escaping from it refused? They should
-  be.
+  be. *Built: they are. An absolute path or one containing `..` is a configuration error,
+  and the [safe value](#safe-values) rule keeps `..` out of the parameters themselves.*
 
 ### Repeat runs
 
@@ -82,7 +126,7 @@ to them.
 
 ### Settings sent back to the task
 
-Optional values Pig returns when a run starts: condition assignment, a stimulus set, a
+*Not built.* Optional values Pig returns when a run starts: condition assignment, a stimulus set, a
 block order. Lets you change a task's behavior without redeploying it.
 
 **Open question:** is this a static blob per task, or can it vary per participant — a
@@ -113,6 +157,9 @@ can be slow or broken for reasons no researcher can do anything about. It has to
 retryable, and a run that can't be filed has to stay visible rather than quietly becoming
 `complete`.
 
+*Sorting, moving, and the `complete` / `abandoned` split are built; copying anywhere else
+is not. `pig sweep` does the filing.*
+
 The copy-elsewhere step is configured **per task**. Different studies have different
 archives, different retention rules, and different people paying for storage, so this can't
 be a single deployment-wide setting.
@@ -141,11 +188,12 @@ without taking the service down.
 
 **Open question:** does closing a task also refuse new events for runs already in
 progress? Refusing them loses data from participants who are mid-task, which argues for
-letting existing runs finish.
+letting existing runs finish. *Provisional: closing refuses new runs only. Runs already in
+progress keep sending events and can finalize normally.*
 
 ### Parameter signing
 
-Off by default and set per task. When on, Pig verifies that a participant's link parameters
+*Not built.* Off by default and set per task. When on, Pig verifies that a participant's link parameters
 were signed by you, so participants can't edit their own ID or condition.
 
 It complicates testing considerably — you can't just type a URL by hand — so it needs an
@@ -157,7 +205,8 @@ easy way to generate a valid signed link, presumably a CLI command.
 
 ### Allowed origins
 
-Which sites may make requests to Pig for this task. Permissive by default; see
+*Not built — every task allows any origin.* Which sites may make requests to Pig for this
+task. Permissive by default; see
 [security.md](security.md) for why.
 
 ## The task code
@@ -255,9 +304,8 @@ lowercases to a character that isn't `i` — so the two rules depend on each oth
 Task codes are required to be lowercase outright, since we control those and there's no
 reason to accept a spelling we're only going to convert.
 
-## Open question: validating configuration
+## Validating configuration
 
-A syntax error or a typo'd parameter name in the configuration should surface before a
-participant hits the task, not during. A `check` command in the CLI that validates every
-task entry — and reports which tasks are open, and where their data goes — would be worth
-having early.
+*Built.* `pig check` reads the file, reports every problem it can describe, and prints each
+task: whether it's open, what parameters it expects, and the path a dataset will land at.
+It exits non-zero on a bad file, so a deployment can gate a restart on it.
