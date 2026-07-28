@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import string
+import threading
 import tomllib
 from pathlib import Path
 
@@ -237,3 +238,61 @@ def load_config(path: Path) -> Config:
     config.data_root = (base / config.data_root).resolve()
     config.database = (base / config.database).resolve()
     return config
+
+
+class ConfigSource:
+    """The configuration file, re-read whenever it changes on disk.
+
+    The service asks for the current configuration on every request, so editing a task
+    definition takes effect without a restart or a signal. Reading the file every time
+    would be wasteful, so this remembers what it read and checks the file's modification
+    time — one `stat` per request, which is nothing next to the work of the request.
+
+    **A file that won't load doesn't take the service down.** The last configuration that
+    did load keeps serving, the problem is reported by the health check, and the next
+    good save picks up from there. Refusing every request instead would mean a typo in a
+    text editor stops data collection for participants who are mid-task, and losing their
+    data is far worse than running for a few minutes on a definition someone is editing.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._config: Config | None = None
+        self._fingerprint: tuple[int, int, int] | None = None
+        self.problem: str | None = None
+
+    def current(self) -> Config:
+        """The configuration as of the file's current state on disk.
+
+        Raises ConfigurationError only if the file has never loaded — a service that has
+        never had a valid configuration should fail loudly at startup.
+        """
+        with self._lock:
+            fingerprint = self._read_fingerprint()
+            if fingerprint is not None and fingerprint != self._fingerprint:
+                self._reload(fingerprint)
+            if self._config is None:
+                raise ConfigurationError(self.problem or f"Can't read {self.path}.")
+            return self._config
+
+    def _read_fingerprint(self) -> tuple[int, int, int] | None:
+        """Enough of the file's identity to notice an edit: when, how big, which file."""
+        try:
+            stat = self.path.stat()
+        except OSError as error:
+            # The file went away. Keep serving what we have and say so.
+            self.problem = f"Can't read {self.path}: {error}"
+            return None
+        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+    def _reload(self, fingerprint: tuple[int, int, int]) -> None:
+        try:
+            self._config = load_config(self.path)
+        except ConfigurationError as error:
+            self.problem = str(error)
+            return
+        # Only remember the fingerprint of a file that actually loaded, so a broken one
+        # is retried on the next request rather than being treated as read.
+        self._fingerprint = fingerprint
+        self.problem = None

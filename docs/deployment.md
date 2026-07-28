@@ -43,7 +43,9 @@ particular, which are the two that need someone to go looking at the data.
 
 For the service generally:
 
-- Are there errors in the configuration?
+- Are there errors in the configuration? *Built. The service re-reads its configuration
+  file when it changes, keeps running on the last one that loaded if a save is broken,
+  and reports that here — which makes this the only place a bad save surfaces.*
 - Is everything basically working — is the database there, can we write to it, can we read
   and write in the data directories?
 

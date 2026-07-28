@@ -26,9 +26,9 @@ database never holds a second opinion about a task definition.
 
 Consequences worth keeping in mind while building:
 
-- Task definitions can change under a running service, so the service needs a defined moment
-  at which it re-reads the file, and a definition change must not disturb runs already
-  in progress.
+- Task definitions can change under a running service. *Built: the service notices the
+  file changing and re-reads it, and a definition change doesn't disturb runs already in
+  progress. See below.*
 - The CLI's job is the database — rosters, reaping abandoned runs, inspecting what's stored — plus
   validating the file. It is not an editor for task definitions; that's what a text editor
   and a pull request are for.
@@ -60,16 +60,34 @@ under `local/`, which is the one directory version control ignores; the commands
 to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that. A real deployment
 puts the file wherever its configuration belongs and points `data_root` at real storage.
 
-Under the data root, Pig keeps three directories: `in_progress/`
-for runs still collecting, `complete/` for datasets of runs that finalized, and
+Under the data root, Pig keeps three directories: `in_progress/` for runs still collecting, `complete/` for datasets of runs that finalized, and
 `abandoned/` for the rest. A task's `path` places its file within `complete/{task_code}/`
 or `abandoned/{task_code}/`.
 
-`{run_number}` renders as `run-0001`. The service reads this file once, at startup, so
-changing a definition means restarting the service — a defined moment, if a blunt one.
+`{run_number}` renders as `run-0001`.
 
-`pig check` validates the file and prints where each task's data will land. Run it before
-you restart anything.
+**The service re-reads this file whenever it changes.** Edit a definition and the next
+request uses it — no restart, no signal. It checks the file's modification time on each
+request and only re-reads when that changed, so the cost is one `stat` per request.
+
+Two things follow, and both are deliberate:
+
+- **A file that won't load doesn't take the service down.** The last configuration that
+  did load keeps serving, `GET /health` reports the problem and answers `503`, and the
+  next good save picks up from there. A typo in a text editor must not stop data
+  collection for participants who are mid-task — that trade is the whole reason this
+  isn't "refuse everything until it parses."
+- **`data_root` and `database` are not safe to change under a running service.** They're
+  re-read like everything else, so the change takes effect immediately, and datasets for
+  runs already in progress are under the *old* root where nothing will look for them.
+  Change those two while the service is stopped.
+
+Runs already in progress are unaffected by a definition change: a run's storage path is
+computed when it's filed, and the parameters it was started with are on the run.
+
+`pig check` validates the file and prints where each task's data will land. Worth running
+after an edit, since the service won't complain to you directly — it just keeps serving the
+last good version and reports the problem on `/health`.
 
 ## What a task entry covers
 

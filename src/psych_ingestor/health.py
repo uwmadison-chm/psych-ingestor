@@ -15,19 +15,33 @@ STUCK_AFTER = timedelta(hours=1)
 STATUSES = ("in_progress", "finalizing", "complete", "abandoned")
 
 
-def report(pig: Pig) -> dict[str, Any]:
+def report(pig: Pig, configuration_problem: str | None = None) -> dict[str, Any]:
+    """Is anything wrong right now, and where.
+
+    `configuration_problem` is set when the file on disk stopped loading. The service
+    keeps running on the last configuration that did load, so this is the only place
+    that failure becomes visible.
+    """
     checks = {
+        "configuration_loads": configuration_problem is None,
         "database_writable": _is_writable(pig.config.database.parent),
         "data_root_writable": _is_writable(pig.config.data_root),
     }
     tasks = {code: _task_report(pig, code) for code in sorted(pig.config.task)}
     stuck = sum(task["stuck_finalizing"] for task in tasks.values())
 
-    return {
+    report: dict[str, Any] = {
         "ok": all(checks.values()) and stuck == 0,
         "checks": checks,
         "tasks": tasks,
     }
+    if configuration_problem is not None:
+        report["configuration_problem"] = configuration_problem
+        report["note"] = (
+            "The configuration file on disk won't load. The service is still running on "
+            "the last one that did. Fix the file and the next request picks it up."
+        )
+    return report
 
 
 def _task_report(pig: Pig, task_code: str) -> dict[str, Any]:

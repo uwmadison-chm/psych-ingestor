@@ -23,8 +23,13 @@ Everything your copy accumulates lives under `local/` — the configuration file
 database, and the data. It's the one directory git ignores, so nothing you collect while
 testing can end up in a commit, and deleting `local/` gets you a clean slate.
 
-If you edit `local/pig.toml`, run `pig check` and then restart the server — it reads the
-file once, when it starts.
+**You can edit `local/pig.toml` while the server is running.** It notices the file
+changing and the next request uses it — open or close a task, add a new one, change a
+storage path, no restart needed. If you save something that doesn't parse, the server
+keeps running on the last version that worked and `pig health` tells you what's wrong.
+
+The exception is `data_root` and `database`: change those with the server stopped, or
+runs already in progress end up with their data somewhere nothing will look for it.
 
 ## Send it something
 
