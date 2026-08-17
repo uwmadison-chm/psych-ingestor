@@ -68,8 +68,8 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   offsite, and reaping abandoned runs are all scheduled CLI commands.
 - **Extra link parameters are ignored**, not an error. Recorded on the run, never used to
   identify or route anything.
-- **Repeat runs are always allowed** and always get their own dataset. `max_runs` is
-  planned but does not exist.
+- **Repeat runs are always allowed** and always get their own dataset. `max_runs` may be
+  added someday but does not yet exist.
 
 ## Open scoping questions
 

@@ -84,6 +84,25 @@ def test_cross_origin_requests_are_allowed(client: TestClient):
     assert replied.headers["access-control-allow-origin"] == "*"
 
 
+def test_a_public_task_page_can_preflight_a_localhost_pig(client: TestClient):
+    """A task hosted on a public https page counts as a "public" origin to Chrome,
+    while a `pig serve` on localhost is a "private" one. Chrome's Private Network
+    Access check adds this header to the preflight and refuses the real request
+    unless we answer it — see docs/security.md.
+    """
+    preflight = client.options(
+        "/task/stroop/run",
+        headers={
+            "Origin": "https://tasks.example.edu",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+            "Access-Control-Request-Private-Network": "true",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-private-network"] == "true"
+
+
 def test_health_reports_each_task(client: TestClient):
     report = client.get("/health").json()
     assert report["ok"] is True

@@ -24,6 +24,12 @@ the things we actually care about aren't done from a browser — if someone want
 junk, `curl` is right there. So the default is permissive: wildcard origins, no framing
 restrictions.
 
+One specific case is worth naming: Chrome's Private Network Access check. When a task page
+loaded over https tries to reach a Pig running on `localhost` — the ordinary shape of local
+development — Chrome sends an extra preflight header asking the server to opt in, and blocks
+the request if nothing answers it. Pig answers it, for the same reason as everything else
+here: refusing would only get in a developer's way, not stop anyone determined to send junk.
+
 Where a specific task needs something tighter, it's set per task in that task's definition.
 See [configuration.md](configuration.md).
 

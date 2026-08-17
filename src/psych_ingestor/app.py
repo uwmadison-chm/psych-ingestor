@@ -35,12 +35,15 @@ def create_app(config_path: Path) -> FastAPI:
     app.state.config_source = source
 
     # Tasks are static pages hosted anywhere, so every request they make is cross-origin.
-    # Permissive is the deliberate default; see docs/security.md.
+    # Permissive is the deliberate default; see docs/security.md. allow_private_network
+    # answers Chrome's Private Network Access preflight check, which otherwise blocks a
+    # public https task page from reaching a Pig running on localhost.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
+        allow_private_network=True,
     )
 
     @app.exception_handler(RequestProblem)
