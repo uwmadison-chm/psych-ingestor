@@ -38,6 +38,7 @@ Read what the task at hand calls for rather than all of it.
 | [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what Pig does and doesn't defend against. |
 | [docs/deployment.md](docs/deployment.md) | Working on running the service — systemd, the health check. |
 | [docs/documentation_style.md](docs/documentation_style.md) | Writing any user-facing prose — docs, error messages, CLI help. Read `README.md` alongside it. |
+| [docs/discussions/](docs/discussions/) | Only when you need to know *why* a past decision went the way it did. Superseded material — never current, and never a source for what Pig does today. |
 
 `README.md` is maintained deliberately as an example of well-written prose for this
 project. Well, what Nate considers well-written, anyhow. Treat it as the style reference, and don't rewrite it without being asked.
