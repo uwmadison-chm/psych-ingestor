@@ -98,6 +98,14 @@ Which parameters Pig expects from the participant's link, and which of them make
 study that sees each participant once might use only `participant_id`; a study with
 repeated visits needs `session` as well, so `["participant_id", "session"]`.
 
+The two lists are separate on purpose, even though most tasks will set them the same. A
+task can require a parameter that doesn't identify the run — a `redcap_record` alongside
+`participant_id`, or a `condition` the task needs handed back to it. If every required
+parameter were part of the key, the same participant arriving with a different value for
+one of them would start over at `run-0001` — the same person appearing twice, as two first
+runs. Keeping the lists apart means "required" and "identifies the run" stay different
+claims, and only the second one is the strong one.
+
 Parameters Pig doesn't know about are ignored. They don't identify the run, they aren't
 required, and their presence is never an error — a link carrying a `utm_source` or a
 leftover `debug=1` still starts a run normally.
