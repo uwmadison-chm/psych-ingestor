@@ -93,6 +93,29 @@ def check(*, config: ConfigPath | None = None) -> None:
         )
 
 
+# The first file descriptor systemd passes to a service it started from a socket unit.
+SD_LISTEN_FDS_START = 3
+
+
+def _activated_fd() -> int | None:
+    """The listening socket systemd handed us, if it handed us one.
+
+    A systemd socket unit binds and listens on the socket itself and then starts the
+    service with that socket already open, saying so in the environment. So a
+    socket-activated Pig never opens an address of its own — it's given one. Gunicorn
+    does this too, which is why a gunicorn unit file mentions no address anywhere.
+
+    `LISTEN_PID` is part of the protocol because these variables are inherited by child
+    processes, and only the process systemd named should believe them.
+    """
+    if os.environ.get("LISTEN_PID") != str(os.getpid()):
+        return None
+    count = os.environ.get("LISTEN_FDS", "0")
+    if not count.isdigit() or int(count) < 1:
+        return None
+    return SD_LISTEN_FDS_START
+
+
 @app.command
 def serve(
     *,
@@ -100,13 +123,23 @@ def serve(
     port: int = 8000,
     config: ConfigPath | None = None,
 ) -> None:
-    """Run the web service."""
+    """Run the web service.
+
+    Listens on `--host` and `--port`, unless systemd started us from a socket unit, in
+    which case it uses the socket systemd already opened and neither one applies. See
+    docs/deployment.md.
+    """
     import uvicorn
 
     path = config or _default_config_path()
     _load(path)  # Fail here, with a readable message, rather than inside uvicorn.
     os.environ["PIG_CONFIG"] = str(path)
-    uvicorn.run("psych_ingestor.app:app", host=host, port=port, factory=True)
+
+    given = _activated_fd()
+    if given is None:
+        uvicorn.run("psych_ingestor.app:app", host=host, port=port, factory=True)
+    else:
+        uvicorn.run("psych_ingestor.app:app", fd=given, factory=True)
 
 
 @app.command
