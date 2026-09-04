@@ -241,6 +241,37 @@ path = "../{participant_id}/{run_number}.jsonl"
         load_config(write_config(tmp_path, config_text))
 
 
+def test_load_config_says_what_abandon_after_is_called_now(tmp_path: Path) -> None:
+    config_text = """
+data_root = "./data"
+database = "./pig.db"
+
+[task.stroop]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+path = "{participant_id}/{run_number}.jsonl"
+abandon_after = "24h"
+"""
+    with pytest.raises(ConfigurationError) as raised:
+        load_config(write_config(tmp_path, config_text))
+    assert "expires_after" in str(raised.value)
+
+
+def test_expires_after_reads_a_duration(tmp_path: Path) -> None:
+    config_text = """
+data_root = "./data"
+database = "./pig.db"
+
+[task.stroop]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+path = "{participant_id}/{run_number}.jsonl"
+expires_after = "7d"
+"""
+    config = load_config(write_config(tmp_path, config_text))
+    assert config.task["stroop"].expires_after == 7 * 86400
+
+
 # --- load_config path resolution ---
 
 

@@ -12,7 +12,7 @@ from .runs import Pig
 # as long as the next sweep, so this is generous.
 STUCK_AFTER = timedelta(hours=1)
 
-STATUSES = ("in_progress", "finalizing", "complete", "abandoned")
+STATUSES = ("in_progress", "finalizing", "complete", "expired")
 
 
 def report(pig: Pig, configuration_problem: str | None = None) -> dict[str, Any]:
@@ -62,7 +62,7 @@ def _task_report(pig: Pig, task_code: str) -> dict[str, Any]:
 
     unfiled = pig.connection.execute(
         "SELECT COUNT(*) AS count FROM runs WHERE task_code = ? AND filed_at IS NULL "
-        "AND status IN ('finalizing', 'abandoned')",
+        "AND status IN ('finalizing', 'expired')",
         (task_code,),
     ).fetchone()["count"]
 

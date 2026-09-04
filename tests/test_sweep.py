@@ -1,8 +1,6 @@
-"""Filing datasets and reaping runs nobody came back to."""
+"""Filing datasets and expiring runs that have been open too long."""
 
 from datetime import UTC, datetime, timedelta
-
-import pytest
 
 from psych_ingestor import storage, sweep
 from psych_ingestor.runs import Pig
@@ -77,7 +75,7 @@ def test_filing_keeps_two_lines_that_share_an_id_but_differ(pig: Pig):
     assert storage.duplicate_event_ids(filed) == ["1"]
 
 
-def test_a_stale_run_is_abandoned_and_filed_separately(pig: Pig):
+def test_a_run_open_too_long_expires_and_is_filed_separately(pig: Pig):
     run_id = pig.start_run("stroop", BASELINE)["run_id"]
     pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
 
@@ -85,67 +83,42 @@ def test_a_stale_run_is_abandoned_and_filed_separately(pig: Pig):
     pig.connection.execute(
         "UPDATE runs SET started_at = ? WHERE run_id = ?", (long_ago, run_id)
     )
-    pig.connection.execute("UPDATE events SET stored_at = ?", (long_ago,))
 
     report = sweep.sweep(pig)
-    assert report.abandoned == [run_id]
+    assert report.expired == [run_id]
 
     assert (
-        pig.config.abandoned_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
+        pig.config.expired_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
     ).exists()
     status = pig.connection.execute(
         "SELECT status FROM runs WHERE run_id = ?", (run_id,)
     ).fetchone()["status"]
-    assert status == "abandoned"
+    assert status == "expired"
+
+
+def test_a_run_still_receiving_events_expires_anyway(pig: Pig):
+    """The limit counts from the start, so something that keeps sending can't hold a
+    run open forever."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    long_ago = (datetime.now(UTC) - timedelta(days=3)).isoformat()
+    pig.connection.execute(
+        "UPDATE runs SET started_at = ? WHERE run_id = ?", (long_ago, run_id)
+    )
+    # An event that arrived just now.
+    pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
+
+    report = sweep.sweep(pig)
+    assert report.expired == [run_id]
 
 
 def test_a_recent_run_is_left_alone(pig: Pig):
     run_id = pig.start_run("stroop", BASELINE)["run_id"]
     report = sweep.sweep(pig)
-    assert report.abandoned == []
+    assert report.expired == []
     status = pig.connection.execute(
         "SELECT status FROM runs WHERE run_id = ?", (run_id,)
     ).fetchone()["status"]
     assert status == "in_progress"
-
-
-def test_finalizing_an_abandoned_run_by_hand_recovers_its_data(pig: Pig):
-    """A run that turned out fine, filed with the abandoned ones, and rescued."""
-    run_id = pig.start_run("stroop", BASELINE)["run_id"]
-    pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
-    pig.connection.execute(
-        "UPDATE runs SET status = 'abandoned' WHERE run_id = ?", (run_id,)
-    )
-    sweep.sweep(pig)
-    assert (
-        pig.config.abandoned_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
-    ).exists()
-
-    sweep.reopen_for_finalizing(pig, run_id)
-    sweep.sweep(pig)
-
-    filed = pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
-    assert len(storage.read_lines(filed)) == 1
-    assert not (
-        pig.config.abandoned_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
-    ).exists()
-    status = pig.connection.execute(
-        "SELECT status FROM runs WHERE run_id = ?", (run_id,)
-    ).fetchone()["status"]
-    assert status == "complete"
-
-
-def test_a_complete_run_cannot_be_finalized_again(pig: Pig):
-    run_id = pig.start_run("stroop", BASELINE)["run_id"]
-    pig.finalize_run("stroop", run_id)
-    sweep.sweep(pig)
-    with pytest.raises(ValueError):
-        sweep.reopen_for_finalizing(pig, run_id)
-
-
-def test_finalizing_an_unknown_run_by_hand_says_so(pig: Pig):
-    with pytest.raises(ValueError):
-        sweep.reopen_for_finalizing(pig, "not-a-run-id")
 
 
 def test_sweeping_twice_is_safe(pig: Pig):
@@ -162,5 +135,5 @@ def test_sweeping_twice_is_safe(pig: Pig):
 def test_sweeping_with_nothing_to_do_is_fine(pig: Pig):
     report = sweep.sweep(pig)
     assert report.filed == []
-    assert report.abandoned == []
+    assert report.expired == []
     assert report.failed == {}

@@ -11,6 +11,7 @@ import string
 import threading
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -109,17 +110,31 @@ class TaskDefinition(BaseModel):
     path: str
     open: bool = True
     max_event_size: int = Field(default=1024 * 1024)
-    abandon_after: int = Field(default=24 * 3600)
+    # How long a run may stay open, counted from when it started. After this, the next
+    # sweep marks it expired and files what arrived. See docs/configuration.md.
+    expires_after: int = Field(default=24 * 3600)
 
     # Filled in by load_config, since a task doesn't know its own code.
     code: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _renamed_settings(cls, raw: Any) -> Any:
+        # `extra="forbid"` would refuse this anyway, but "extra inputs are not permitted"
+        # doesn't tell anyone what to type instead.
+        if isinstance(raw, dict) and "abandon_after" in raw:
+            raise ValueError(
+                "abandon_after is now called expires_after. It means the same thing: how "
+                "long a run may stay open, counted from when it started."
+            )
+        return raw
 
     @field_validator("max_event_size", mode="before")
     @classmethod
     def _size(cls, value: str | int) -> int:
         return parse_size(value)
 
-    @field_validator("abandon_after", mode="before")
+    @field_validator("expires_after", mode="before")
     @classmethod
     def _duration(cls, value: str | int) -> int:
         return parse_duration(value)
@@ -197,8 +212,8 @@ class Config(BaseModel):
         return self.data_root / "complete"
 
     @property
-    def abandoned_root(self) -> Path:
-        return self.data_root / "abandoned"
+    def expired_root(self) -> Path:
+        return self.data_root / "expired"
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:

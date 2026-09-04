@@ -170,7 +170,8 @@ It accepts requests, checks them, appends events to files, and updates the datab
 all. It runs no background threads, no schedulers, no work that outlives a request.
 
 Everything else lives in the CLI, run on a schedule: filing finished datasets, copying them
-wherever they belong, reaping abandoned runs, retrying whatever failed last time. All the
+wherever they belong, expiring runs that have been open too long, retrying whatever failed
+last time. All the
 work that is slow, or depends on something outside the machine, or needs to happen at a
 time nobody requested.
 
@@ -244,9 +245,10 @@ and no help from us.
 ## Runs have a lifecycle
 
 A run is one participant doing one task one time — "participant 10351 doing Stroop at
-baseline." Tasks signal start and end. Per-task configuration governs what happens to a
-dataset that's never finalized, and whether repeat runs are allowed at all. Tasks can be
-open or closed to new data.
+baseline." Tasks signal start and, usually, end. A run the task never finalizes is a normal
+outcome, not a failure: some tasks have no natural finish, and every task sets how long a
+run may stay open before Pig closes it. The difference between the two endings is only who
+vouched for the data. Tasks can be open or closed to new runs.
 
 The run is the only thing in Pig with a lifecycle; see [definitions.md](definitions.md) for
 how it relates to participants, sessions, and datasets, and for the four states it moves
@@ -257,8 +259,9 @@ machine — and that work can fail for reasons outside Pig. So it happens after 
 been told its data is safe, never as a condition of saying so, and a run whose filing
 failed stays visible rather than being called done.
 
-The interesting cases are all the abnormal ones — the abandoned run, the restarted
-task, the duplicate submission. They will happen in the real world, so they can't be afterthoughts.
+The interesting cases are the ones off the happy path — the run that expires mid-game, the
+restarted task, the duplicate submission. They will happen in the real world, so they can't
+be afterthoughts.
 
 ## Simple to try and deploy, with few dependencies
 

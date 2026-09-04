@@ -10,7 +10,7 @@ The main developer is Nate Vack. In these documents, "I" normally refers to him,
 
 Early. Much of `docs/` is draft, and open questions are marked as such in place. Don't treat a draft as a decision, and don't quietly resolve an open question — raise it.
 
-There is now a working first implementation (the four API endpoints, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health|finalize`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
+There is now a working first implementation (the four API endpoints, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
 
 This guidance applies generally -- when I've asked for something that conflicts with past decisions, or past decisions seem inappropriate for work you're doing, stop and ask rather than tying to brute-force your way through things, or guess what I mean. Sometimes I forget stuff. Sometimes I change my mind and forget to write it down.
 
@@ -66,20 +66,24 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   one is what would force a study into the URL space later.
 - **All background work is in the CLI.** The web service handles requests and nothing else:
   no threads, no schedulers, no work outliving a request. Filing datasets, copying them
-  offsite, and reaping abandoned runs are all scheduled CLI commands.
+  offsite, and expiring runs that have been open too long are all scheduled CLI commands.
 - **Extra link parameters are ignored**, not an error. Recorded on the run, never used to
   identify or route anything.
 - **Repeat runs are always allowed** and always get their own dataset. `max_runs` may be
   added someday but does not yet exist.
+- **A run the task never finalizes is a normal outcome**, not a failure. Every task sets
+  `expires_after`, a fixed limit from run start; the next sweep marks such a run `expired`
+  and files it. `complete` means the task vouched for the data, `expired` means it holds
+  what arrived. Nothing reopens either, from the API or the CLI. Any closed run answers
+  `409`, whichever way it closed. See issue #12.
+- **Closing a task refuses new runs only.** Runs in progress keep going and expire on
+  their own schedule.
 
 ## Open scoping questions
 
 Live, and worth flagging rather than assuming past:
 
-- **Run finalization** — whether it reports an event count, and whether a finalized run can
-  be reopened. Deferred deliberately. *Provisionally: no count, no reopening from the API;
-  `pig finalize` can reopen an abandoned run from the CLI.*
+- **Run finalization** — whether it reports an event count. Deferred deliberately.
+  *Provisionally: no count.*
 - **Settings returned at run start** — condition assignment and similar. Planned, unshaped.
   Not built.
-- **Closing a task** — does it also refuse events for runs already in progress?
-  *Provisionally: no. Closing refuses new runs only.*

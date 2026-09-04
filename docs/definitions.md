@@ -36,8 +36,9 @@ lifecycle for — that's a run.
 One participant doing one task, one time: "participant 10351 played the Balloons game."
 
 A run is what your task starts when a participant arrives, and what it finalizes when they
-finish. It's identified by a **run ID** that Pig generates and returns — not by the link
-parameters, though the parameters are what determine which run is meant.
+finish — or what Pig closes for it, once it's been open as long as the task allows. It's
+identified by a **run ID** that Pig generates and returns — not by the link parameters,
+though the parameters are what determine which run is meant.
 
 A run is the only thing in Pig with a lifecycle. Everything else is either configuration or
 stored data.
@@ -97,7 +98,7 @@ run that produced it.
 | `in_progress` | The run has started and the task is sending events. | Yes |
 | `finalizing` | The task said it was done. Pig has the events and is filing them. | No |
 | `complete` | Pig is finished with the run. The dataset is whole and where it belongs. | No |
-| `abandoned` | The run was never finalized, and Pig has waited long enough to give up. | No |
+| `expired` | The run stayed open as long as its task allows, and Pig closed it. | No |
 
 The normal path is `in_progress` → `finalizing` → `complete`, and most runs pass through
 `finalizing` too fast to notice. It is a real state anyway: filing a dataset can mean
@@ -105,17 +106,25 @@ sorting it, moving it to completed storage, and copying it somewhere else entire
 `rclone` push to S3, say). If that destination is slow or down, runs can sit in
 `finalizing` for a long time, and some will need a human.
 
-`abandoned` is reachable only from `in_progress` — it's what happens to a run whose task
-never came back. A run that got stuck in `finalizing` is not abandoned; it's a run Pig still
-owes work to, and it stays `finalizing` until that work succeeds.
+`expired` is reachable only from `in_progress`. Every task sets how long a run may stay
+open (`expires_after`, counted from when the run started), and a run still `in_progress`
+past that is closed by the next sweep. A run that got stuck in `finalizing` never expires;
+it's a run Pig still owes work to, and it stays `finalizing` until that work succeeds.
 
 A run that fails to be filed stays in `finalizing` indefinitely, on purpose. There's no
 retry logic and no failure state yet; the health check is how you find out. Deferred, not
 forgotten.
 
-Abandoned runs will eventually get collected and filed too — their datasets are worth
-keeping, but they must not be mixed in with the data of runs that finished properly. A
-reader pointed at completed data should get only datasets known to hold everything.
+Expiring is a normal way for a run to end, not a failure. A task with no natural finish — a
+game people play for as long as they like — may never finalize a run at all; it sets a long
+`expires_after` and starts a new run when Pig tells it the old one has expired. The only
+difference between `complete` and `expired` is who vouched for the data: a `complete` run
+carries the task's word that it sent everything it had before it stopped, and an `expired`
+run holds everything that arrived. Expired datasets are filed separately from complete
+ones, so a reader who wants only vouched-for data can have exactly that.
+
+Neither kind of run can be reopened. If the participant is still working after a run
+closes, the task starts a new one, which gets the next run number.
 
 Whether a dataset has been copied to its final home is tracked separately from the run's
 status, as a `filed_at` timestamp that's empty until the copy succeeds. It's a different
@@ -130,7 +139,8 @@ The stored events for one run — in practice, one `.jsonl` file on disk, at a p
 lowercased; see [configuration.md](configuration.md).
 
 One run, one dataset. The dataset of a `complete` run is guaranteed to hold every event the
-task sent before finalizing.
+task sent before finalizing. The dataset of an `expired` run holds every event that reached
+Pig before the run closed; the task may have had more it never got to send.
 
 ## Event
 
@@ -176,9 +186,9 @@ because it makes testing considerably harder.
 
 ## Open / closed
 
-Whether a task accepts new data. Closing a task is how data collection ends without taking
-the service down. (Whether closing also stops runs already in progress is an open question
-— see [configuration.md](configuration.md).)
+Whether a task accepts new runs. Closing a task is how data collection ends without taking
+the service down. Runs already in progress keep going: they belong to participants who are
+mid-task, and they finalize or expire on their own.
 
 ---
 

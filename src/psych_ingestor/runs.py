@@ -19,13 +19,10 @@ from .config import SAFE_VALUE_EXPLANATION, Config, TaskDefinition, is_safe_valu
 MAX_RUN_NUMBER = 9999
 MAX_EVENT_ID_LENGTH = 256
 
-# Runs whose status isn't one of these aren't taking events. The code tells the task
-# whether waiting could help: 409 means the run finished, 423 means we gave up on it.
-NOT_ACCEPTING_CODES = {
-    "finalizing": 409,
-    "complete": 409,
-    "abandoned": 423,
-}
+# What a task gets for any run that isn't taking events, whichever way it closed. The
+# task's next move is the same in every case — start a new run — so one code is enough,
+# and the body's `status` says which kind of closed it is.
+RUN_CLOSED = 409
 
 
 class RequestProblem(Exception):
@@ -195,15 +192,15 @@ class Pig:
         run = self._run_for_task(task_code, run_id)
 
         if run["status"] != "in_progress":
-            code = NOT_ACCEPTING_CODES[run["status"]]
+            # Nothing is wrong with the events; it's the run that's closed. Sending them
+            # to a new run will work, so they're retryable — just not here.
             refused = {
-                str(event_id): _problem(
-                    f"This run is {run['status']}, so it isn't taking events.",
-                    can_retry=False,
-                )
+                str(event_id): _problem(_run_closed(run["status"]), can_retry=True)
                 for event_id in _as_event_dict(submitted)
             }
-            return StoreResult(code, run["status"], self._stored_ids(run_id), refused)
+            return StoreResult(
+                RUN_CLOSED, run["status"], self._stored_ids(run_id), refused
+            )
 
         task = self.task(task_code)
         dataset = storage.in_progress_path(self.config.in_progress_root, run_id)
@@ -308,13 +305,14 @@ class Pig:
             return StoreResult(200, status, self._stored_ids(run_id))
 
         return StoreResult(
-            NOT_ACCEPTING_CODES[status],
+            RUN_CLOSED,
             status,
             self._stored_ids(run_id),
             {
                 "run": _problem(
-                    "This run was abandoned, so it can't be finalized by the task. "
-                    "Someone with access to the server can finalize it by hand.",
+                    "This run has expired, so there's nothing to finalize. Everything it "
+                    "received is saved. If the participant is still working, start a new "
+                    "run.",
                     can_retry=False,
                 )
             },
@@ -342,6 +340,19 @@ class Pig:
             "SELECT event_id FROM events WHERE run_id = ? ORDER BY rowid", (run_id,)
         ).fetchall()
         return [row["event_id"] for row in rows]
+
+
+def _run_closed(status: str) -> str:
+    """Why a closed run refused events, and what the task should do instead."""
+    if status == "expired":
+        return (
+            "This run has expired, so it isn't taking events. Start a new run for this "
+            "participant and send these events to it."
+        )
+    return (
+        "This run was finalized, so it isn't taking events. If there's more to record, "
+        "start a new run for this participant and send these events to it."
+    )
 
 
 def _collision(event_id: str) -> dict[str, Any]:

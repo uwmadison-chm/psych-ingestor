@@ -29,7 +29,7 @@ Consequences worth keeping in mind while building:
 - Task definitions can change under a running service. *Built: the service notices the
   file changing and re-reads it, and a definition change doesn't disturb runs already in
   progress. See below.*
-- The CLI's job is the database — rosters, reaping abandoned runs, inspecting what's stored — plus
+- The CLI's job is the database — rosters, expiring runs that have been open too long, inspecting what's stored — plus
   validating the file. It is not an editor for task definitions; that's what a text editor
   and a pull request are for.
 - A task that appears in the database but no longer in the file is a real situation (someone
@@ -51,7 +51,7 @@ run_key = ["participant_id", "session"]
 path = "{participant_id}/{session}_{run_number}.jsonl"
 open = true
 max_event_size = "1M"      # optional, defaults to 1M
-abandon_after = "24h"      # optional, defaults to 24h
+expires_after = "24h"      # optional, defaults to 24h
 ```
 
 `data_root` and `database` are relative to the configuration file, so a checkout can move
@@ -60,9 +60,10 @@ under `local/`, which is the one directory version control ignores; the commands
 to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that. A real deployment
 puts the file wherever its configuration belongs and points `data_root` at real storage.
 
-Under the data root, Pig keeps three directories: `in_progress/` for runs still collecting, `complete/` for datasets of runs that finalized, and
-`abandoned/` for the rest. A task's `path` places its file within `complete/{task_code}/`
-or `abandoned/{task_code}/`.
+Under the data root, Pig keeps three directories: `in_progress/` for runs still collecting,
+`complete/` for datasets of runs that finalized, and `expired/` for runs Pig closed
+because they'd been open as long as the task allows. A task's `path` places its file
+within `complete/{task_code}/` or `expired/{task_code}/`.
 
 `{run_number}` renders as `run-0001`.
 
@@ -159,17 +160,25 @@ block order. Lets you change a task's behavior without redeploying it.
 condition assignment stored on the participant record? The latter is much more useful and
 much more to build.
 
-### Abandoned runs
+### How long a run may stay open
 
-How long Pig waits before considering an unfinished run dead, and what happens then.
+`expires_after` is how long a run may stay open, counted from when it started. Once that
+much time has passed, the next sweep marks the run `expired` and files whatever arrived.
+The default is 24 hours, which is plenty for a task a participant sits down and finishes.
 
-Whatever happens, it can't be "delete the data." Marking the run abandoned and leaving the
-file in place is the safe default; a run that turned out fine can be finalized by hand.
+The limit counts from the start, not from the last event, so nothing can hold a run open
+forever by continuing to send. A task whose runs have no natural end — a game people play
+for as long as they like — sets a long limit, handles the expiry by starting a new run, or
+both. [api.md](api.md) says what the task sees when a run expires.
 
-Only `in_progress` runs are ever abandoned. A run sitting in `finalizing` is waiting on Pig,
-not on the participant — see [definitions.md](definitions.md).
+Expiring never deletes anything. The run is marked and its dataset is filed with the other
+expired ones. A run can't be reopened afterwards, from the API or the CLI; if the
+participant is still working, the task starts a new run and gets the next run number.
 
-The reaping is done by the CLI, on a schedule, not by the service. See
+Only `in_progress` runs expire. A run sitting in `finalizing` is waiting on Pig, not on
+the participant — see [definitions.md](definitions.md).
+
+Expiring is done by the CLI, on a schedule, not by the service. See
 [deployment.md](deployment.md).
 
 ### Filing a completed dataset
@@ -183,7 +192,7 @@ can be slow or broken for reasons no researcher can do anything about. It has to
 retryable, and a run that can't be filed has to stay visible rather than quietly becoming
 `complete`.
 
-*Sorting, moving, and the `complete` / `abandoned` split are built; copying anywhere else
+*Sorting, moving, and the `complete` / `expired` split are built; copying anywhere else
 is not. `pig sweep` does the filing.*
 
 The copy-elsewhere step is configured **per task**. Different studies have different
@@ -198,8 +207,8 @@ None of this happens in the web service. Finalizing a run marks it `finalizing` 
 finds runs waiting to be filed, sorts each dataset, moves it to completed storage, copies it
 wherever the task says, sets `filed_at`, and marks the run `complete`.
 
-Abandoned runs get filed the same way, to a separate destination from complete ones, so
-that nothing reading completed data ever picks up a partial dataset.
+Expired runs get filed the same way, to a separate destination from complete ones, so that
+a reader who wants only data the task vouched for can point at `complete/` and get that.
 
 This means every run waits for the next sweep before it reaches `complete`, even on a
 deployment that copies nothing anywhere. That's the cost of keeping the service simple, and
@@ -212,10 +221,9 @@ nobody is waiting on the sweep except whoever wants to read the finished file. S
 Whether the task currently accepts new data. Closing a task is how data collection ends
 without taking the service down.
 
-**Open question:** does closing a task also refuse new events for runs already in
-progress? Refusing them loses data from participants who are mid-task, which argues for
-letting existing runs finish. *Provisional: closing refuses new runs only. Runs already in
-progress keep sending events and can finalize normally.*
+Closing refuses new runs only. Runs already in progress keep sending events and can
+finalize normally — they belong to participants who are mid-task, usually not the ones
+whose data collection is ending — and they expire on their own schedule like any other.
 
 ### Parameter signing
 

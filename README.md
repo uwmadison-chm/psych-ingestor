@@ -68,7 +68,7 @@ answers things like:
 - What parameters Pig expects from the link to define a run (`participant_id`? plus a `session` for repeated visits?)
 - Where data should be stored, and how the files should be named
 - What (if any) settings will Pig send back to the task when a run starts?
-- How long to wait for a run to conclude, and what to do if it's left open
+- How long a run may stay open before Pig closes it
 - Is the task accepting more data, or is it currently closed?
 
 See `docs/configuration.md`.
@@ -78,13 +78,13 @@ See `docs/configuration.md`.
 The web service only does web service things -- it takes requests, checks them, and writes
 data. Everything that happens on a schedule instead of on request lives in a command-line
 program you run from cron or a systemd timer: filing finished datasets where they belong,
-copying them offsite, reaping runs that were never finalized.
+copying them offsite, expiring runs that have been open too long.
 
 There's also a `check` command for configuration, because a typo in a task definition
 should surface before a participant hits the task, not during.
 
-The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, `pig health`, and
-`pig finalize`. See `docs/trying_it.md`.
+The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, and `pig health`. See
+`docs/trying_it.md`.
 
 ## Documentation
 
