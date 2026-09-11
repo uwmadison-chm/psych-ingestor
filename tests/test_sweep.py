@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from psych_ingestor import runs, storage, sweep
 from psych_ingestor.service import Pig
 
@@ -137,3 +139,65 @@ def test_sweeping_with_nothing_to_do_is_fine(pig: Pig):
     assert report.filed == []
     assert report.expired == []
     assert report.failed == {}
+
+
+def test_a_run_that_sent_no_events_still_gets_an_empty_dataset(pig: Pig):
+    """A uniform layout is worth more than saving a zero-byte file: "is the dataset
+    there" shouldn't be a question with two answers."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.finalize_run("stroop", run_id)
+
+    report = sweep.sweep(pig.config, pig.connection)
+    assert report.filed == [run_id]
+    assert report.failed == {}
+
+    filed = pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
+    assert filed.exists()
+    assert storage.read_lines(filed) == []
+
+
+def test_filing_refuses_to_replace_a_dataset_with_an_empty_one(tmp_path):
+    """A missing source reads as no events. That's right for a run that sent none and
+    catastrophic for one another sweep already filed, and the two look the same from
+    inside `file_dataset` — so it refuses rather than guessing. See issue #18."""
+    source, destination = tmp_path / "run.jsonl", tmp_path / "filed.jsonl"
+    storage.append_line(source, storage.canonical({"event_id": "1", "data": {}}))
+    assert storage.file_dataset(source, destination) == 1
+
+    with pytest.raises(OSError):
+        storage.file_dataset(source, destination)
+
+    assert len(storage.read_lines(destination)) == 1
+
+
+def test_filing_an_empty_dataset_twice_is_still_fine(tmp_path):
+    """The other half of that guard: it refuses nothing a real run needs."""
+    destination = tmp_path / "filed.jsonl"
+    assert storage.file_dataset(tmp_path / "never-existed.jsonl", destination) == 0
+    assert storage.file_dataset(tmp_path / "never-existed.jsonl", destination) == 0
+    assert destination.exists()
+
+
+def test_a_sweep_reports_a_dataset_it_cannot_account_for(pig: Pig):
+    """What a raced or half-finished sweep leaves: the dataset is filed, but the database
+    still thinks it isn't. The run is reported rather than quietly emptied."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
+    pig.finalize_run("stroop", run_id)
+    sweep.sweep(pig.config, pig.connection)
+
+    filed = pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
+    assert len(storage.read_lines(filed)) == 1
+
+    # Put the run back to waiting, as a sweep that died before its last write would.
+    pig.connection.execute(
+        "UPDATE runs SET phase = 'closed', filed_at = NULL, dataset_path = NULL "
+        "WHERE run_id = ?",
+        (run_id,),
+    )
+
+    report = sweep.sweep(pig.config, pig.connection)
+    assert report.filed == []
+    assert run_id in report.failed
+    # And the dataset that was already there is untouched.
+    assert len(storage.read_lines(filed)) == 1
