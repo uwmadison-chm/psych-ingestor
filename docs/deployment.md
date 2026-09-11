@@ -10,8 +10,9 @@ Systemd stuff here
 **The web service**, under systemd, handling requests. It does nothing on its own schedule.
 
 **A scheduled CLI command**, on a systemd timer, doing everything else: filing finished
-datasets into completed storage, copying them wherever each task says they go, reaping runs
-that were never finalized, and retrying whatever didn't work last time.
+datasets into completed storage, copying them wherever each task says they go, expiring
+runs that have been open longer than their task allows, and retrying whatever didn't work
+last time.
 
 Both are required. A deployment that runs only the service collects data correctly and
 never files any of it — runs pile up in `finalizing`, which is not data loss but is not

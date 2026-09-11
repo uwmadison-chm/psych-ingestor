@@ -67,8 +67,8 @@ It moves where your configuration says when you file it:
 uv run pig sweep
 ```
 
-That's the scheduled half of Pig — filing finished datasets and giving up on runs nobody
-came back to. In production a systemd timer runs it every few minutes; on a laptop, run it
+That's the scheduled half of Pig — filing finished datasets and expiring runs that have
+been open too long. In production a systemd timer runs it every few minutes; on a laptop, run it
 by hand when you want to watch a run reach `complete`. **Until you run it, finalized runs
 sit in `finalizing` and their files stay in `local/data/in_progress/`.** That's normal,
 not a failure.
@@ -95,7 +95,8 @@ wrong:
   lowercase.
 - **Put a space or a dot in `participant_id`.** The run is refused, because that value
   becomes a directory name.
-- **Post events after finalizing.** `409`, and the events aren't stored.
+- **Post events after finalizing.** `409`, the events aren't stored, and the message tells
+  you to start a new run.
 - **Add a parameter the task doesn't know about.** Ignored, and recorded on the run.
 
 ## What isn't here yet
@@ -111,9 +112,8 @@ offsite, and per-task allowed origins (every task currently allows any origin). 
 | --- | --- |
 | `pig check` | Validate the configuration and print what each task will do. |
 | `pig serve` | Run the web service. |
-| `pig sweep` | File finished datasets; give up on runs nobody came back to. |
+| `pig sweep` | File finished datasets; expire runs that have been open too long. |
 | `pig runs` | List runs. `--task` and `--status` narrow it. |
 | `pig health` | The health report, as JSON. |
-| `pig finalize RUN_ID` | Finalize a run by hand — for one that was abandoned but turned out fine. |
 
 Any of them take `--config` if your file isn't `./local/pig.toml`.

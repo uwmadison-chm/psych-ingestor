@@ -54,7 +54,9 @@ reports it back; it only lowercases the folder name.
    data as whole and hands it to Pig to file with the completed data.
 
 If step 5 never happens — the participant closes the tab, the laptop dies — the data you
-already sent is still saved.
+already sent is still saved. Pig closes the run on its own after a while (24 hours unless
+whoever configured your task chose otherwise) and files what it received. See
+[When a run expires](#when-a-run-expires), especially if your task has no natural end.
 
 A run can also happen entirely offline. In a phone app or a PWA, a participant might do the
 whole task with no network at all, storing events locally; when the device gets a
@@ -198,8 +200,10 @@ The status code tells you what happened:
 | `422 Unprocessable Entity` | At least one event wasn't stored. Read `errors`. |
 
 You get the same JSON either way, so you can always read `stored` and `errors` to decide
-what to resend. `can_retry` tells you whether sending it again could work; if it's `false`,
-something about the event itself is wrong and resending won't help.
+what to resend. `can_retry` tells you whether the event itself is fine. If it's `false`,
+something about the event is wrong and resending won't help. If it's `true`, the event is
+fine but this run wouldn't take it — usually because the run has closed, in which case the
+message says to send it to a new one.
 
 ### Sending the same event twice
 
@@ -224,9 +228,10 @@ just a retry. Keep the event you failed to send, and send that.
 
 ### When it doesn't work
 
-**The run isn't accepting data any more** — you finalized it, or it was abandoned. You get
-`409 Conflict` or `423 Locked`, with the usual JSON; `status` says which state it's in, and
-everything Pig wouldn't take is in `errors`.
+**The run isn't accepting data any more** — you finalized it, or it expired. You get
+`409 Conflict` with the usual JSON: `status` says which, and every event Pig wouldn't take
+is in `errors` with a message saying what to do. Nothing is wrong with the events; start a
+new run and send them there. See [When a run expires](#when-a-run-expires).
 
 **The run doesn't exist** — `404 Not Found`, with the usual JSON. Don't expect anything in
 `stored`. You'll also get a `404` if the run ID is real but belongs to a different task
@@ -256,6 +261,43 @@ remaining work (sorting the dataset, moving it to completed storage, copying it 
 happens without you, and the run becomes `complete` when it's done. Don't wait for it;
 nothing your task can do would change the outcome.
 
+## When a run expires
+
+A run doesn't stay open forever. Each task has a time limit, counted from when the run
+started — 24 hours unless whoever configured your task set something else — and once a run
+has been open that long, Pig closes it and files the data it received. The run's status
+becomes `expired`.
+
+For most tasks this never comes up: the participant finishes in an hour and you finalize.
+It matters when your task has no natural end — a game people play for as long as they like,
+say. For a task like that, expiring is the normal way a run ends. Nothing about it is an
+error, and nothing you sent is lost.
+
+What you see is the reply to your next request:
+
+```json
+{
+  "status": "expired",
+  "stored": ["1", "2", "3"],
+  "errors": {
+    "4": {
+      "message": "This run has expired, so it isn't taking events. Start a new run for this participant and send these events to it.",
+      "can_retry": true
+    }
+  }
+}
+```
+
+with status code `409 Conflict`. `stored` is everything Pig kept, and `errors` lists what it
+didn't take. Do what the message says: start a new run with the same link parameters, and
+send the refused events to the new run ID. Pig gives the new run the next run number, so
+nothing is overwritten and the two runs sit side by side in your data.
+
+If your task expects this to happen, hold on to each event until you've seen its ID in
+`stored`, so you have it to resend. That's the same thing you'd do for a failed request.
+Finalizing an expired run gets the same `409`; there's nothing to finalize, and everything
+it received is already saved.
+
 ## Checking on a run
 
 ### `GET /task/{task_code}/run/{run_id}`
@@ -274,7 +316,7 @@ nothing your task can do would change the outcome.
 | `in_progress` | The run is still taking events. |
 | `finalizing` | It isn't. Pig is filing the dataset. |
 | `complete` | Pig is finished with it. |
-| `abandoned` | The run was never finalized, and Pig stopped waiting. |
+| `expired` | The run was open as long as the task allows, and Pig closed it. |
 
 If the run ID doesn't exist, you get `404 Not Found`.
 
@@ -290,8 +332,8 @@ configuration. See [security.md](security.md).
 Nothing here should stop you writing a task, but these will grow:
 
 - **`finalize` may come to report the number of events it stored**, so your task can check
-  it against its own count before telling the participant they're done. Whether a finalized
-  run can be reopened is also unsettled. Neither changes what you write today.
+  it against its own count before telling the participant they're done. It doesn't change
+  what you write today.
 - **A task may eventually cap how many times a participant can run it** (`max_runs`).
   Today there's no limit, and every start gets its own run. If your task depends on being
   able to restart, that keeps working; if you'd like it capped, that's coming.
@@ -301,8 +343,10 @@ Nothing here should stop you writing a task, but these will grow:
 - **The error for a repeated event ID will tell you about the version Pig already has.** It
   will tell you something; the exact shape isn't settled.
 
-Two things you can rely on that you might expect to be in flux:
+Three things you can rely on that you might expect to be in flux:
 
+- **A closed run stays closed.** Once a run is finalized or expired, nothing reopens it.
+  If there's more to record, that's a new run with a new run number.
 - **Extra link parameters are fine.** Pig ignores parameters it doesn't know about — a
   `utm_source` or a leftover `debug=1` won't stop a run from starting. Only the parameters
   your task's configuration names are used to identify the run.

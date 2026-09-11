@@ -1,7 +1,7 @@
 """The command line: everything that isn't a request.
 
 Checking configuration, running the service, and the scheduled work — filing finished
-datasets and reaping runs that were never finalized.
+datasets and expiring runs that have been open too long.
 """
 
 from __future__ import annotations
@@ -88,8 +88,7 @@ def check(*, config: ConfigPath | None = None) -> None:
         print(f"  run key:     {', '.join(task.run_key)}")
         print(f"  data lands:  {loaded.complete_root / example}")
         print(
-            "  gives up on an unfinished run after "
-            f"{describe_duration(task.abandon_after)}"
+            f"  runs expire: {describe_duration(task.expires_after)} after they start"
         )
 
 
@@ -144,14 +143,14 @@ def serve(
 
 @app.command
 def sweep(*, config: ConfigPath | None = None) -> None:
-    """File finished datasets and give up on runs nobody came back to.
+    """File finished datasets and expire runs that have been open too long.
 
     This is the scheduled half of Pig. Until it runs, finalized runs sit in `finalizing`
     and their data stays in the in-progress directory.
     """
     pig = _open(_load(config))
     report = sweep_module.sweep(pig)
-    print(f"Abandoned {len(report.abandoned)} run(s), filed {len(report.filed)}.")
+    print(f"Expired {len(report.expired)} run(s), filed {len(report.filed)}.")
     for run_id, why in report.failed.items():
         print(f"  couldn't file {run_id}: {why}", file=sys.stderr)
     if report.failed:
@@ -189,18 +188,6 @@ def runs(
             f"{run['run_id']}  {run['task_code']:<12} run-{run['run_number']:04d}  "
             f"{run['status']:<12} {count:>5} events  {described}"
         )
-
-
-@app.command
-def finalize(run_id: str, *, config: ConfigPath | None = None) -> None:
-    """Finalize a run by hand — for one that was abandoned but turned out fine."""
-    pig = _open(_load(config))
-    try:
-        sweep_module.reopen_for_finalizing(pig, run_id)
-    except ValueError as why:
-        print(why, file=sys.stderr)
-        raise SystemExit(1) from why
-    print(f"{run_id} is finalizing. Run `pig sweep` to file its data.")
 
 
 @app.command(name="health")

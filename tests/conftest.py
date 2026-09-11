@@ -16,7 +16,7 @@ database = "./pig.db"
 parameters = ["participant_id", "session"]
 run_key = ["participant_id", "session"]
 path = "{participant_id}/{session}_{run_number}.jsonl"
-abandon_after = "24h"
+expires_after = "24h"
 
 [task.balloons]
 parameters = ["participant_id"]

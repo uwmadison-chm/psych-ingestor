@@ -166,8 +166,37 @@ def test_finalizing_closes_the_run_to_events(pig: Pig):
 
     refused = pig.store_events("stroop", run_id, {"2": event({"trial": 2})})
     assert refused.status_code == 409
-    assert refused.errors["2"]["can_retry"] is False
     assert refused.stored == ["1"]
+    # Nothing is wrong with the event, so it's fine to send it — to a new run.
+    assert refused.errors["2"]["can_retry"] is True
+    assert "start a new run" in refused.errors["2"]["message"]
+
+
+def test_an_expired_run_tells_the_task_to_start_a_new_one(pig: Pig):
+    run_id = start(pig)
+    pig.store_events("stroop", run_id, {"1": event({"trial": 1})})
+    pig.connection.execute(
+        "UPDATE runs SET status = 'expired' WHERE run_id = ?", (run_id,)
+    )
+
+    refused = pig.store_events("stroop", run_id, {"2": event({"trial": 2})})
+    assert refused.status_code == 409
+    assert refused.status == "expired"
+    assert refused.stored == ["1"]
+    assert refused.errors["2"]["can_retry"] is True
+    assert "expired" in refused.errors["2"]["message"]
+    assert "Start a new run" in refused.errors["2"]["message"]
+
+
+def test_an_expired_run_cannot_be_finalized(pig: Pig):
+    run_id = start(pig)
+    pig.connection.execute(
+        "UPDATE runs SET status = 'expired' WHERE run_id = ?", (run_id,)
+    )
+    result = pig.finalize_run("stroop", run_id)
+    assert result.status_code == 409
+    assert result.status == "expired"
+    assert result.errors["run"]["can_retry"] is False
 
 
 def test_finalizing_twice_is_not_an_error(pig: Pig):

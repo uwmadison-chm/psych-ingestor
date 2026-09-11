@@ -15,7 +15,7 @@ run_key = ["participant_id", "session"]
 path = "{participant_id}/{session}_{run_number}.jsonl"
 open = true
 max_event_size = "1M"
-abandon_after = "24h"
+expires_after = "24h"     # a run closes this long after it starts, finished or not
 
 # A one-visit study. No session anywhere, and the run key is just the participant.
 [task.balloons]
