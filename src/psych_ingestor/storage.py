@@ -85,6 +85,16 @@ def file_dataset(source: Path, destination: Path) -> int:
         seen.add(line)
         kept.append(line)
 
+    # A missing source reads as no events, which is correct for a run that never sent
+    # any and catastrophic for one whose dataset another sweep already filed. The two
+    # look identical from here, so rather than guess, refuse to be the one that replaces
+    # data with nothing. See issue #18.
+    if not kept and destination.exists() and destination.stat().st_size > 0:
+        raise OSError(
+            f"{destination} already holds a dataset, and this one has no events in it. "
+            "Refusing to replace it. Another sweep may have filed this run already."
+        )
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     scratch = destination.with_suffix(destination.suffix + ".partial")
     with open(scratch, "w", encoding="utf-8") as handle:
