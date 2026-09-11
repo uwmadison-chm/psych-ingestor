@@ -201,3 +201,28 @@ def test_a_sweep_reports_a_dataset_it_cannot_account_for(pig: Pig):
     assert run_id in report.failed
     # And the dataset that was already there is untouched.
     assert len(storage.read_lines(filed)) == 1
+
+
+def test_a_run_whose_data_vanished_is_reported_not_emptied(pig: Pig):
+    """The case the destination guard can't see: a run with events whose in-progress file
+    is gone before it was ever filed. Nothing exists at the destination to refuse, so the
+    receipts are what say this run should have had data. See issue #18."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
+    pig.finalize_run("stroop", run_id)
+
+    # Whatever lost it — a disk problem, someone tidying up by hand.
+    storage.in_progress_path(pig.config.in_progress_root, run_id).unlink()
+
+    report = sweep.sweep(pig.config, pig.connection)
+    assert report.filed == []
+    assert run_id in report.failed
+    assert "1 event(s)" in report.failed[run_id]
+
+    # No empty dataset was written, and the run is still waiting rather than called done.
+    assert not (
+        pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
+    ).exists()
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    assert run.phase is runs.Phase.CLOSED

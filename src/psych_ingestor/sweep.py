@@ -58,6 +58,20 @@ def file_finished_runs(
         destination = root / task.dataset_path(run.parameters, run.run_number)
         source = storage.in_progress_path(config.in_progress_root, run.run_id)
 
+        # A run with no in-progress file is normal — a task can finalize a run without
+        # ever sending an event, and an empty dataset is the right answer for it. But the
+        # receipts say whether that's what happened: Pig writes the line before recording
+        # the receipt, so a receipt means the line was on disk. Receipts with no file
+        # means the data is gone, and filing an empty dataset over it would make that
+        # permanent and silent. See issue #18.
+        stored = runs.count_stored_events(connection, run.run_id)
+        if not source.exists() and stored > 0:
+            report.failed[run.run_id] = (
+                f"Pig recorded {stored} event(s) for this run, but {source} isn't there. "
+                "Not filing an empty dataset over it. The run stays where it is."
+            )
+            continue
+
         try:
             storage.file_dataset(source, destination)
         except OSError as error:
