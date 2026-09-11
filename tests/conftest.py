@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from psych_ingestor import db
 from psych_ingestor.app import create_app
 from psych_ingestor.config import load_config
-from psych_ingestor.runs import Pig
+from psych_ingestor.service import Pig
 
 CONFIG = """
 data_root = "./data"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -15,6 +16,7 @@ from typing import Annotated
 import cyclopts
 
 from . import db, health
+from . import runs as runs_module
 from . import sweep as sweep_module
 from .config import (
     DEFAULT_CONFIG,
@@ -23,7 +25,7 @@ from .config import (
     describe_duration,
     load_config,
 )
-from .runs import Pig
+from .runs import API_STATUSES
 
 app = cyclopts.App(
     name="pig",
@@ -67,8 +69,10 @@ def _load(path: Path | None) -> Config:
         raise SystemExit(1) from error
 
 
-def _open(config: Config) -> Pig:
-    return Pig(config, db.connect(config.database))
+def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
+    """The configuration and a connection to its database, for one CLI command."""
+    config = _load(path)
+    return config, db.connect(config.database)
 
 
 @app.command
@@ -148,8 +152,8 @@ def sweep(*, config: ConfigPath | None = None) -> None:
     This is the scheduled half of Pig. Until it runs, finalized runs sit in `finalizing`
     and their data stays in the in-progress directory.
     """
-    pig = _open(_load(config))
-    report = sweep_module.sweep(pig)
+    loaded, connection = _open(config)
+    report = sweep_module.sweep(loaded, connection)
     print(f"Expired {len(report.expired)} run(s), filed {len(report.filed)}.")
     for run_id, why in report.failed.items():
         print(f"  couldn't file {run_id}: {why}", file=sys.stderr)
@@ -165,36 +169,34 @@ def runs(
     config: ConfigPath | None = None,
 ) -> None:
     """List runs, most recent first."""
-    pig = _open(_load(config))
-    query = "SELECT * FROM runs"
-    conditions, values = [], []
-    if task:
-        conditions.append("task_code = ?")
-        values.append(task)
-    if status:
-        conditions.append("status = ?")
-        values.append(status)
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY started_at DESC"
-
-    for run in pig.connection.execute(query, values):
-        parameters = json.loads(run["parameters"])
-        described = " ".join(f"{name}={value}" for name, value in parameters.items())
-        count = pig.connection.execute(
-            "SELECT COUNT(*) AS count FROM events WHERE run_id = ?", (run["run_id"],)
-        ).fetchone()["count"]
+    if status is not None and status not in API_STATUSES:
         print(
-            f"{run['run_id']}  {run['task_code']:<12} run-{run['run_number']:04d}  "
-            f"{run['status']:<12} {count:>5} events  {described}"
+            f"{status!r} isn't a run status. Pig uses: {', '.join(API_STATUSES)}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    # The configuration is loaded and checked even though listing runs doesn't read it:
+    # a command that silently works against a broken config file would be worse.
+    _, connection = _open(config)
+    for run in runs_module.recent_first(connection, task_code=task):
+        if status is not None and run.api_status != status:
+            continue
+        described = " ".join(
+            f"{name}={value}" for name, value in run.parameters.items()
+        )
+        count = runs_module.count_stored_events(connection, run.run_id)
+        print(
+            f"{run.run_id}  {run.task_code:<12} run-{run.run_number:04d}  "
+            f"{run.api_status:<12} {count:>5} events  {described}"
         )
 
 
 @app.command(name="health")
 def health_command(*, config: ConfigPath | None = None) -> None:
     """Print the same report as `GET /health`."""
-    pig = _open(_load(config))
-    print(json.dumps(health.report(pig), indent=2))
+    loaded, connection = _open(config)
+    print(json.dumps(health.report(loaded, connection), indent=2))
 
 
 def main() -> None:

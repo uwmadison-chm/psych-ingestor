@@ -17,7 +17,8 @@ from fastapi.responses import JSONResponse
 
 from . import db, health
 from .config import DEFAULT_CONFIG, ConfigSource
-from .runs import Pig, RequestProblem
+from .runs import RequestProblem
+from .service import Pig
 
 
 def create_app(config_path: Path) -> FastAPI:
@@ -81,7 +82,7 @@ def create_app(config_path: Path) -> FastAPI:
     @app.get("/health")
     def check_health() -> JSONResponse:
         with _pig(source) as pig:
-            report = health.report(pig, source.problem)
+            report = health.report(pig.config, pig.connection, source.problem)
             return JSONResponse(
                 status_code=200 if report["ok"] else 503, content=report
             )

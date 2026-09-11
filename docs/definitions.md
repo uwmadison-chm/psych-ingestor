@@ -89,48 +89,71 @@ A `max_runs` setting is planned; see [configuration.md](configuration.md).
 
 ## Run status
 
-Every run is in exactly one of four states. This is the only status vocabulary Pig uses —
-the API reports these words, the CLI prints them, and a dataset takes its state from the
-run that produced it.
+Pig stores two facts about where a run stands, and reports a single word derived from them.
 
-| Status | Means | Accepting events? |
+**Phase** is how far along Pig's own bookkeeping is.
+
+| Phase | Means | Accepting events? |
 | --- | --- | --- |
-| `in_progress` | The run has started and the task is sending events. | Yes |
-| `finalizing` | The task said it was done. Pig has the events and is filing them. | No |
-| `complete` | Pig is finished with the run. The dataset is whole and where it belongs. | No |
-| `expired` | The run stayed open as long as its task allows, and Pig closed it. | No |
+| `collecting` | The run has started and the task is sending events. | Yes |
+| `closed` | The run has stopped taking events. Its dataset is waiting for the sweep. | No |
+| `done` | The sweep has filed the dataset. Pig has no work left for this run. | No |
 
-The normal path is `in_progress` → `finalizing` → `complete`, and most runs pass through
-`finalizing` too fast to notice. It is a real state anyway: filing a dataset can mean
-sorting it, moving it to completed storage, and copying it somewhere else entirely (an
-`rclone` push to S3, say). If that destination is slow or down, runs can sit in
-`finalizing` for a long time, and some will need a human.
+**Disposition** is why the run stopped accepting data. A run still collecting doesn't have
+one yet.
 
-`expired` is reachable only from `in_progress`. Every task sets how long a run may stay
-open (`expires_after`, counted from when the run started), and a run still `in_progress`
-past that is closed by the next sweep. A run that got stuck in `finalizing` never expires;
-it's a run Pig still owes work to, and it stays `finalizing` until that work succeeds.
+| Disposition | Means |
+| --- | --- |
+| `finalized` | The task said it was done, and vouches for having sent everything it had. |
+| `expired` | The run stayed open as long as its task allows, and Pig closed it. |
 
-A run that fails to be filed stays in `finalizing` indefinitely, on purpose. There's no
-retry logic and no failure state yet; the health check is how you find out. Deferred, not
-forgotten.
+The normal path is `collecting` → `closed` → `done` with a `finalized` disposition, and most
+runs pass through `closed` too fast to notice. It is a real state anyway: filing a dataset
+can mean sorting it, moving it to completed storage, and copying it somewhere else entirely
+(an `rclone` push to S3, say). If that destination is slow or down, runs can sit in `closed`
+for a long time, and some will need a human.
+
+A run can only expire while it is collecting. Every task sets how long a run may stay open
+(`expires_after`, counted from when the run started), and a run still collecting past that is
+closed by the next sweep. A run already closed never expires; it's a run Pig still owes work
+to, and it stays closed until that work succeeds — indefinitely, on purpose. There's no retry
+logic and no failure state yet; the health check is how you find out. Deferred, not forgotten.
+
+Keeping the two apart is deliberate. The phase stops mattering once a run is done, while the
+disposition is the fact that still matters to whoever reads the data months later. The
+database enforces the relationship between them with `CHECK` constraints, so a row whose
+phase and disposition disagree can't be stored at all.
+
+### What the API reports
+
+The API, the CLI, and anything reading a dataset's state use one word, derived from the pair:
+
+| Phase | Disposition | Reported status |
+| --- | --- | --- |
+| `collecting` | — | `in_progress` |
+| `closed` | `finalized` | `finalizing` |
+| `done` | `finalized` | `complete` |
+| `closed` | `expired` | `expired` |
+| `done` | `expired` | `expired` |
+
+This is the only status vocabulary a task ever sees. Note the asymmetry in the last three
+rows: `finalizing` and `complete` say whether a finalized run's dataset has been filed yet,
+and `expired` covers both for an expired one. That's open, not settled — see issue #16.
 
 Expiring is a normal way for a run to end, not a failure. A task with no natural finish — a
 game people play for as long as they like — may never finalize a run at all; it sets a long
 `expires_after` and starts a new run when Pig tells it the old one has expired. The only
 difference between `complete` and `expired` is who vouched for the data: a `complete` run
 carries the task's word that it sent everything it had before it stopped, and an `expired`
-run holds everything that arrived. Expired datasets are filed separately from complete
-ones, so a reader who wants only vouched-for data can have exactly that.
+run holds everything that arrived. Expired datasets are filed separately from complete ones,
+so a reader who wants only vouched-for data can have exactly that.
 
-Neither kind of run can be reopened. If the participant is still working after a run
-closes, the task starts a new one, which gets the next run number.
+Neither kind of run can be reopened. If the participant is still working after a run closes,
+the task starts a new one, which gets the next run number.
 
-Whether a dataset has been copied to its final home is tracked separately from the run's
-status, as a `filed_at` timestamp that's empty until the copy succeeds. It's a different
-fact from how the run ended, and keeping the two apart means "every run that finished
-properly" stays a single check. Tasks never see it. See
-[configuration.md](configuration.md).
+Timestamps record when each transition happened — `started_at`, `closed_at`, and `filed_at` —
+and nothing reads them to decide what state a run is in. That's the phase's job. Tasks never
+see them. See [configuration.md](configuration.md).
 
 ## Dataset
 

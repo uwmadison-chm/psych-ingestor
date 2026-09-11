@@ -2,8 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
-from psych_ingestor import storage, sweep
-from psych_ingestor.runs import Pig
+from psych_ingestor import runs, storage, sweep
+from psych_ingestor.service import Pig
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -24,7 +24,7 @@ def test_filing_sorts_moves_and_completes(pig: Pig):
     )
     pig.finalize_run("stroop", run_id)
 
-    report = sweep.sweep(pig)
+    report = sweep.sweep(pig.config, pig.connection)
     assert report.filed == [run_id]
 
     # Values are lowercased on their way into the path; the original is kept on the run.
@@ -33,11 +33,12 @@ def test_filing_sorts_moves_and_completes(pig: Pig):
     assert [line["event_id"] for line in storage.read_lines(filed)] == ["1", "2"]
     assert not storage.in_progress_path(pig.config.in_progress_root, run_id).exists()
 
-    run = pig.connection.execute(
-        "SELECT * FROM runs WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    assert run["status"] == "complete"
-    assert run["filed_at"] is not None
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    assert run.api_status == "complete"
+    assert run.phase is runs.Phase.DONE
+    assert run.disposition is runs.Disposition.FINALIZED
+    assert run.filed_at is not None
 
 
 def test_filing_drops_lines_that_repeat_exactly(pig: Pig):
@@ -51,7 +52,7 @@ def test_filing_drops_lines_that_repeat_exactly(pig: Pig):
     assert len(storage.read_lines(path)) == 2
 
     pig.finalize_run("stroop", run_id)
-    sweep.sweep(pig)
+    sweep.sweep(pig.config, pig.connection)
 
     filed = pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
     assert len(storage.read_lines(filed)) == 1
@@ -68,7 +69,7 @@ def test_filing_keeps_two_lines_that_share_an_id_but_differ(pig: Pig):
     )
 
     pig.finalize_run("stroop", run_id)
-    sweep.sweep(pig)
+    sweep.sweep(pig.config, pig.connection)
 
     filed = pig.config.complete_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
     assert len(storage.read_lines(filed)) == 2
@@ -84,16 +85,16 @@ def test_a_run_open_too_long_expires_and_is_filed_separately(pig: Pig):
         "UPDATE runs SET started_at = ? WHERE run_id = ?", (long_ago, run_id)
     )
 
-    report = sweep.sweep(pig)
+    report = sweep.sweep(pig.config, pig.connection)
     assert report.expired == [run_id]
 
     assert (
         pig.config.expired_root / "stroop/ppt-1003/baseline_run-0001.jsonl"
     ).exists()
-    status = pig.connection.execute(
-        "SELECT status FROM runs WHERE run_id = ?", (run_id,)
-    ).fetchone()["status"]
-    assert status == "expired"
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    assert run.api_status == "expired"
+    assert run.disposition is runs.Disposition.EXPIRED
 
 
 def test_a_run_still_receiving_events_expires_anyway(pig: Pig):
@@ -107,18 +108,17 @@ def test_a_run_still_receiving_events_expires_anyway(pig: Pig):
     # An event that arrived just now.
     pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
 
-    report = sweep.sweep(pig)
+    report = sweep.sweep(pig.config, pig.connection)
     assert report.expired == [run_id]
 
 
 def test_a_recent_run_is_left_alone(pig: Pig):
     run_id = pig.start_run("stroop", BASELINE)["run_id"]
-    report = sweep.sweep(pig)
+    report = sweep.sweep(pig.config, pig.connection)
     assert report.expired == []
-    status = pig.connection.execute(
-        "SELECT status FROM runs WHERE run_id = ?", (run_id,)
-    ).fetchone()["status"]
-    assert status == "in_progress"
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    assert run.accepting_data
 
 
 def test_sweeping_twice_is_safe(pig: Pig):
@@ -126,14 +126,14 @@ def test_sweeping_twice_is_safe(pig: Pig):
     pig.store_events("stroop", run_id, {"1": event(1, "2026-07-26T18:25:43-05:00")})
     pig.finalize_run("stroop", run_id)
 
-    sweep.sweep(pig)
-    second = sweep.sweep(pig)
+    sweep.sweep(pig.config, pig.connection)
+    second = sweep.sweep(pig.config, pig.connection)
     assert second.filed == []
     assert second.failed == {}
 
 
 def test_sweeping_with_nothing_to_do_is_fine(pig: Pig):
-    report = sweep.sweep(pig)
+    report = sweep.sweep(pig.config, pig.connection)
     assert report.filed == []
     assert report.expired == []
     assert report.failed == {}
