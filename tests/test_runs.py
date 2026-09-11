@@ -1,11 +1,10 @@
 """The parts that carry the reliability promise: dedup, collisions, and the write order."""
 
-import json
-
 import pytest
 
-from psych_ingestor import storage
-from psych_ingestor.runs import Pig, RequestProblem
+from psych_ingestor import db, runs, storage
+from psych_ingestor.runs import Disposition, RequestProblem
+from psych_ingestor.service import Pig
 
 BASELINE = {"participant_id": "10351", "session": "baseline"}
 
@@ -17,6 +16,14 @@ def event(payload: dict) -> dict:
 def start(pig: Pig, **overrides) -> str:
     parameters = {**BASELINE, **overrides}
     return pig.start_run("stroop", parameters)["run_id"]
+
+
+def expire(pig: Pig, run_id: str) -> None:
+    """Close a run the way the sweep does, rather than by hand: the database refuses a
+    row whose phase and disposition disagree."""
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    runs.mark_closed(pig.connection, run, Disposition.EXPIRED, db.now())
 
 
 def dataset_lines(pig: Pig, run_id: str) -> list[dict]:
@@ -46,11 +53,10 @@ def test_case_variants_are_the_same_run_key(pig: Pig):
 
 def test_extra_parameters_are_recorded_and_ignored(pig: Pig):
     run_id = pig.start_run("stroop", {**BASELINE, "utm_source": "email"})["run_id"]
-    row = pig.connection.execute(
-        "SELECT parameters, extra_parameters FROM runs WHERE run_id = ?", (run_id,)
-    ).fetchone()
-    assert json.loads(row["parameters"]) == BASELINE
-    assert json.loads(row["extra_parameters"]) == {"utm_source": "email"}
+    run = runs.get(pig.connection, run_id)
+    assert run is not None
+    assert run.parameters == BASELINE
+    assert run.extra_parameters == {"utm_source": "email"}
 
 
 def test_an_unusable_parameter_refuses_the_run(pig: Pig):
@@ -175,9 +181,7 @@ def test_finalizing_closes_the_run_to_events(pig: Pig):
 def test_an_expired_run_tells_the_task_to_start_a_new_one(pig: Pig):
     run_id = start(pig)
     pig.store_events("stroop", run_id, {"1": event({"trial": 1})})
-    pig.connection.execute(
-        "UPDATE runs SET status = 'expired' WHERE run_id = ?", (run_id,)
-    )
+    expire(pig, run_id)
 
     refused = pig.store_events("stroop", run_id, {"2": event({"trial": 2})})
     assert refused.status_code == 409
@@ -190,9 +194,7 @@ def test_an_expired_run_tells_the_task_to_start_a_new_one(pig: Pig):
 
 def test_an_expired_run_cannot_be_finalized(pig: Pig):
     run_id = start(pig)
-    pig.connection.execute(
-        "UPDATE runs SET status = 'expired' WHERE run_id = ?", (run_id,)
-    )
+    expire(pig, run_id)
     result = pig.finalize_run("stroop", run_id)
     assert result.status_code == 409
     assert result.status == "expired"

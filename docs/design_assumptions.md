@@ -251,8 +251,8 @@ run may stay open before Pig closes it. The difference between the two endings i
 vouched for the data. Tasks can be open or closed to new runs.
 
 The run is the only thing in Pig with a lifecycle; see [definitions.md](definitions.md) for
-how it relates to participants, sessions, and datasets, and for the four states it moves
-through.
+how it relates to participants, sessions, and datasets, and for the states it moves through
+and the status a task is told.
 
 Finalizing a run is real work — sorting the dataset, moving it, possibly copying it off the
 machine — and that work can fail for reasons outside Pig. So it happens after the task has

@@ -7,12 +7,12 @@ and safe to run when there's nothing to do.
 
 from __future__ import annotations
 
-import json
+import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 
-from . import db, storage
-from .runs import Pig
+from . import db, runs, storage
+from .config import Config
+from .runs import Disposition
 
 
 @dataclass
@@ -24,59 +24,57 @@ class SweepReport:
     failed: dict[str, str] = field(default_factory=dict)
 
 
-def sweep(pig: Pig) -> SweepReport:
+def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
     report = SweepReport()
-    expire_runs(pig, report)
-    file_finished_runs(pig, report)
+    expire_runs(config, connection, report)
+    file_finished_runs(config, connection, report)
     return report
 
 
-def file_finished_runs(pig: Pig, report: SweepReport) -> SweepReport:
+def file_finished_runs(
+    config: Config, connection: sqlite3.Connection, report: SweepReport
+) -> SweepReport:
     """Sort each waiting dataset, move it where the task says, and mark the run done.
 
     A run whose filing fails stays where it is and gets reported, rather than quietly
-    becoming `complete`. There's no retry beyond the next sweep.
+    becoming `done`. There's no retry beyond the next sweep.
     """
-    waiting = pig.connection.execute(
-        "SELECT * FROM runs WHERE filed_at IS NULL AND status IN ('finalizing', 'expired') "
-        "ORDER BY finalized_at"
-    ).fetchall()
-
-    for run in waiting:
-        task = pig.config.task.get(run["task_code"])
+    for run in runs.awaiting_sweep(connection):
+        task = config.task.get(run.task_code)
         if task is None:
             # Someone deleted the task's entry. Its data stays readable where it is.
-            report.failed[run["run_id"]] = (
-                f"task {run['task_code']!r} is no longer in the configuration"
+            report.failed[run.run_id] = (
+                f"task {run.task_code!r} is no longer in the configuration"
             )
             continue
 
+        # Which tree a dataset lands in follows from why the run ended, not from how far
+        # along Pig is with it.
         root = (
-            pig.config.complete_root
-            if run["status"] == "finalizing"
-            else pig.config.expired_root
+            config.complete_root
+            if run.disposition is Disposition.FINALIZED
+            else config.expired_root
         )
-        parameters = json.loads(run["parameters"])
-        destination = root / task.dataset_path(parameters, run["run_number"])
-        source = storage.in_progress_path(pig.config.in_progress_root, run["run_id"])
+        destination = root / task.dataset_path(run.parameters, run.run_number)
+        source = storage.in_progress_path(config.in_progress_root, run.run_id)
 
         try:
             storage.file_dataset(source, destination)
         except OSError as error:
-            report.failed[run["run_id"]] = str(error)
+            report.failed[run.run_id] = str(error)
             continue
 
-        finished = "complete" if run["status"] == "finalizing" else "expired"
-        pig.connection.execute(
-            "UPDATE runs SET status = ?, filed_at = ?, dataset_path = ? WHERE run_id = ?",
-            (finished, db.now(), str(destination), run["run_id"]),
-        )
-        report.filed.append(run["run_id"])
+        # Only the sweep that actually marked it reports it, so two sweeps running at
+        # once don't both claim the same run.
+        if runs.mark_done(connection, run, destination, db.now()):
+            report.filed.append(run.run_id)
 
     return report
 
 
-def expire_runs(pig: Pig, report: SweepReport) -> SweepReport:
+def expire_runs(
+    config: Config, connection: sqlite3.Connection, report: SweepReport
+) -> SweepReport:
     """Close runs that have been open longer than their task allows.
 
     The limit counts from when the run started, not from its last event, so a run can't
@@ -84,26 +82,18 @@ def expire_runs(pig: Pig, report: SweepReport) -> SweepReport:
     natural end — a game people play as long as they like — sets a long `expires_after`
     and starts a new run when Pig says the old one has expired.
 
-    Only `in_progress` runs expire. A run sitting in `finalizing` is waiting on us, not
-    on the participant. Nothing is deleted: the run is marked and its dataset is filed
-    with the other expired ones.
+    Only runs still collecting expire. A run already closed is waiting on us, not on the
+    participant. Nothing is deleted: the run is marked and its dataset is filed with the
+    other expired ones.
     """
-    now = datetime.now(UTC)
-    runs = pig.connection.execute(
-        "SELECT run_id, task_code, started_at FROM runs WHERE status = 'in_progress'"
-    ).fetchall()
-
-    for run in runs:
-        task = pig.config.task.get(run["task_code"])
+    now = db.now()
+    for run in runs.collecting(connection):
+        task = config.task.get(run.task_code)
         if task is None:
             continue
-        started = datetime.fromisoformat(run["started_at"])
-        if now - started < timedelta(seconds=task.expires_after):
+        if not run.is_past_its_limit(task.expires_after, now):
             continue
-        pig.connection.execute(
-            "UPDATE runs SET status = 'expired' WHERE run_id = ? AND status = 'in_progress'",
-            (run["run_id"],),
-        )
-        report.expired.append(run["run_id"])
+        if runs.mark_closed(connection, run, Disposition.EXPIRED, db.now()):
+            report.expired.append(run.run_id)
 
     return report
