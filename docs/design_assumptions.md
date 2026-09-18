@@ -121,9 +121,8 @@ Two things this depends on:
 - **The uniqueness constraint lives in the database**, on `(run_id, event_id)`, not in a
   check the application does before writing. Two retries of the same request can be in
   flight at once, and a check-then-write between them writes the line twice.
-- **The hash covers the line minus `metadata`** — everything the task is answerable for
-  and nothing Pig added. Structural rather than a field list, so it stays right as
-  `metadata` grows. The size limit a task is held to is measured the same way, for the
+- **The hash covers `event_id` and `data`** — everything the task is answerable for and
+  nothing Pig added. The size limit a task is held to is measured the same way, for the
   same reason. A client that re-reads the clock when it retries will change its data and
   trip the collision check; that's a client bug, but it's a predictable one and the docs
   warn about it.

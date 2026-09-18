@@ -164,7 +164,7 @@ path = "{participant_id}/{run_number}.jsonl"
 """
     with pytest.raises(ConfigurationError) as raised:
         load_config(write_config(tmp_path, config_text))
-    assert "pig organize" in str(raised.value)
+    assert "no longer a task setting" in str(raised.value)
 
 
 def test_load_config_says_what_abandon_after_is_called_now(tmp_path: Path) -> None:

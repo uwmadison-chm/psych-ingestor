@@ -40,8 +40,11 @@ def run_directory(root: Path, task_code: str, run_id: str) -> Path:
 #
 # `event_id` and `data` are the task's, stored unchanged. `metadata` is Pig's: facts Pig
 # generated about the event, never anything the client sent, and never hashed. The hash
-# that tells a retry from a collision covers the line minus `metadata`, and so does the
+# that tells a retry from a collision covers `event_id` and `data` only, and so does the
 # size limit a task is held to — otherwise both would drift whenever Pig added a field.
+
+# What the task sent, and therefore what the hash and the size limit cover.
+TASK_KEYS = ("event_id", "data")
 
 
 def canonical(line_object: dict[str, Any]) -> str:
@@ -61,11 +64,8 @@ def event_line(event_id: str, data: Any, stored_at: datetime) -> dict[str, Any]:
 
 
 def hashed_text(line_object: dict[str, Any]) -> str:
-    """The part of a line the task is answerable for: everything but `metadata`.
-
-    Structural rather than a field list, so it stays right as `metadata` grows.
-    """
-    return canonical({k: v for k, v in line_object.items() if k != "metadata"})
+    """The part of a line the task is answerable for: `event_id` and `data`."""
+    return canonical({key: line_object[key] for key in TASK_KEYS})
 
 
 def content_hash(text: str) -> str:
@@ -218,7 +218,12 @@ def move_directory(source: Path, destination: Path) -> None:
 
 
 def _fsync_directory(directory: Path) -> None:
-    """Make a rename or a new file durable: the directory entry needs its own fsync."""
+    """Make a rename or a new file durable: the directory entry needs its own fsync.
+
+    Opened read-only because that's the only way to open a directory, and fsync doesn't
+    care: it flushes the object the descriptor refers to, whatever mode it was opened
+    with. This is the standard idiom on Linux and macOS.
+    """
     fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(fd)

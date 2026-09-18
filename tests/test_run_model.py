@@ -90,7 +90,7 @@ def test_expired_says_nothing_about_whether_the_run_has_been_finished():
 
     A finalized run reports `finalizing` before the sweep and `complete` after. An
     expired one reports `expired` either way; `pig runs` shows the phase for whoever
-    needs the difference. See issue #16.
+    needs the difference.
     """
     waiting = runs.api_status(Phase.CLOSED, Disposition.EXPIRED)
     finished = runs.api_status(Phase.DONE, Disposition.EXPIRED)

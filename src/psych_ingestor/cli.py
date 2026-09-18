@@ -25,7 +25,7 @@ from .config import (
     describe_duration,
     load_config,
 )
-from .runs import API_STATUSES
+from .runs import API_STATUSES, Phase
 
 app = cyclopts.App(
     name="pig",
@@ -171,7 +171,7 @@ def runs(
     """List runs, most recent first.
 
     Shows both the status a task sees and Pig's own phase, because the status alone
-    doesn't say whether an expired run has been finished yet. See issue #16.
+    doesn't say whether an expired run has been finished yet.
     """
     if status is not None and status not in API_STATUSES:
         print(
@@ -183,16 +183,30 @@ def runs(
     # The configuration is loaded and checked even though listing runs doesn't read it:
     # a command that silently works against a broken config file would be worse.
     _, connection = _open(config)
-    for run in runs_module.recent_first(connection, task_code=task):
-        if status is not None and run.api_status != status:
-            continue
+    listed = [
+        run
+        for run in runs_module.recent_first(connection, task_code=task)
+        if status is None or run.api_status == status
+    ]
+
+    # Column widths: wide enough for the widest value each column can hold.
+    task_width = max((len(run.task_code) for run in listed), default=0)
+    status_width = max(len(word) for word in API_STATUSES)
+    phase_width = max(len(phase) for phase in Phase)
+    counts = {
+        run.run_id: runs_module.count_stored_events(connection, run.run_id)
+        for run in listed
+    }
+    count_width = max((len(str(count)) for count in counts.values()), default=1)
+
+    for run in listed:
         described = " ".join(
             f"{name}={value}" for name, value in run.parameters.items()
         )
-        count = runs_module.count_stored_events(connection, run.run_id)
         print(
-            f"{run.run_id}  {run.task_code:<12} run-{run.run_number:04d}  "
-            f"{run.api_status:<12} {run.phase:<11} {count:>5} events  {described}"
+            f"{run.run_id}  {run.task_code:<{task_width}}  run-{run.run_number:04d}  "
+            f"{run.api_status:<{status_width}}  {run.phase:<{phase_width}}  "
+            f"{counts[run.run_id]:>{count_width}} events  {described}"
         )
 
 

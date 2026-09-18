@@ -123,10 +123,7 @@ class TaskDefinition(BaseModel):
             )
         if isinstance(raw, dict) and "path" in raw:
             raise ValueError(
-                "path is no longer a task setting. Pig stores every run in a directory "
-                "named for its run ID; a readable layout is built afterwards by "
-                "`pig organize`, on whatever machine the data ends up on. Remove this "
-                "line. See docs/configuration.md."
+                "path is no longer a task setting; remove it. See docs/configuration.md."
             )
         return raw
 

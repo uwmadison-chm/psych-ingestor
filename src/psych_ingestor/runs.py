@@ -62,7 +62,7 @@ def api_status(phase: Phase, disposition: Disposition | None) -> str:
     distinguish a finalized run waiting for the sweep from one the sweep has finished,
     and `expired` covers both of those for an expired run. That's deliberate — a task
     that didn't finalize a run has nothing to do differently either way — and `pig runs`
-    shows the phase for the operator who does care. See issue #16.
+    shows the phase for the operator who does care.
     """
     if phase is Phase.COLLECTING:
         return "in_progress"
@@ -349,7 +349,7 @@ def count_stuck(
 
     Only finalized ones, which is what the health check has always counted: a task that
     finalized a run is waiting on Pig. An expired run waiting just as long is the same
-    problem and isn't counted here — see issue #16.
+    problem and isn't counted here.
     """
     return connection.execute(
         "SELECT COUNT(*) AS count FROM runs WHERE task_code = ? AND phase = ? "

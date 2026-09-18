@@ -157,8 +157,7 @@ This is the only status vocabulary a task ever sees. Note the asymmetry in the l
 rows: `finalizing` and `complete` say whether the sweep has finished a finalized run yet,
 and `expired` covers both for an expired one. That's deliberate. A task that didn't
 finalize a run has nothing to do differently either way, so the distinction is for Pig's
-operator, and `pig runs` shows the phase next to the status for exactly that reader. See
-issue #16.
+operator, and `pig runs` shows the phase next to the status for exactly that reader.
 
 Expiring is a normal way for a run to end, not a failure. A task with no natural finish — a
 game people play for as long as they like — may never finalize a run at all; it sets a long
