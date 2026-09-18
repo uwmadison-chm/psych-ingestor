@@ -6,8 +6,8 @@ questions on this page, and those picks are marked *provisional* where they appe
 easy to change — nobody has data depending on them yet.
 
 Each task your lab runs gets an entry in your configuration. The entry answers a handful of
-questions: how participants are identified, where their data goes, and when the task stops
-accepting data.
+questions: how participants are identified, how long a run may stay open, and whether the
+task is accepting data.
 
 One Pig deployment serves all of your lab's tasks, so this file grows as you add tasks.
 
@@ -16,8 +16,8 @@ One Pig deployment serves all of your lab's tasks, so this file grows as you add
 Two places, split by whether a human writes it or the service does:
 
 - **A file, in version control** — task definitions. The things you'd want to review, diff,
-  and roll back: expected link parameters, storage paths and naming, allowed origins,
-  signing, whether the task is open.
+  and roll back: expected link parameters, the run key, allowed origins, signing, whether
+  the task is open.
 - **The database** — what accumulates at runtime: runs, participants discovered as they
   arrive, event bookkeeping. SQLite, in WAL mode.
 
@@ -48,7 +48,6 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id", "session"]
 run_key = ["participant_id", "session"]
-path = "{participant_id}/{session}_{run_number}.jsonl"
 open = true
 max_event_size = "1M"      # optional, defaults to 1M
 expires_after = "24h"      # optional, defaults to 24h
@@ -60,12 +59,25 @@ under `local/`, which is the one directory version control ignores; the commands
 to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that. A real deployment
 puts the file wherever its configuration belongs and points `data_root` at real storage.
 
-Under the data root, Pig keeps three directories: `in_progress/` for runs still collecting,
-`complete/` for datasets of runs that finalized, and `expired/` for runs Pig closed
-because they'd been open as long as the task allows. A task's `path` places its file
-within `complete/{task_code}/` or `expired/{task_code}/`.
+Under the data root, Pig keeps two directories, and every run is a directory named for
+its run ID under one of them:
 
-`{run_number}` renders as `run-0001`.
+```
+data/
+  in_progress/{task_code}/{run_id}/    collecting, or closed and waiting for the sweep
+  done/{task_code}/{run_id}/           finished; nothing here ever changes again
+```
+
+Nothing in the task entry says where its data lands, because nothing about that is a
+choice: it's `done/{task_code}/`, with one directory per run holding `events.jsonl` and a
+`manifest.json` describing the run. A readable layout — one directory per participant,
+files named for session and run number — is built later by `pig organize`, from the
+manifests, on whatever machine the data ends up on. See [definitions.md](definitions.md)
+for what a run directory holds and issue #9 for `pig organize`.
+
+Both directories have to be on one filesystem. The sweep moves a finished run from one to
+the other with a rename, which is what guarantees a run is never half-there in `done/`,
+and a rename only works that way within a filesystem. See [deployment.md](deployment.md).
 
 **The service re-reads this file whenever it changes.** Edit a definition and the next
 request uses it — no restart, no signal. It checks the file's modification time on each
@@ -83,10 +95,12 @@ Two things follow, and both are deliberate:
   runs already in progress are under the *old* root where nothing will look for them.
   Change those two while the service is stopped.
 
-Runs already in progress are unaffected by a definition change: a run's storage path is
-computed when it's filed, and the parameters it was started with are on the run.
+Runs already in progress are unaffected by a definition change: the parameters a run was
+started with, and which of them made up its run key, are recorded on the run itself. The
+sweep finishes a run from that record alone, so a task whose entry has been deleted still
+gets its runs finished.
 
-`pig check` validates the file and prints where each task's data will land. Worth running
+`pig check` validates the file and prints what each task is set up to do. Worth running
 after an edit, since the service won't complain to you directly — it just keeps serving the
 last good version and reports the problem on `/health`.
 
@@ -107,35 +121,34 @@ one of them would start over at `run-0001` — the same person appearing twice, 
 runs. Keeping the lists apart means "required" and "identifies the run" stay different
 claims, and only the second one is the strong one.
 
+Run key values are compared exactly, capital letters included: `Baseline` and `baseline`
+are two sessions. Pig doesn't edit a participant's identity to make two spellings match,
+so if a link template is producing both, that's the thing to fix. See
+[definitions.md](definitions.md).
+
 Parameters Pig doesn't know about are ignored. They don't identify the run, they aren't
 required, and their presence is never an error — a link carrying a `utm_source` or a
 leftover `debug=1` still starts a run normally.
 
-Pig records them anyway, on the run, because they cost almost nothing to keep and
-occasionally explain something months later. They're never used to identify or route
-anything, and they never appear in a path.
+Pig records them anyway, on the run and in its manifest, because they cost almost nothing
+to keep and occasionally explain something months later. They're never used to identify
+or route anything.
 
 **Open question:** do parameter values get checked for shape beyond the [safe
 value](#safe-values) rule — digits only, a required prefix — or is any safe value accepted?
 *Provisional: any safe value is accepted. There's no way to ask for more.*
 
-### Where data goes and what it's called
+### Where data goes
 
-A directory for the task, and a naming pattern for the files within it built from the link
-parameters and the run number — something like `{participant_id}/{session}_run-{run_number}.jsonl`.
+Not a setting. Every run is stored at `done/{task_code}/{run_id}/` under the data root,
+and there's nothing to configure about that. Earlier versions of Pig had a `path`
+pattern here; a configuration that still has one is refused with a message saying so.
 
-**Open questions**
-- What's the full set of values available to the pattern? Link parameters, a timestamp, the
-  run ID, the run number? *Provisional: link parameters and `{run_number}`, nothing else.
-  A pattern naming anything the task doesn't have is refused by `pig check`.*
-- Must the pattern include the run number? Leaving it out means the second run of a key
-  would overwrite the first, which the reliability rule forbids — so either Pig requires it
-  or it refuses patterns that can collide. *Provisional: required, and its absence is a
-  configuration error. Requiring it is the check that's obviously right; refusing only the
-  patterns that can collide needs an argument about which those are.*
-- Are paths relative to a configured data root, with escaping from it refused? They should
-  be. *Built: they are. An absolute path or one containing `..` is a configuration error,
-  and the [safe value](#safe-values) rule keeps `..` out of the parameters themselves.*
+The readable tree that pattern used to describe — `{participant_id}/{session}_run-0001.jsonl`
+and the like — becomes `pig organize`'s business, on the machine where the data is
+analyzed rather than the one collecting it. The open questions that came with the pattern
+(must it include the run number, which patterns can collide) go with it; they're recorded
+in issue #9.
 
 ### Repeat runs
 
@@ -171,8 +184,8 @@ forever by continuing to send. A task whose runs have no natural end — a game 
 for as long as they like — sets a long limit, handles the expiry by starting a new run, or
 both. [api.md](api.md) says what the task sees when a run expires.
 
-Expiring never deletes anything. The run is marked and its dataset is filed with the other
-expired ones. A run can't be reopened afterwards, from the API or the CLI; if the
+Expiring never deletes anything. The run is marked, and the same sweep finishes it like
+any other closed run. A run can't be reopened afterwards, from the API or the CLI; if the
 participant is still working, the task starts a new run and gets the next run number.
 
 Only `in_progress` runs expire. A run sitting in `finalizing` is waiting on Pig, not on
@@ -181,40 +194,32 @@ the participant — see [definitions.md](definitions.md).
 Expiring is done by the CLI, on a schedule, not by the service. See
 [deployment.md](deployment.md).
 
-### Filing a completed dataset
+### Finishing a run
 
-What Pig does with a dataset once the task finalizes the run: sort it, move it to completed
-storage, and possibly copy it somewhere else — an `rclone` push to S3 or similar. The run
-is `finalizing` while this happens and `complete` when it's done.
+What Pig does with a run once it has closed, whether the task finalized it or it expired:
+write a manifest into the run's directory, and move the directory from `in_progress/` to
+`done/`. The run is `finalizing` while it waits for this and `complete` afterwards (or
+`expired` throughout; see [definitions.md](definitions.md)).
 
-This is the one place Pig depends on something outside itself, so it's the one place that
-can be slow or broken for reasons no researcher can do anything about. It has to be
-retryable, and a run that can't be filed has to stay visible rather than quietly becoming
-`complete`.
-
-*Sorting, moving, and the `complete` / `expired` split are built; copying anywhere else
-is not. `pig sweep` does the filing.*
-
-The copy-elsewhere step is configured **per task**. Different studies have different
-archives, different retention rules, and different people paying for storage, so this can't
-be a single deployment-wide setting.
-
-For now there is no retry: a run whose filing fails stays `finalizing` until someone looks.
-Retry policy is deferred.
+*Built. `pig sweep` does it.* Nothing in it depends on anything outside the machine, so
+the ways it can fail are the ordinary ones — a full disk, a permissions mistake — and the
+sweep reports any run it couldn't finish and tries again next time. There's no retry
+beyond that yet, and a run that can't be finished stays where it is, visible, rather than
+quietly becoming `done`.
 
 None of this happens in the web service. Finalizing a run marks it `finalizing` and returns
 — that's the whole of the service's involvement. A scheduled CLI command does the rest:
-finds runs waiting to be filed, sorts each dataset, moves it to completed storage, copies it
-wherever the task says, sets `filed_at`, and marks the run `complete`.
+finds closed runs, writes each one's manifest, moves its directory, and marks the run
+`done`.
 
-Expired runs get filed the same way, to a separate destination from complete ones, so that
-a reader who wants only data the task vouched for can point at `complete/` and get that.
+Copying finished runs somewhere else — an `rclone` push to S3 or similar — is not built,
+and when it is, it won't be Pig tracking whether the copy happened: `done/` is a directory
+of immutable, hashable run directories, which is what a copy tool wants. See issue #2.
 
-This means every run waits for the next sweep before it reaches `complete`, even on a
-deployment that copies nothing anywhere. That's the cost of keeping the service simple, and
-it's affordable because the durability promise lands at `finalizing`, not at `complete` —
-nobody is waiting on the sweep except whoever wants to read the finished file. See
-[deployment.md](deployment.md) for scheduling it.
+Every run waits for the next sweep before it reaches `complete`. That's the cost of keeping
+the service simple, and it's affordable because the durability promise lands at
+`finalizing`, not at `complete` — nobody is waiting on the sweep except whoever wants to
+read the finished run. See [deployment.md](deployment.md) for scheduling it.
 
 ### Open or closed
 
@@ -247,15 +252,18 @@ task. Permissive by default; see
 
 The short name for the task — `stroop`, `balloons`, `dd_game`. It's the key of the task's
 configuration entry, it appears in every URL the task calls (`POST /task/stroop/run`), and
-it's normally the top-level directory the task's data lives in.
+it's the directory the task's runs live in under `done/`.
 
 Task codes live under `/task/` rather than at the root of the URL space, so they can never
 collide with the service's own routes. A task code of `health` is just
 `/task/health/run`, and `GET /health` is unaffected. Nothing needs a list of reserved
 names.
 
-A task code must be a safe value, below, and lowercase. See [safe values](#safe-values) for
-why the lowercase part is stricter than the general rule.
+A task code must be a safe value, below, and lowercase. It becomes a directory name on
+every machine the data reaches, and macOS and Linux disagree about whether `Stroop/` and
+`stroop/` are the same directory; requiring one spelling sidesteps that. Link parameter
+values aren't held to this, because they don't become directory names on the collecting
+machine — see below.
 
 Task codes are unique across the whole deployment, not per project — there is exactly one
 `stroop`. Two projects that both want that name use `sleep_stroop` and `mem_stroop`. This
@@ -264,9 +272,11 @@ is what keeps a future study layer out of the URL space; see
 
 ## Safe values
 
-Some values end up as directory and file names: the task code, and any link parameter used
-in a storage pattern. Those have to be restricted, because a filesystem will accept things
-that later turn out to be a problem.
+Some values end up as directory and file names: the task code now, and the link parameters
+later, when `pig organize` builds a readable tree from them. Those have to be restricted,
+because a filesystem will accept things that later turn out to be a problem — and the
+check has to happen when the run starts, on the collecting machine, because by the time
+`pig organize` runs there's nobody to refuse the value to.
 
 A safe value contains only:
 
@@ -303,43 +313,26 @@ Each restriction is carrying weight:
 
 Digits are fine at the start; participant IDs are frequently all digits.
 
-### Case is normalized on the way to disk
+### Case is kept
 
-Values may contain either case, but **Pig lowercases them when it builds a path**.
-`?session=Baseline`, `?session=baseline`, and `?session=BaseLine` all write to
-`baseline/`.
+Values may contain either case, and Pig keeps exactly what arrived. `?session=Baseline`
+and `?session=baseline` are two different sessions, and a participant who arrives as
+`PPT-1003` once and `ppt-1003` once is, as far as Pig can tell, two participants. Pig
+never changes a value to make two spellings match — see
+[design_assumptions.md](design_assumptions.md) on why refusing beats fixing.
 
-This is the one place Pig changes a value instead of refusing it, and it's deliberate. Case
-variation in link parameters is common — links get retyped, copied between REDCap
-instances, and edited by hand — and the failure it causes is bad in a specific way: two
-spellings of `baseline` are one directory on macOS and two on Linux, so a dataset that
-looks complete on the server splits in half when someone copies it to a laptop to analyze.
-That's data loss that presents as a naming quirk, and it's worth a small violation of "no
-silent fixes" to make impossible.
+Case variation in links is common, though — links get retyped, copied between REDCap
+instances, and edited by hand — so it's worth knowing about early. A health check that
+reports parameter values differing only in case is planned; see
+[deployment.md](deployment.md).
 
-**The original value is kept.** Lowercasing applies to the path and nothing else. What the
-participant's link actually said is stored in the database exactly as it arrived, and
-that's what the CLI and the API report. A study that uses `PPT-1003` everywhere else
-doesn't lose that; it just gets `ppt-1003/` as a directory name.
-
-Two consequences worth being explicit about:
-
-- `PPT-1003` and `ppt-1003` become the same participant as far as storage is concerned.
-  That's the intended behavior, and the reason it's safe is that the alternative — treating
-  them as two participants — silently breaks on half the machines that will touch the data.
-- Because a value can differ from the directory it's stored in, Pig can notice when one task
-  has received IDs that differ only by case. That's a strong sign of a broken link
-  template, and it's the sort of thing the health check should surface.
-
-Lowercasing is unambiguous here only because [safe values](#safe-values) are ASCII. Case
-conversion outside ASCII is genuinely treacherous — `ß` uppercases to `SS`, and Turkish `İ`
-lowercases to a character that isn't `i` — so the two rules depend on each other.
-
-Task codes are required to be lowercase outright, since we control those and there's no
-reason to accept a spelling we're only going to convert.
+One consequence for the readable tree `pig organize` builds later: two spellings of a
+value are one directory on macOS and two on Linux. That's `pig organize`'s problem to
+solve, on the machine where the tree is built; see issue #9.
 
 ## Validating configuration
 
 *Built.* `pig check` reads the file, reports every problem it can describe, and prints each
-task: whether it's open, what parameters it expects, and the path a dataset will land at.
-It exits non-zero on a bad file, so a deployment can gate a restart on it.
+task: whether it's open, what parameters it expects, which of them make up the run key,
+and how long its runs may stay open. It exits non-zero on a bad file, so a deployment can
+gate a restart on it.

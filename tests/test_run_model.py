@@ -7,7 +7,6 @@ a `Run` needs no database — so this file is about the rules themselves.
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -22,10 +21,11 @@ def make_run(**overrides) -> Run:
     fields: dict = {
         "run_id": "9f3c1a7e",
         "task_code": "stroop",
-        "run_key": "10351\x1fbaseline",
+        "run_key_hash": runs.hash_run_key(["10351", "baseline"]),
         "run_number": 1,
         "parameters": {"participant_id": "10351", "session": "baseline"},
         "extra_parameters": {},
+        "run_key_names": ["participant_id", "session"],
         "phase": Phase.COLLECTING,
         "started_at": STARTED,
     }
@@ -42,7 +42,7 @@ def test_only_a_collecting_run_accepts_data():
             phase=phase,
             disposition=Disposition.FINALIZED,
             closed_at=STARTED,
-            filed_at=STARTED if phase is Phase.DONE else None,
+            done_at=STARTED if phase is Phase.DONE else None,
         )
         assert not run.accepting_data
 
@@ -58,7 +58,7 @@ def test_a_run_is_past_its_limit_counting_from_when_it_started():
 
 
 def test_a_closed_run_is_never_past_its_limit():
-    """A run waiting to be filed is waiting on Pig, not on the participant."""
+    """A run waiting for the sweep is waiting on Pig, not on the participant."""
     run = make_run(
         phase=Phase.CLOSED, disposition=Disposition.FINALIZED, closed_at=STARTED
     )
@@ -85,15 +85,16 @@ def test_every_stored_state_maps_to_a_status_the_api_documents(
     assert expected in runs.API_STATUSES
 
 
-def test_expired_says_nothing_about_whether_the_dataset_has_been_filed():
+def test_expired_says_nothing_about_whether_the_run_has_been_finished():
     """The asymmetry in the API vocabulary, pinned so a change to it is deliberate.
 
-    A finalized run reports `finalizing` before filing and `complete` after. An expired one
-    reports `expired` either way. See issue #16.
+    A finalized run reports `finalizing` before the sweep and `complete` after. An
+    expired one reports `expired` either way; `pig runs` shows the phase for whoever
+    needs the difference.
     """
-    unfiled = runs.api_status(Phase.CLOSED, Disposition.EXPIRED)
-    filed = runs.api_status(Phase.DONE, Disposition.EXPIRED)
-    assert unfiled == filed == "expired"
+    waiting = runs.api_status(Phase.CLOSED, Disposition.EXPIRED)
+    finished = runs.api_status(Phase.DONE, Disposition.EXPIRED)
+    assert waiting == finished == "expired"
 
     assert runs.api_status(Phase.CLOSED, Disposition.FINALIZED) != runs.api_status(
         Phase.DONE, Disposition.FINALIZED
@@ -112,9 +113,20 @@ def test_a_row_round_trips_through_the_model(pig):
     assert run.phase is Phase.COLLECTING
     assert run.disposition is None
     assert run.parameters == {"participant_id": "PPT-1003", "session": "Base"}
+    assert run.run_key_names == ["participant_id", "session"]
+    assert run.run_key_hash == runs.hash_run_key(["PPT-1003", "Base"])
     assert run.started_at.tzinfo is not None
     assert run.closed_at is None
-    assert run.dataset_path is None
+    assert run.done_at is None
+
+
+def test_the_run_key_is_stored_only_as_a_hash(pig):
+    """The values are one join away, so this isn't protection. It's just that a column
+    only ever compared has no reason to be readable."""
+    pig.start_run("stroop", {"participant_id": "PPT-1003", "session": "Base"})
+    row = pig.connection.execute("SELECT * FROM runs").fetchone()
+    assert "PPT-1003" not in " ".join(str(value) for value in tuple(row))
+    assert "parameters" not in row
 
 
 def test_an_unknown_run_is_none(pig):
@@ -147,7 +159,7 @@ def test_a_run_cannot_be_marked_done_before_it_is_closed(pig):
     run_id = pig.start_run("stroop", {"participant_id": "1", "session": "a"})["run_id"]
     run = runs.get(pig.connection, run_id)
     assert run is not None
-    assert not runs.mark_done(pig.connection, run, Path("/tmp/x.jsonl"), db.now())
+    assert not runs.mark_done(pig.connection, run, db.now())
 
 
 def test_counts_are_reported_in_the_api_vocabulary(pig):
@@ -168,26 +180,18 @@ def test_counts_are_reported_in_the_api_vocabulary(pig):
 # The model can't produce these. Something editing rows by hand could, which is why the
 # constraints are in the schema rather than in a check the application remembers to do.
 
-COLUMNS = (
-    "run_id, task_code, run_key, run_number, parameters, extra_parameters, "
-    "phase, disposition, started_at, closed_at, filed_at, dataset_path"
-)
-
 
 def insert_raw(connection: sqlite3.Connection, **columns) -> None:
     row = {
         "run_id": "r",
         "task_code": "stroop",
-        "run_key": "k",
+        "run_key_hash": "k",
         "run_number": 1,
-        "parameters": "{}",
-        "extra_parameters": "{}",
         "phase": "collecting",
         "disposition": None,
         "started_at": "2026-07-26T18:00:00+00:00",
         "closed_at": None,
-        "filed_at": None,
-        "dataset_path": None,
+        "done_at": None,
         **columns,
     }
     placeholders = ", ".join("?" for _ in row)
@@ -210,7 +214,7 @@ def insert_raw(connection: sqlite3.Connection, **columns) -> None:
             {"closed_at": "2026-07-26T19:00:00+00:00"},
         ),
         (
-            "a done run with nothing filed",
+            "a done run with no done_at",
             {
                 "phase": "done",
                 "disposition": "finalized",
@@ -218,12 +222,12 @@ def insert_raw(connection: sqlite3.Connection, **columns) -> None:
             },
         ),
         (
-            "a done run with no dataset path",
+            "a closed run with a done_at",
             {
-                "phase": "done",
+                "phase": "closed",
                 "disposition": "finalized",
                 "closed_at": "2026-07-26T19:00:00+00:00",
-                "filed_at": "2026-07-26T20:00:00+00:00",
+                "done_at": "2026-07-26T20:00:00+00:00",
             },
         ),
         ("a phase that doesn't exist", {"phase": "filed", "disposition": "expired"}),
@@ -248,20 +252,32 @@ def test_the_legal_states_are_all_storable(pig):
         {"phase": "collecting"},
         {"phase": "closed", "disposition": "finalized", "closed_at": "T"},
         {"phase": "closed", "disposition": "expired", "closed_at": "T"},
-        {
-            "phase": "done",
-            "disposition": "finalized",
-            "closed_at": "T",
-            "filed_at": "T",
-            "dataset_path": "/p",
-        },
-        {
-            "phase": "done",
-            "disposition": "expired",
-            "closed_at": "T",
-            "filed_at": "T",
-            "dataset_path": "/p",
-        },
+        {"phase": "done", "disposition": "finalized", "closed_at": "T", "done_at": "T"},
+        {"phase": "done", "disposition": "expired", "closed_at": "T", "done_at": "T"},
     ]
     for number, columns in enumerate(legal, start=1):
         insert_raw(pig.connection, run_id=f"r{number}", run_number=number, **columns)
+
+
+# ------------------------------------------------------------ the database file
+
+
+def test_a_database_from_another_version_of_pig_is_refused(tmp_path):
+    """No migration, so the failure has to be a readable one rather than "no such
+    column" from the first query."""
+    path = tmp_path / "pig.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE runs (run_id TEXT, dataset_path TEXT)")
+    old.commit()
+    old.close()
+
+    with pytest.raises(db.DatabaseProblem) as raised:
+        db.connect(path)
+    assert "delete it" in str(raised.value)
+
+
+def test_a_fresh_database_records_its_version(tmp_path):
+    connection = db.connect(tmp_path / "pig.db")
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    # And opening it again is fine.
+    db.connect(tmp_path / "pig.db").close()

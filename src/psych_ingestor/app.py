@@ -30,7 +30,11 @@ def create_app(config_path: Path) -> FastAPI:
     loads.
     """
     source = ConfigSource(config_path)
-    source.current().in_progress_root.mkdir(parents=True, exist_ok=True)
+    config = source.current()
+    config.in_progress_root.mkdir(parents=True, exist_ok=True)
+    # Open the database once now, so a file this Pig can't use fails at startup with a
+    # readable message rather than on the first request.
+    db.connect(config.database).close()
 
     app = FastAPI(title="Psych Ingestor", docs_url=None, redoc_url=None)
     app.state.config_source = source

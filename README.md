@@ -16,7 +16,7 @@ Technically, Pig consists of a few components:
 - A Python / FastAPI service that handles data collection and storage
 - A file, in version control, containing your task definitions
 - A SQLite database of runtime state -- runs in progress, participants seen, which events have been stored
-- Somewhere on the server to keep the data files, one per run
+- Somewhere on the server to keep the data, one directory per run
 - A command-line program that does everything happening on a schedule rather than on request, plus checking your configuration
 
 Tasks are the top level: there's no notion of a study or a project that owns them. A lab
@@ -45,7 +45,7 @@ Four URLs, and you only need the first three. All of them take and return JSON.
 | --- | --- |
 | `POST /task/{task_code}/run` | Start a run. Send the parameters from the participant's link; get back a run ID. |
 | `POST /task/{task_code}/run/{run_id}` | Send events. One JSON object per event, keyed by an event ID you make up. |
-| `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig files the data away. |
+| `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig finishes up from there. |
 | `GET /task/{task_code}/run/{run_id}` | Check on a run -- its status and which events Pig has. |
 
 The event ID is the important part. You assign one to every event, unique within the run,
@@ -66,7 +66,6 @@ Each task gets an entry in a configuration file, kept in version control. The en
 answers things like:
 
 - What parameters Pig expects from the link to define a run (`participant_id`? plus a `session` for repeated visits?)
-- Where data should be stored, and how the files should be named
 - What (if any) settings will Pig send back to the task when a run starts?
 - How long a run may stay open before Pig closes it
 - Is the task accepting more data, or is it currently closed?
@@ -77,8 +76,8 @@ See `docs/configuration.md`.
 
 The web service only does web service things -- it takes requests, checks them, and writes
 data. Everything that happens on a schedule instead of on request lives in a command-line
-program you run from cron or a systemd timer: filing finished datasets where they belong,
-copying them offsite, expiring runs that have been open too long.
+program you run from cron or a systemd timer: finishing runs that have closed, copying
+them offsite, expiring runs that have been open too long.
 
 There's also a `check` command for configuration, because a typo in a task definition
 should surface before a participant hits the task, not during.
@@ -93,7 +92,7 @@ The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, and `pig hea
 | `docs/trying_it.md` | Getting a server running on your own machine. Start here if you want to poke at it. |
 | `docs/api.md` | The requests your task makes. Start here if you're writing a task. |
 | `docs/definitions.md` | What Pig means by task, session, run, dataset, event, participant. |
-| `docs/configuration.md` | Task definitions, storage paths, the CLI. |
+| `docs/configuration.md` | Task definitions, where data lands, the CLI. |
 | `docs/security.md` | What Pig defends against and what it doesn't. |
 | `docs/deployment.md` | Running the service. |
 | `docs/design_assumptions.md` | Why Pig is shaped the way it is. Read before arguing about a design decision. |

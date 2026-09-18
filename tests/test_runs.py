@@ -10,7 +10,7 @@ BASELINE = {"participant_id": "10351", "session": "baseline"}
 
 
 def event(payload: dict) -> dict:
-    return {"timestamp": "2026-07-26T18:25:43.511-05:00", "data": payload}
+    return {"data": payload}
 
 
 def start(pig: Pig, **overrides) -> str:
@@ -27,8 +27,12 @@ def expire(pig: Pig, run_id: str) -> None:
 
 
 def dataset_lines(pig: Pig, run_id: str) -> list[dict]:
-    path = storage.in_progress_path(pig.config.in_progress_root, run_id)
-    return storage.read_lines(path)
+    directory = storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    return storage.read_lines(directory / storage.EVENTS_FILE)
+
+
+def without_metadata(lines: list[dict]) -> list[dict]:
+    return [{k: v for k, v in line.items() if k != "metadata"} for line in lines]
 
 
 def test_run_numbers_count_up_for_the_same_key(pig: Pig):
@@ -45,10 +49,21 @@ def test_a_different_session_is_a_different_key(pig: Pig):
     assert followup["run_number"] == 1
 
 
-def test_case_variants_are_the_same_run_key(pig: Pig):
+def test_case_variants_are_different_run_keys(pig: Pig):
+    """Pig doesn't edit a participant's identity. `baseline` and `BASELINE` are two
+    sessions, the same way `10351` and `10352` are two participants."""
     pig.start_run("stroop", BASELINE)
     shouted = pig.start_run("stroop", {**BASELINE, "session": "BASELINE"})
-    assert shouted["run_number"] == 2
+    assert shouted["run_number"] == 1
+
+
+def test_starting_a_run_creates_its_directory(pig: Pig):
+    """So that by sweep time "is the directory there" means one thing, whether or not
+    the run ever sent an event."""
+    run_id = start(pig)
+    directory = storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    assert directory.is_dir()
+    assert list(directory.iterdir()) == []
 
 
 def test_extra_parameters_are_recorded_and_ignored(pig: Pig):
@@ -115,12 +130,8 @@ def test_the_same_id_with_different_content_is_refused(pig: Pig):
     assert collision.status_code == 422
     assert collision.errors["1"]["can_retry"] is False
     # Pig keeps what it had.
-    assert dataset_lines(pig, run_id) == [
-        {
-            "event_id": "1",
-            "data": {"trial": 1},
-            "timestamp": "2026-07-26T18:25:43.511-05:00",
-        }
+    assert without_metadata(dataset_lines(pig, run_id)) == [
+        {"event_id": "1", "data": {"trial": 1}}
     ]
 
 
@@ -142,11 +153,47 @@ def test_an_event_over_the_size_limit_is_refused(pig: Pig):
     assert result.errors["1"]["can_retry"] is False
 
 
-def test_a_timestamp_is_optional(pig: Pig):
+def test_a_stored_line_carries_when_pig_stored_it(pig: Pig):
+    """Three keys: `event_id` and `data` are the task's, `metadata` is Pig's."""
     run_id = start(pig)
+    pig.store_events("stroop", run_id, {"1": {"data": {"trial": 1}}})
+    (line,) = dataset_lines(pig, run_id)
+    assert set(line) == {"event_id", "data", "metadata"}
+    assert set(line["metadata"]) == {"stored_at"}
+    stored_at = line["metadata"]["stored_at"]
+    assert stored_at.endswith("+00:00")
+    # And it's the same instant the receipt records.
+    receipt = pig.connection.execute(
+        "SELECT stored_at FROM event_receipts WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    assert receipt["stored_at"] == stored_at
+
+
+def test_a_field_outside_data_is_refused(pig: Pig):
+    run_id = start(pig)
+    result = pig.store_events(
+        "stroop", run_id, {"1": {"data": {"trial": 1}, "timestamp": "2026-07-26"}}
+    )
+    assert result.status_code == 422
+    assert result.errors["1"]["can_retry"] is False
+    assert "timestamp" in result.errors["1"]["message"]
+    assert dataset_lines(pig, run_id) == []
+
+
+def test_the_size_limit_and_the_hash_ignore_what_pig_added(pig: Pig):
+    """Both cover the line minus `metadata`, so neither drifts as Pig adds fields."""
+    run_id = start(pig)
+    line = storage.event_line("1", {"trial": 1}, db.now())
+    hashed = storage.hashed_text(line)
+    assert "metadata" not in hashed
+    assert "stored_at" not in hashed
+
+    pig.config.task["stroop"].max_event_size = len(hashed.encode("utf-8"))
     result = pig.store_events("stroop", run_id, {"1": {"data": {"trial": 1}}})
     assert result.status_code == 201
-    assert dataset_lines(pig, run_id) == [{"event_id": "1", "data": {"trial": 1}}]
+    assert runs.receipt_hash(pig.connection, run_id, "1") == storage.content_hash(
+        hashed
+    )
 
 
 def test_a_run_id_from_another_task_is_a_404(pig: Pig):

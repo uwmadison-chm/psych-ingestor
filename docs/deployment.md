@@ -9,13 +9,13 @@ Systemd stuff here
 
 **The web service**, under systemd, handling requests. It does nothing on its own schedule.
 
-**A scheduled CLI command**, on a systemd timer, doing everything else: filing finished
-datasets into completed storage, copying them wherever each task says they go, expiring
-runs that have been open longer than their task allows, and retrying whatever didn't work
-last time.
+**A scheduled CLI command**, on a systemd timer, doing everything else: finishing closed
+runs — writing each one's manifest and moving it into `done/` — expiring runs that have
+been open longer than their task allows, and retrying whatever didn't work last time.
+Copying finished runs offsite isn't built yet; when it is, it'll run here too.
 
 Both are required. A deployment that runs only the service collects data correctly and
-never files any of it — runs pile up in `finalizing`, which is not data loss but is not
+never finishes any of it — runs pile up in `finalizing`, which is not data loss but is not
 finished either.
 
 How often to run it is a judgment call. Every few minutes is plenty; the only thing waiting
@@ -24,6 +24,16 @@ once, or to run while nothing needs doing, because a timer will do both.
 
 Trying Pig out on a laptop, you can skip the timer and run the command by hand when you want
 to see a run reach `complete`.
+
+## The data root is one filesystem
+
+Under the data root, `in_progress/` and `done/` have to be on the same filesystem. The
+sweep finishes a run by writing its manifest in place and then renaming the whole
+directory from one tree to the other, and a rename within one filesystem either happens
+entirely or not at all — so `done/` never holds a half-copied run. Across filesystems
+that isn't a rename, and the guarantee goes with it. Nothing about a normal deployment
+splits the two, but a data root that's a mount point with `in_progress/` symlinked
+elsewhere would, so don't.
 
 ## The health check
 
@@ -34,10 +44,10 @@ anything wrong right now." People writing tasks don't use this; see [api.md](api
 what they need.
 
 Partly built. What it reports today: whether the database and data root are writable, and
-for each task whether it's open, how many runs are in each status, how many are waiting to
-be filed, how many have been `finalizing` too long, and when data last arrived. It answers
-`503` rather than `200` when something is wrong, so a monitor can watch the status code.
-`pig health` prints the same report.
+for each task whether it's open, how many runs are in each status, how many are waiting
+for the sweep, how many have been `finalizing` too long, and when data last arrived. It
+answers `503` rather than `200` when something is wrong, so a monitor can watch the status
+code. `pig health` prints the same report.
 
 The rest of this list isn't built yet — duplicate event IDs and case-variant parameters in
 particular, which are the two that need someone to go looking at the data.
@@ -54,15 +64,15 @@ For each task:
 
 - Is the task open or closed?
 - How many runs are in each status right now?
-- Runs that have been `finalizing` longer than they should be, and why. A dataset that
-  can't be copied to its final home stays `finalizing` indefinitely and there's no retry
-  yet, so this is the only place it surfaces.
-- Runs whose datasets haven't been filed yet — no `filed_at` timestamp.
+- Runs that have been `finalizing` longer than they should be, and why. A run the sweep
+  can't finish stays `finalizing` indefinitely and there's no retry beyond the next sweep,
+  so this is the only place it surfaces.
+- Runs the sweep hasn't finished yet — no `done_at` timestamp.
 - When did data last arrive?
 - Datasets holding more than one event with the same ID. Rare, and not data loss, but an
   analyst who assumes IDs are unique needs to know before they start counting. See
   [design_assumptions.md](design_assumptions.md).
-- Link parameters that have arrived in more than one capitalization. They all store to the
-  same place, so nothing is broken, but it usually means two versions of a participant link
-  are in circulation — which is worth knowing before someone asks why a spreadsheet has
-  both `PPT-1003` and `ppt-1003` in it.
+- Link parameters that have arrived in more than one capitalization. Pig treats them as
+  different values, so `PPT-1003` and `ppt-1003` are two participants as far as it knows,
+  and that usually means two versions of a participant link are in circulation — worth
+  knowing before someone asks why a spreadsheet has both.

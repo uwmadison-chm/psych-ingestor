@@ -65,17 +65,27 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   object a task references rather than something inlined in its definition. Breaking either
   one is what would force a study into the URL space later.
 - **All background work is in the CLI.** The web service handles requests and nothing else:
-  no threads, no schedulers, no work outliving a request. Filing datasets, copying them
-  offsite, and expiring runs that have been open too long are all scheduled CLI commands.
+  no threads, no schedulers, no work outliving a request. Finishing closed runs, copying
+  them offsite, and expiring runs that have been open too long are all scheduled CLI
+  commands.
 - **Extra link parameters are ignored**, not an error. Recorded on the run, never used to
   identify or route anything.
 - **Repeat runs are always allowed** and always get their own dataset. `max_runs` may be
   added someday but does not yet exist.
 - **A run the task never finalizes is a normal outcome**, not a failure. Every task sets
   `expires_after`, a fixed limit from run start; the next sweep marks such a run `expired`
-  and files it. `complete` means the task vouched for the data, `expired` means it holds
+  and finishes it. `complete` means the task vouched for the data, `expired` means it holds
   what arrived. Nothing reopens either, from the API or the CLI. Any closed run answers
   `409`, whichever way it closed. See issue #12.
+- **Runs are stored by run ID, with a manifest.** `in_progress/{task}/{run_id}/` while Pig
+  is working on it, `done/{task}/{run_id}/` afterwards, moved by one rename. The manifest
+  is written once, by the sweep, and never changed: the database is the record in flight,
+  the manifest afterwards. The server never rewrites `events.jsonl`. A readable tree is
+  `pig organize`'s job (#9), on another machine, and organize never reads `pig.toml` or
+  the database. Purge deletes files, never run rows — rows are the run-number counter.
+  See issue #3.
+- **Parameter values are kept exactly as they arrive.** No lowercasing anywhere.
+  `PPT-1003` and `ppt-1003` are two participants.
 - **Closing a task refuses new runs only.** Runs in progress keep going and expire on
   their own schedule.
 

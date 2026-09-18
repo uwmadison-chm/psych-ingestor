@@ -15,13 +15,11 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id", "session"]
 run_key = ["participant_id", "session"]
-path = "{participant_id}/{session}_{run_number}.jsonl"
 expires_after = "24h"
 
 [task.balloons]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/balloons_{run_number}.jsonl"
 open = false
 """
 

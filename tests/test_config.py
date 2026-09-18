@@ -17,12 +17,10 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id", "session"]
 run_key = ["participant_id", "session"]
-path = "{participant_id}/{session}_{run_number}.jsonl"
 
 [task.balloons]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/balloons_{run_number}.jsonl"
 """
 
 
@@ -104,36 +102,6 @@ def test_parse_duration_unknown_unit_raises() -> None:
         parse_duration("30x")
 
 
-# --- TaskDefinition.dataset_path ---
-
-
-def test_dataset_path_lowercases_parameter_values(tmp_path: Path) -> None:
-    config = load_config(write_config(tmp_path, VALID_CONFIG))
-    task = config.task["stroop"]
-
-    path = task.dataset_path({"participant_id": "P01", "session": "Baseline"}, 1)
-
-    assert path == Path("stroop/p01/baseline_run-0001.jsonl")
-
-
-def test_dataset_path_zero_pads_run_number(tmp_path: Path) -> None:
-    config = load_config(write_config(tmp_path, VALID_CONFIG))
-    task = config.task["balloons"]
-
-    path = task.dataset_path({"participant_id": "p01"}, 12)
-
-    assert path == Path("balloons/p01/balloons_run-0012.jsonl")
-
-
-def test_dataset_path_prefixes_task_code(tmp_path: Path) -> None:
-    config = load_config(write_config(tmp_path, VALID_CONFIG))
-    task = config.task["stroop"]
-
-    path = task.dataset_path({"participant_id": "p01", "session": "1"}, 1)
-
-    assert path.parts[0] == "stroop"
-
-
 # --- load_config error cases ---
 
 
@@ -151,7 +119,6 @@ database = "./pig.db"
 [task.Stroop]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/{run_number}.jsonl"
 """
     with pytest.raises(ConfigurationError):
         load_config(write_config(tmp_path, config_text))
@@ -165,7 +132,6 @@ database = "./pig.db"
 [task."stroop.v2"]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/{run_number}.jsonl"
 """
     with pytest.raises(ConfigurationError):
         load_config(write_config(tmp_path, config_text))
@@ -179,66 +145,26 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id"]
 run_key = ["participant_id", "session"]
+"""
+    with pytest.raises(ConfigurationError):
+        load_config(write_config(tmp_path, config_text))
+
+
+def test_load_config_says_path_is_gone(tmp_path: Path) -> None:
+    """A configuration from before issue #3 says where data lands. It doesn't any more,
+    and the error should say so rather than "extra inputs are not permitted"."""
+    config_text = """
+data_root = "./data"
+database = "./pig.db"
+
+[task.stroop]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
 path = "{participant_id}/{run_number}.jsonl"
 """
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(ConfigurationError) as raised:
         load_config(write_config(tmp_path, config_text))
-
-
-def test_load_config_rejects_unknown_path_placeholder(tmp_path: Path) -> None:
-    config_text = """
-data_root = "./data"
-database = "./pig.db"
-
-[task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
-path = "{participant_id}/{condition}_{run_number}.jsonl"
-"""
-    with pytest.raises(ConfigurationError):
-        load_config(write_config(tmp_path, config_text))
-
-
-def test_load_config_rejects_path_without_run_number(tmp_path: Path) -> None:
-    config_text = """
-data_root = "./data"
-database = "./pig.db"
-
-[task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
-path = "{participant_id}/data.jsonl"
-"""
-    with pytest.raises(ConfigurationError):
-        load_config(write_config(tmp_path, config_text))
-
-
-def test_load_config_rejects_absolute_path(tmp_path: Path) -> None:
-    config_text = """
-data_root = "./data"
-database = "./pig.db"
-
-[task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
-path = "/etc/{participant_id}/{run_number}.jsonl"
-"""
-    with pytest.raises(ConfigurationError):
-        load_config(write_config(tmp_path, config_text))
-
-
-def test_load_config_rejects_path_with_dotdot(tmp_path: Path) -> None:
-    config_text = """
-data_root = "./data"
-database = "./pig.db"
-
-[task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
-path = "../{participant_id}/{run_number}.jsonl"
-"""
-    with pytest.raises(ConfigurationError):
-        load_config(write_config(tmp_path, config_text))
+    assert "no longer a task setting" in str(raised.value)
 
 
 def test_load_config_says_what_abandon_after_is_called_now(tmp_path: Path) -> None:
@@ -249,7 +175,6 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/{run_number}.jsonl"
 abandon_after = "24h"
 """
     with pytest.raises(ConfigurationError) as raised:
@@ -265,7 +190,6 @@ database = "./pig.db"
 [task.stroop]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/{run_number}.jsonl"
 expires_after = "7d"
 """
     config = load_config(write_config(tmp_path, config_text))

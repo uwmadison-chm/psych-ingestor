@@ -24,8 +24,8 @@ database, and the data. It's the one directory git ignores, so nothing you colle
 testing can end up in a commit, and deleting `local/` gets you a clean slate.
 
 **You can edit `local/pig.toml` while the server is running.** It notices the file
-changing and the next request uses it — open or close a task, add a new one, change a
-storage path, no restart needed. If you save something that doesn't parse, the server
+changing and the next request uses it — open or close a task, add a new one, change how
+long its runs stay open, no restart needed. If you save something that doesn't parse, the server
 keeps running on the last version that worked and `pig health` tells you what's wrong.
 
 The exception is `data_root` and `database`: change those with the server stopped, or
@@ -60,26 +60,34 @@ curl -X POST localhost:8000/task/stroop/run/YOUR-RUN-ID/finalize
 
 ## See where the data went
 
-While a run is in progress its data is in `local/data/in_progress/`, named for the run ID.
-It moves where your configuration says when you file it:
+Every run is a directory named for its run ID. While a run is in progress it's under
+`local/data/in_progress/stroop/`; it moves to `local/data/done/stroop/` when you finish
+it:
 
 ```
 uv run pig sweep
 ```
 
-That's the scheduled half of Pig — filing finished datasets and expiring runs that have
-been open too long. In production a systemd timer runs it every few minutes; on a laptop, run it
-by hand when you want to watch a run reach `complete`. **Until you run it, finalized runs
-sit in `finalizing` and their files stay in `local/data/in_progress/`.** That's normal,
-not a failure.
+That's the scheduled half of Pig — finishing closed runs and expiring runs that have been
+open too long. In production a systemd timer runs it every few minutes; on a laptop, run
+it by hand when you want to watch a run reach `complete`. **Until you run it, finalized
+runs sit in `finalizing` and their directories stay in `local/data/in_progress/`.**
+That's normal, not a failure.
 
 Then:
 
 ```
 uv run pig runs                 # every run, most recent first
 uv run pig health               # what GET /health reports
-cat local/data/complete/stroop/10351/baseline_run-0001.jsonl
+ls local/data/done/stroop/YOUR-RUN-ID/
+cat local/data/done/stroop/YOUR-RUN-ID/manifest.json
+cat local/data/done/stroop/YOUR-RUN-ID/events.jsonl
 ```
+
+The manifest says what the run is — who, which session, which run number, when — and the
+events file is what your task sent, one line per event, in the order it arrived. A
+readable tree named for participants and sessions is what `pig organize` will build from
+these; it isn't written yet.
 
 ## Things worth trying to break
 
@@ -91,10 +99,12 @@ wrong:
   keeps what it had.
 - **Start the same participant and session twice.** Two runs, `run-0001` and `run-0002`,
   and nothing is overwritten.
-- **Use a capital letter in `session`.** The run remembers what you typed; the directory is
-  lowercase.
+- **Use a capital letter in `session`.** `Baseline` and `baseline` are two different
+  sessions, each starting at `run-0001`. Pig keeps exactly what you typed.
 - **Put a space or a dot in `participant_id`.** The run is refused, because that value
-  becomes a directory name.
+  will become a directory name.
+- **Put a `timestamp` next to `data` in an event.** Refused, with a message saying to put
+  it inside `data`. Pig stores only what's in `data`, and it won't drop anything silently.
 - **Post events after finalizing.** `409`, the events aren't stored, and the message tells
   you to start a new run.
 - **Add a parameter the task doesn't know about.** Ignored, and recorded on the run.
@@ -102,8 +112,9 @@ wrong:
 ## What isn't here yet
 
 The service is the four endpoints in [api.md](api.md) plus `/health`. Not built: parameter
-signing, participant rosters, `max_runs`, settings returned at run start, copying datasets
-offsite, and per-task allowed origins (every task currently allows any origin). See
+signing, participant rosters, `max_runs`, settings returned at run start, copying runs
+offsite, `pig organize`, and per-task allowed origins (every task currently allows any
+origin). See
 [configuration.md](configuration.md) for what's marked *built* and what isn't.
 
 ## The other commands
@@ -112,7 +123,7 @@ offsite, and per-task allowed origins (every task currently allows any origin). 
 | --- | --- |
 | `pig check` | Validate the configuration and print what each task will do. |
 | `pig serve` | Run the web service. |
-| `pig sweep` | File finished datasets; expire runs that have been open too long. |
+| `pig sweep` | Finish closed runs; expire runs that have been open too long. |
 | `pig runs` | List runs. `--task` and `--status` narrow it. |
 | `pig health` | The health report, as JSON. |
 
