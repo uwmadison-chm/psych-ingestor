@@ -28,15 +28,15 @@ what holds your data. (Pig borrows its words from BIDS: a participant comes in f
   `session`. This is also set in configuration, and Pig will reject a run that doesn't
   match.
 
-Some of those parameters become directory and file names, so their values are restricted:
-letters, digits, underscore, and dash, up to 64 characters, and no dash at the start.
-Anything else — a space, a dot, an accented letter, an empty value — and Pig refuses to
-start the run rather than guessing at what you meant. Worth knowing when you're deciding
-what to put in participant links.
+Those parameters will eventually become directory and file names, so their values are
+restricted: letters, digits, underscore, and dash, up to 64 characters, and no dash at the
+start. Anything else — a space, a dot, an accented letter, an empty value — and Pig
+refuses to start the run rather than guessing at what you meant. Worth knowing when you're
+deciding what to put in participant links.
 
-Case doesn't matter. `?session=Baseline` and `?session=baseline` land in the same place, so
-you don't have to be careful about it. Pig remembers what your link actually said and
-reports it back; it only lowercases the folder name.
+Case matters. `?session=Baseline` and `?session=baseline` are two different sessions, and
+Pig keeps exactly what your link said. If your links come from more than one place, make
+sure they agree on spelling.
 
 ## The steps in a run
 
@@ -51,11 +51,11 @@ reports it back; it only lowercases the folder name.
 4. Pig replies with the event IDs it has stored, so you know which ones you don't need to
    send again.
 5. When the participant finishes, your task tells Pig to finalize the run. That marks the
-   data as whole and hands it to Pig to file with the completed data.
+   data as whole; Pig finishes up on its own from there.
 
 If step 5 never happens — the participant closes the tab, the laptop dies — the data you
 already sent is still saved. Pig closes the run on its own after a while (24 hours unless
-whoever configured your task chose otherwise) and files what it received. See
+whoever configured your task chose otherwise) and keeps what it received. See
 [When a run expires](#when-a-run-expires), especially if your task has no natural end.
 
 A run can also happen entirely offline. In a phone app or a PWA, a participant might do the
@@ -89,12 +89,11 @@ await fetch(`${PIG}/task/${TASK}/run/${run_id}`, {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     "1": {
-      timestamp: "2026-07-26T18:25:43.511-05:00",
-      data: { type: "task_start", ts: 0 }
+      data: { type: "task_start", time: "2026-07-26T18:25:43.511-05:00" }
     },
     "2": {
-      timestamp: "2026-07-26T18:25:47.204-05:00",
-      data: { type: "trial", word: "GREEN", ink: "red", rt: 843, correct: true }
+      data: { type: "trial", time: "2026-07-26T18:25:47.204-05:00",
+              word: "GREEN", ink: "red", rt: 843, correct: true }
     }
   })
 });
@@ -144,18 +143,9 @@ The body is a JSON object whose keys are your event IDs:
 
 ```json
 {
-  "1": {
-    "timestamp": "2026-07-26T18:25:43.511-05:00",
-    "data": { "type": "task_start", "ts": 0 }
-  },
-  "2": {
-    "timestamp": "2026-07-26T18:25:43.511-05:00",
-    "data": { "type": "instructions", "ts": 0 }
-  },
-  "3": {
-    "timestamp": "2026-07-26T18:26:03.29-05:00",
-    "data": { "type": "get_ready", "ts": 19779 }
-  }
+  "1": { "data": { "type": "task_start", "time": "2026-07-26T18:25:43.511-05:00" } },
+  "2": { "data": { "type": "instructions", "time": "2026-07-26T18:25:43.511-05:00" } },
+  "3": { "data": { "type": "get_ready", "time": "2026-07-26T18:26:03.29-05:00" } }
 }
 ```
 
@@ -167,11 +157,15 @@ it's always safe to send it again.
 Don't put participant information in an event ID. They aren't guaranteed to be private. Use
 something made up.
 
-**`timestamp`** is optional. Pig uses it to sort the dataset when it files the completed
-data, sorting on timestamp and then event ID — so if your event IDs count up, you can skip
-timestamps entirely.
+**`data`** is yours. Pig does not look inside it and stores it unchanged. Everything you
+want to keep goes in there — a timestamp, a trial number, whatever your task records —
+and `data` is the only field an event has. If an event has anything else next to `data`,
+Pig refuses that event and says so, because otherwise it would have to drop the extra
+field silently and you'd never know. (Earlier versions of Pig took a `timestamp` next to
+`data`. If your task still sends one, move it inside.)
 
-**`data`** is yours. Pig does not look inside it and stores it unchanged.
+Pig stores events in the order they arrive and never reorders them. If you want your data
+in time order, record a timestamp in `data` and sort on it when you analyze.
 
 The reply tells you what's stored:
 
@@ -222,9 +216,9 @@ which version you meant. The error says what Pig already had for that ID so you 
 where the counter went wrong.
 
 One thing to watch for when you write a retry: **build each event once and resend that same
-object.** If your retry code rebuilds the event and re-reads the clock for `timestamp`, the
-content changes and Pig will treat it as a collision — a spurious error for what was really
-just a retry. Keep the event you failed to send, and send that.
+object.** If your retry code rebuilds the event and re-reads the clock for a timestamp in
+`data`, the content changes and Pig will treat it as a collision — a spurious error for
+what was really just a retry. Keep the event you failed to send, and send that.
 
 ### When it doesn't work
 
@@ -246,7 +240,7 @@ can't control the message in that case. If you're batching, batch modestly.
 
 ### `POST /task/{task_code}/run/{run_id}/finalize`
 
-Closes the run to further data and hands the dataset to Pig to file.
+Closes the run to further data.
 
 ```json
 {
@@ -257,15 +251,15 @@ Closes the run to further data and hands the dataset to Pig to file.
 
 **Your task is done at this point.** `finalizing` means every event you sent is on disk and
 no more will be accepted — tell the participant they're finished and close the tab. Pig's
-remaining work (sorting the dataset, moving it to completed storage, copying it elsewhere)
-happens without you, and the run becomes `complete` when it's done. Don't wait for it;
-nothing your task can do would change the outcome.
+remaining work (describing the run and moving it to finished storage) happens without
+you, and the run becomes `complete` when it's done. Don't wait for it; nothing your task
+can do would change the outcome.
 
 ## When a run expires
 
 A run doesn't stay open forever. Each task has a time limit, counted from when the run
 started — 24 hours unless whoever configured your task set something else — and once a run
-has been open that long, Pig closes it and files the data it received. The run's status
+has been open that long, Pig closes it and keeps the data it received. The run's status
 becomes `expired`.
 
 For most tasks this never comes up: the participant finishes in an hour and you finalize.
@@ -314,7 +308,7 @@ it received is already saved.
 | Status | Means |
 | --- | --- |
 | `in_progress` | The run is still taking events. |
-| `finalizing` | It isn't. Pig is filing the dataset. |
+| `finalizing` | It isn't. Pig is finishing up. |
 | `complete` | Pig is finished with it. |
 | `expired` | The run was open as long as the task allows, and Pig closed it. |
 

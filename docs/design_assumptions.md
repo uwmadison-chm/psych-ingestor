@@ -41,26 +41,30 @@ Failures should contain information needed to correc the problem. Refusing a req
 
 In general, doing subtle, clever things to try and correct misconfigurations is probably the wrong path to take. Then we have weird behavior to explain; also, this is tempting fate with regards to security bugs. If something has a value it shouldn't, throw a clear error rather than trying to fix it and continue.
 
-There is one deliberate exception, and it's worth knowing why it earned its place:
-**lowercasing values on their way into a filename.** It survives this rule because the
-error it prevents is one the researcher can't see and can't recover from — case-variant
-directory names silently merge on macOS and split on Linux, so the same dataset is whole on
-one machine and halved on another. Refusing the run instead would just move a common,
-harmless typo into a participant's face mid-study. The original value is preserved
-everywhere except the path, so nothing is actually lost. See
+There used to be one exception: Pig lowercased parameter values on their way into a
+filename, so that `Baseline` and `baseline` couldn't become two directories on Linux and
+one on macOS. It's gone. Parameter values don't become directory names on the collecting
+machine any more — runs are stored by run ID — and without that reason the lowercasing
+was a silent edit to a participant's identity, which is the kind of magic this rule
+exists to keep out. `PPT-1003` and `ppt-1003` are two participants now, and a link
+template producing both is a problem to surface, not to paper over. See
 [configuration.md](configuration.md).
 
-That's the shape a future exception would have to match: silent corruption on one side, an
-ordinary human typo on the other, and no information destroyed. Anything less, throw the
-error.
+That one lasted a few weeks, which is the lesson. If an exception ever comes back it
+needs silent corruption on one side, an ordinary human typo on the other, no information
+destroyed — and a reason that would survive the next change of layout.
 
-## Link parameters can be used in filenames; be careful
+## Link parameters will be used in filenames; be careful
 
-We may want a data directory structure like:
+Pig stores every run under its run ID, so nothing a participant supplies becomes a path
+on the collecting machine. But `pig organize` will build a readable tree like
 
-`{base_dir}/{task_code}/{participant_id}/{session}_run-0001.jsonl`
+`{task_code}/{participant_id}/{session}_run-0001.jsonl`
 
-... where `task_code` is supplied in the config file, `run-0001` is assigned by Pig, and `participant_id` and `session` are supplied by the participant. It's critical that before we try to create files or directories, we check that the parameters are safe. As above: raise errors rather than trying to sanitize.
+on some other machine, where `participant_id` and `session` came from the participant's
+link. The check that those values are safe has to happen when the run starts, because
+that's the only moment there's a request to refuse. As above: raise errors rather than
+trying to sanitize.
 
 The rule for what counts as safe is in [configuration.md](configuration.md), and it's
 deliberately narrow: letters, digits, underscore, and a non-leading dash. Narrow enough
@@ -68,11 +72,26 @@ that `..` can't be expressed, so traversal isn't a thing we have to be clever ab
 
 ## Data is minimally-processed JSONL
 
-One JSON object per recorded event. Other than handling duplicate events, the ingestor does not interpret event data.
+One JSON object per recorded event. Other than refusing duplicate events, the ingestor
+does not interpret event data.
 
-Deduplication is by a client-generated event ID, which is what makes retries safe. This
+A stored line has three keys, split by who wrote them:
+
+```json
+{"event_id":"12","data":{...},"metadata":{"stored_at":"2026-08-24T15:03:11.482913+00:00"}}
+```
+
+`data` is the task's, stored unchanged; if a task wants a timestamp, it records one in
+there with everything else it records, because nothing on the server reads it. `metadata`
+is Pig's, with an edge that keeps it from becoming a junk drawer: *facts Pig generated
+about the event, never anything the client sent, and never hashed.* `event_id` is the
+task's but stays outside `data` because it's the one thing Pig reads, and that has to keep
+working when `data` is opaque. The argument is in
+[the discussion that produced it](discussions/2026-09-18-what-a-stored-line-carries.md).
+
+Deduplication is by the client-generated event ID, which is what makes retries safe. This
 matters more than it sounds: a task on a flaky connection will retry, and duplicate trials
-in a data file are hard to detect after the fact. 
+in a data file are hard to detect after the fact.
 
 The format is readable by humans, appendable one line at a time, and survives a
 truncated write with the loss of at most the last line.
@@ -102,12 +121,14 @@ Two things this depends on:
 - **The uniqueness constraint lives in the database**, on `(run_id, event_id)`, not in a
   check the application does before writing. Two retries of the same request can be in
   flight at once, and a check-then-write between them writes the line twice.
-- **The hash covers what gets written**, so it's the whole stored event and not just the
-  `data` field. A client that re-reads the clock when it retries will change the timestamp
-  and trip the collision check; that's a client bug, but it's a predictable one and the
-  docs warn about it.
+- **The hash covers the line minus `metadata`** — everything the task is answerable for
+  and nothing Pig added. Structural rather than a field list, so it stays right as
+  `metadata` grows. The size limit a task is held to is measured the same way, for the
+  same reason. A client that re-reads the clock when it retries will change its data and
+  trip the collision check; that's a client bug, but it's a predictable one and the docs
+  warn about it.
 
-### The write path, and why finalize also deduplicates
+### The write path, and what it leaves in the file
 
 An event is durable once it's in the file and known-stored once it's in the database. Those
 are two writes, so the order matters:
@@ -120,26 +141,32 @@ it in only one direction.
 
 So the crash window leaves duplicate lines, never missing ones. The retry that follows a
 crash finds no database record, writes the line a second time, and the file now has it
-twice.
+twice. (Two identical requests in flight at once can do the same thing with nobody
+crashing: both pass the check, both append, and the loser's receipt insert fails
+harmlessly.)
 
-**Finalize drops lines that repeat exactly**, as part of the sort it already does. No
-startup recovery, no reconciliation pass -- the file heals when it's filed.
+**And Pig leaves them there.** Nothing on the server rewrites `events.jsonl` — not to
+sort it, not to drop repeats. What's in `done/` is the append log exactly as the server
+wrote it, which is what makes the hash in the manifest a hash of what happened rather than
+of a tidied-up rendering of it. The file holds at least one copy of every event Pig
+accepted, not exactly one. `pig organize` drops exact repeats where it's rewriting the
+file anyway, on another machine.
 
-That dedup is only safe because of the write-time hash check, and this is the part worth
-not losing: by the time a dataset reaches finalize, every line sharing an event ID is
-guaranteed to be byte-identical, because the request that would have introduced a differing
-one was refused. Deduplicating without that check would mean silently discarding one of two
-genuinely different trials -- exactly the data loss this whole mechanism exists to prevent.
-The two halves hold each other up.
+An earlier version of this document claimed that by sweep time every line sharing an
+event ID is byte-identical, and used that to justify a dedupe at sweep. The claim was
+never quite true: the crash window is exactly where a client that rebuilds its event and
+re-reads its clock lands a differing line with no receipt to catch it. The write-time hash
+check stands on its own — it refuses two genuinely different events sharing an ID at
+ingest, which is all it was ever for.
 
 The stored hash earns its place for the same reason. It's how Pig answers "is this the same
 event I already have?" without opening the data file, which is the only alternative. Thirty-
 two bytes in the index beats scanning a JSONL on every arriving event.
 
-**Consequence worth remembering:** after a crash, the file can hold an event the database
-never recorded. If finalize ever reports an event count, it has to come from the file, not
-from the database, or the two will disagree in exactly the case someone is most likely to
-be investigating.
+**Consequence worth remembering:** the file can hold an event the database never recorded,
+and a line count is an upper bound on the number of events. That's why the manifest
+carries no count, and why, if finalize ever reports one, it has to come from the file and
+not from the database.
 
 ### The case this doesn't catch
 
@@ -154,7 +181,7 @@ silently chosen. An analyst who finds two lines with ID 5 can see exactly what h
 decide what to do about it, which is a far better position than not knowing a trial went
 missing.
 
-Finalize must not resolve this on its own. Keep both lines, don't pick a winner, and make
+Pig must not resolve this on its own. Keep both lines, don't pick a winner, and make
 the dataset's duplicate IDs visible -- in the health check and wherever the CLI describes a
 run -- because an analyst who assumes IDs are unique will otherwise get a quietly wrong
 answer. The run is still `complete`: it holds every event the task sent, which is what that
@@ -169,11 +196,11 @@ holding the data; a missing trial is not recoverable by anyone.
 It accepts requests, checks them, appends events to files, and updates the database. That's
 all. It runs no background threads, no schedulers, no work that outlives a request.
 
-Everything else lives in the CLI, run on a schedule: filing finished datasets, copying them
+Everything else lives in the CLI, run on a schedule: finishing closed runs, copying them
 wherever they belong, expiring runs that have been open too long, retrying whatever failed
-last time. All the
-work that is slow, or depends on something outside the machine, or needs to happen at a
-time nobody requested.
+last time. All the work that is slow, or depends on something outside the machine, or
+needs to happen at a time nobody requested. The manifest that finishes a run is written
+by the sweep, not the service, so this holds without an exception.
 
 The reason is debuggability. A researcher who wants to know why data hasn't reached S3 can
 run the command and watch it, which is not a thing you can do with a background task inside
@@ -221,8 +248,9 @@ just several tasks naming the same one, which is most of what a study would have
 Inlining is the version that hurts: adding studies later would mean restructuring the
 configuration file and every task in it.
 
-Storage needs no rule. Paths are already per-task, so a task that wants to live under a
-project directory simply says so, and Pig doesn't have to know why.
+Storage needs no rule. Runs are stored under their task code, and a readable layout is
+`pig organize`'s business on another machine, so a project that wants its tasks grouped
+on disk asks organize for that and Pig doesn't have to know why.
 
 ## Tasks are static clients, hosted anywhere
 
@@ -254,10 +282,10 @@ The run is the only thing in Pig with a lifecycle; see [definitions.md](definiti
 how it relates to participants, sessions, and datasets, and for the states it moves through
 and the status a task is told.
 
-Finalizing a run is real work — sorting the dataset, moving it, possibly copying it off the
-machine — and that work can fail for reasons outside Pig. So it happens after the task has
-been told its data is safe, never as a condition of saying so, and a run whose filing
-failed stays visible rather than being called done.
+Finishing a run is real work — writing its manifest, moving its directory, and one day
+copying it off the machine — and that work can fail. So it happens after the task has
+been told its data is safe, never as a condition of saying so, and a run the sweep
+couldn't finish stays visible rather than being called done.
 
 The interesting cases are the ones off the happy path — the run that expires mid-game, the
 restarted task, the duplicate submission. They will happen in the real world, so they can't
