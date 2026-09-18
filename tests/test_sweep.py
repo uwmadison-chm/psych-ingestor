@@ -32,6 +32,7 @@ def test_finishing_writes_a_manifest_and_moves_the_directory(pig: Pig):
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
     assert report.failed == {}
+    assert report.refused == {}
 
     directory = done(pig, run_id)
     assert directory.is_dir()
@@ -189,6 +190,7 @@ def test_sweeping_with_nothing_to_do_is_fine(pig: Pig):
     assert report.finished == []
     assert report.expired == []
     assert report.failed == {}
+    assert report.refused == {}
 
 
 def test_a_task_deleted_from_the_configuration_is_still_finished(pig: Pig):
@@ -216,6 +218,7 @@ def test_a_run_that_sent_no_events_still_gets_an_empty_events_file(pig: Pig):
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
     assert report.failed == {}
+    assert report.refused == {}
 
     events_file = done(pig, run_id) / "events.jsonl"
     assert events_file.exists()
@@ -248,6 +251,7 @@ def test_a_run_already_in_done_gets_its_bookkeeping_finished_and_nothing_else(
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
     assert report.failed == {}
+    assert report.refused == {}
     # The directory in `done/` wasn't touched: same manifest, byte for byte.
     assert (done(pig, run_id) / "manifest.json").read_bytes() == manifest_before
     run = runs.get(pig.connection, run_id)
@@ -262,7 +266,8 @@ def test_a_run_in_neither_tree_is_reported_and_nothing_is_made_up(pig: Pig):
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == []
-    assert run_id in report.failed
+    assert run_id in report.refused
+    assert report.failed == {}
     assert not done(pig, run_id).exists()
     assert not in_progress(pig, run_id).exists()
     run = runs.get(pig.connection, run_id)
@@ -282,9 +287,39 @@ def test_a_run_in_both_trees_is_reported_and_neither_is_touched(pig: Pig):
     (stray / "events.jsonl").write_text("not the real data\n")
 
     report = sweep.sweep(pig.config, pig.connection)
-    assert run_id in report.failed
+    assert run_id in report.refused
+    assert report.failed == {}
     assert (stray / "events.jsonl").read_text() == "not the real data\n"
     assert len(storage.read_lines(done(pig, run_id) / "events.jsonl")) == 1
+
+
+def test_a_destination_that_appears_mid_sweep_is_refused_not_called_a_failure(
+    pig: Pig, monkeypatch
+):
+    """The check for a run in both trees happens before the manifest is written, so
+    another sweep can put a directory in `done/` after we've looked and before we
+    rename. `move_directory` raises `OSError` to refuse that, and the same `except`
+    catches a full disk, so the sweep looks at the trees again to tell them apart."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1)})
+    pig.finalize_run("stroop", run_id)
+
+    real_write_manifest = storage.write_manifest
+
+    def write_manifest_then_lose_the_race(directory: Path, manifest: dict) -> None:
+        real_write_manifest(directory, manifest)
+        done(pig, run_id).mkdir(parents=True)
+
+    monkeypatch.setattr(storage, "write_manifest", write_manifest_then_lose_the_race)
+
+    report = sweep.sweep(pig.config, pig.connection)
+    assert run_id in report.refused
+    assert report.failed == {}
+    assert report.finished == []
+
+    # Both directories are still there, untouched, for someone to sort out.
+    assert in_progress(pig, run_id).exists()
+    assert done(pig, run_id).exists()
 
 
 def test_a_run_whose_events_vanished_is_reported_not_emptied(pig: Pig):
@@ -299,8 +334,9 @@ def test_a_run_whose_events_vanished_is_reported_not_emptied(pig: Pig):
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == []
-    assert run_id in report.failed
-    assert "1 event(s)" in report.failed[run_id]
+    assert run_id in report.refused
+    assert report.failed == {}
+    assert "1 event(s)" in report.refused[run_id]
 
     # No empty file was written, and the run is still waiting rather than called done.
     assert not (in_progress(pig, run_id) / "events.jsonl").exists()

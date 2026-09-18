@@ -203,9 +203,17 @@ write a manifest into the run's directory, and move the directory from `in_progr
 
 *Built. `pig sweep` does it.* Nothing in it depends on anything outside the machine, so
 the ways it can fail are the ordinary ones — a full disk, a permissions mistake — and the
-sweep reports any run it couldn't finish and tries again next time. There's no retry
+sweep reports each run it couldn't finish and tries again next time. There's no retry
 beyond that yet, and a run that can't be finished stays where it is, visible, rather than
 quietly becoming `done`.
+
+The sweep counts those runs in two groups, because they don't ask the same thing of you.
+A run it *failed* to finish hit one of those ordinary problems; fix the disk and the next
+sweep finishes it, along with every other run the same problem stopped. A run it *refused*
+to finish is one whose files don't match what Pig recorded — the run is in two places at
+once, or its events file is gone while the database says events were stored. Pig won't
+write over that or make up an empty directory to replace it, so it leaves the run alone
+and names it. Nothing but a person looking at that run will clear it.
 
 None of this happens in the web service. Finalizing a run marks it `finalizing` and returns
 — that's the whole of the service's involvement. A scheduled CLI command does the rest:

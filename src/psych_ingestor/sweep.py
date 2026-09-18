@@ -17,11 +17,21 @@ from .runs import Disposition
 
 @dataclass
 class SweepReport:
-    """What one sweep did, so the CLI can print it and a person can watch it work."""
+    """What one sweep did, so the CLI can print it and a person can watch it work.
+
+    Runs that didn't finish are split by what they need from whoever reads the report.
+    A `failed` run hit an `OSError`: the disk was full, the destination wasn't mounted.
+    A dozen of those are usually one problem, and fixing it lets the next sweep finish
+    all of them. A `refused` run is one where what's on disk doesn't match what the
+    database says, and every move Pig could make would bury that rather than record it.
+    A dozen of those are a dozen separate investigations, and no sweep clears them on
+    its own.
+    """
 
     finished: list[str] = field(default_factory=list)
     expired: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
+    refused: dict[str, str] = field(default_factory=dict)
 
 
 def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
@@ -64,7 +74,7 @@ def finish_closed_runs(
             continue
 
         if destination.exists():
-            report.failed[run.run_id] = (
+            report.refused[run.run_id] = (
                 f"There's a directory for this run in both {config.in_progress_root} "
                 f"and {config.done_root}. Pig can't have done that, so it isn't touching "
                 "either. Someone needs to look."
@@ -75,7 +85,7 @@ def finish_closed_runs(
         # starts, so this means something removed it, and fabricating an empty one here
         # would turn that into a run that looks like it sent nothing.
         if not source.exists():
-            report.failed[run.run_id] = (
+            report.refused[run.run_id] = (
                 f"{source} isn't there, and the run hasn't been finished either. Not "
                 "making an empty directory in its place. The run stays where it is."
             )
@@ -89,7 +99,7 @@ def finish_closed_runs(
         events = source / storage.EVENTS_FILE
         stored = runs.count_stored_events(connection, run.run_id)
         if not events.exists() and stored > 0:
-            report.failed[run.run_id] = (
+            report.refused[run.run_id] = (
                 f"Pig recorded {stored} event(s) for this run, but {events} isn't "
                 "there. Not writing an empty file over it. The run stays where it is."
             )
@@ -104,6 +114,12 @@ def finish_closed_runs(
             if destination.exists() and not source.exists():
                 # Another sweep finished this run between our check and our rename.
                 # It's theirs to report.
+                continue
+            if destination.exists():
+                # A run in both trees again, reached by a race rather than by the check
+                # at the top: something appeared in `done/` while we were working. Same
+                # situation as that check describes, so the same refusal.
+                report.refused[run.run_id] = str(error)
                 continue
             report.failed[run.run_id] = str(error)
             continue

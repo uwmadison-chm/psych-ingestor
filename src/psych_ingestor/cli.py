@@ -154,10 +154,26 @@ def sweep(*, config: ConfigPath | None = None) -> None:
     """
     loaded, connection = _open(config)
     report = sweep_module.sweep(loaded, connection)
-    print(f"Expired {len(report.expired)} run(s), finished {len(report.finished)}.")
+    # Refusals and failures are counted separately because they ask for different
+    # things: a failure is usually one problem behind several runs, and the next sweep
+    # finishes them once it's fixed. A refusal is that run's data to account for, and
+    # no sweep resolves it. Neither count is printed when it's zero, so a sweep with
+    # nothing wrong still reads as one line.
+    counts = [
+        f"Expired {len(report.expired)} run(s)",
+        f"finished {len(report.finished)}",
+    ]
+    if report.refused:
+        counts.append(f"refused {len(report.refused)}")
+    if report.failed:
+        counts.append(f"failed {len(report.failed)}")
+    print(", ".join(counts) + ".")
+
+    for run_id, why in report.refused.items():
+        print(f"  refused {run_id}: {why}", file=sys.stderr)
     for run_id, why in report.failed.items():
         print(f"  couldn't finish {run_id}: {why}", file=sys.stderr)
-    if report.failed:
+    if report.refused or report.failed:
         raise SystemExit(1)
 
 
