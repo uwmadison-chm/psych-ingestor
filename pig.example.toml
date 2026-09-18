@@ -7,12 +7,15 @@
 data_root = "./data"
 database = "./pig.db"
 
+# Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
+# manifest describing it. A readable layout built from the parameters is `pig organize`'s
+# job, later and elsewhere, so nothing here says where data lands.
+
 # A study that sees each participant more than once, so `session` is part of what makes
 # two runs repeats of the same thing.
 [task.stroop]
 parameters = ["participant_id", "session"]
 run_key = ["participant_id", "session"]
-path = "{participant_id}/{session}_{run_number}.jsonl"
 open = true
 max_event_size = "1M"
 expires_after = "24h"     # a run closes this long after it starts, finished or not
@@ -21,5 +24,4 @@ expires_after = "24h"     # a run closes this long after it starts, finished or 
 [task.balloons]
 parameters = ["participant_id"]
 run_key = ["participant_id"]
-path = "{participant_id}/balloons_{run_number}.jsonl"
 open = true

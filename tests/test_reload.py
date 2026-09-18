@@ -27,11 +27,7 @@ def test_closing_a_task_takes_effect_without_a_restart(
 ):
     assert client.post("/task/stroop/run", json=BASELINE).status_code == 201
 
-    rewrite(
-        config_path,
-        'path = "{participant_id}/{session}_{run_number}.jsonl"',
-        'path = "{participant_id}/{session}_{run_number}.jsonl"\nopen = false',
-    )
+    rewrite(config_path, 'expires_after = "24h"', 'expires_after = "24h"\nopen = false')
 
     refused = client.post("/task/stroop/run", json=BASELINE)
     assert refused.status_code == 409
@@ -45,7 +41,6 @@ def test_a_new_task_appears_without_a_restart(client: TestClient, config_path: P
             "\n[task.dd_game]\n"
             'parameters = ["participant_id"]\n'
             'run_key = ["participant_id"]\n'
-            'path = "{participant_id}/dd_{run_number}.jsonl"\n'
         )
 
     started = client.post("/task/dd_game/run", json={"participant_id": "10351"})

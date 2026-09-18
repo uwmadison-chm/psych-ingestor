@@ -70,13 +70,22 @@ class Pig:
             )
 
         parameters, extra = self._check_parameters(task, submitted)
-        run_key = "\x1f".join(parameters[name].lower() for name in task.run_key)
         run_id = str(uuid.uuid4())
+
+        # The directory first, then the row. A directory with no row is harmless litter;
+        # a row with no directory is a run the sweep will have to report. The directory
+        # exists from the start so that "is it there" has one meaning by sweep time,
+        # whether or not the run ever sent an event.
+        storage.run_directory(self.config.in_progress_root, task.code, run_id).mkdir(
+            parents=True, exist_ok=True
+        )
+
         run_number = runs.insert(
             self.connection,
             run_id=run_id,
             task_code=task.code,
-            run_key=run_key,
+            run_key_hash=runs.hash_run_key([parameters[name] for name in task.run_key]),
+            run_key_names=list(task.run_key),
             parameters=parameters,
             extra_parameters=extra,
             started_at=db.now(),
@@ -119,8 +128,8 @@ class Pig:
             if not is_safe_value(value):
                 raise RequestProblem(
                     422,
-                    f"{value!r} can't be used for {name!r}, because it becomes part of a "
-                    f"file name. Allowed: {SAFE_VALUE_EXPLANATION}.",
+                    f"{value!r} can't be used for {name!r}, because it will become part "
+                    f"of a file name. Allowed: {SAFE_VALUE_EXPLANATION}.",
                 )
             parameters[name] = value
 
@@ -148,12 +157,17 @@ class Pig:
             )
 
         task = self.task(task_code)
-        dataset = storage.in_progress_path(self.config.in_progress_root, run_id)
+        events_file = (
+            storage.run_directory(self.config.in_progress_root, task_code, run_id)
+            / storage.EVENTS_FILE
+        )
 
         errors: dict[str, dict[str, Any]] = {}
         wrote_something = False
         for event_id, event in _as_event_dict(submitted).items():
-            problem, written = self._store_one(task, run_id, dataset, event_id, event)
+            problem, written = self._store_one(
+                task, run_id, events_file, event_id, event
+            )
             if problem:
                 errors[event_id] = problem
             wrote_something = wrote_something or written
@@ -167,7 +181,7 @@ class Pig:
         self,
         task: TaskDefinition,
         run_id: str,
-        dataset: Path,
+        events_file: Path,
         event_id: str,
         event: Any,
     ) -> tuple[dict[str, Any] | None, bool]:
@@ -183,25 +197,28 @@ class Pig:
         if "data" not in event:
             return _problem("This event has no 'data' field.", False), False
 
-        timestamp = event.get("timestamp")
-        if timestamp is not None and not isinstance(timestamp, str):
+        # Anything outside `data` would be dropped on the floor, and a task that put a
+        # timestamp there would never know. Refusing is the only way it finds out.
+        unexpected = sorted(key for key in event if key != "data")
+        if unexpected:
             return _problem(
-                "'timestamp' has to be text, like '2026-07-26T18:25:43.511-05:00'.",
+                f"This event has {unexpected} outside 'data'. Pig stores only what's "
+                "inside 'data', so put everything you want to keep in there.",
                 False,
             ), False
 
-        line_object: dict[str, Any] = {"event_id": event_id, "data": event["data"]}
-        if timestamp is not None:
-            line_object["timestamp"] = timestamp
-        line = storage.canonical(line_object)
+        stored_at = db.now()
+        line_object = storage.event_line(event_id, event["data"], stored_at)
+        # The size limit and the hash both cover what the task sent, not what Pig added.
+        hashed = storage.hashed_text(line_object)
 
-        if len(line.encode("utf-8")) > task.max_event_size:
+        if len(hashed.encode("utf-8")) > task.max_event_size:
             return _problem(
                 f"This event is bigger than this task allows ({task.max_event_size} bytes).",
                 False,
             ), False
 
-        digest = storage.content_hash(line)
+        digest = storage.content_hash(hashed)
         known = runs.receipt_hash(self.connection, run_id, event_id)
         if known is not None:
             if known == digest:
@@ -209,10 +226,13 @@ class Pig:
             return _collision(event_id), False
 
         # The file first, then the database. A process that dies between them leaves a
-        # line the index doesn't know about, which finalize cleans up. The other order
-        # would tell a task its event was stored when it wasn't.
-        storage.append_line(dataset, line)
-        if not runs.record_receipt(self.connection, run_id, event_id, digest, db.now()):
+        # line the index doesn't know about; the retry that follows writes it again, and
+        # the repeated line stays. The other order would tell a task its event was
+        # stored when it wasn't. See docs/design_assumptions.md.
+        storage.append_line(events_file, storage.canonical(line_object))
+        if not runs.record_receipt(
+            self.connection, run_id, event_id, digest, stored_at
+        ):
             # Another request stored this ID between our check and our write.
             existing = runs.receipt_hash(self.connection, run_id, event_id)
             if existing is None or existing != digest:

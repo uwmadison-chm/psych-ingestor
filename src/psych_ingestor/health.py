@@ -10,8 +10,8 @@ from typing import Any
 from . import db, runs
 from .config import Config
 
-# How long a run can wait to be filed before we call it stuck. Filing normally takes as
-# long as the next sweep, so this is generous.
+# How long a run can wait for the sweep before we call it stuck. Finishing a run normally
+# takes as long as the next sweep, so this is generous.
 STUCK_AFTER = timedelta(hours=1)
 
 
@@ -61,7 +61,7 @@ def _task_report(
         "stuck_finalizing": runs.count_stuck(
             connection, task_code, db.now() - STUCK_AFTER
         ),
-        "waiting_to_be_filed": runs.count_awaiting_sweep(connection, task_code),
+        "awaiting_sweep": runs.count_awaiting_sweep(connection, task_code),
         "last_event_at": db.stamp(last_event) if last_event else None,
     }
 

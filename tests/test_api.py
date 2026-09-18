@@ -15,12 +15,19 @@ def test_the_worked_example_from_the_docs(client: TestClient):
         f"/task/stroop/run/{run_id}",
         json={
             "1": {
-                "timestamp": "2026-07-26T18:25:43.511-05:00",
-                "data": {"type": "task_start", "ts": 0},
+                "data": {
+                    "timestamp": "2026-07-26T18:25:43.511-05:00",
+                    "type": "task_start",
+                    "ts": 0,
+                }
             },
             "2": {
-                "timestamp": "2026-07-26T18:25:47.204-05:00",
-                "data": {"type": "trial", "word": "GREEN", "rt": 843},
+                "data": {
+                    "timestamp": "2026-07-26T18:25:47.204-05:00",
+                    "type": "trial",
+                    "word": "GREEN",
+                    "rt": 843,
+                }
             },
         },
     )
@@ -65,6 +72,20 @@ def test_a_repeated_id_with_new_content_is_a_422(client: TestClient):
 
     assert collision.status_code == 422
     assert collision.json()["errors"]["1"]["can_retry"] is False
+
+
+def test_a_field_outside_data_is_refused(client: TestClient):
+    """Pig stores only `data`. A top-level `timestamp` — the shape from before issue #3 —
+    would be dropped silently otherwise, and the task would never know."""
+    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
+    refused = client.post(
+        f"/task/stroop/run/{run_id}",
+        json={"1": {"timestamp": "2026-07-26T18:25:43.511-05:00", "data": {}}},
+    )
+    assert refused.status_code == 422
+    assert refused.json()["stored"] == []
+    assert refused.json()["errors"]["1"]["can_retry"] is False
+    assert "'data'" in refused.json()["errors"]["1"]["message"]
 
 
 def test_a_bad_parameter_says_what_is_allowed(client: TestClient):

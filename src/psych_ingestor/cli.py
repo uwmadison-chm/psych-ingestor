@@ -1,7 +1,7 @@
 """The command line: everything that isn't a request.
 
-Checking configuration, running the service, and the scheduled work — filing finished
-datasets and expiring runs that have been open too long.
+Checking configuration, running the service, and the scheduled work — finishing closed
+runs and expiring runs that have been open too long.
 """
 
 from __future__ import annotations
@@ -72,7 +72,11 @@ def _load(path: Path | None) -> Config:
 def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
     """The configuration and a connection to its database, for one CLI command."""
     config = _load(path)
-    return config, db.connect(config.database)
+    try:
+        return config, db.connect(config.database)
+    except db.DatabaseProblem as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
 
 
 @app.command
@@ -84,13 +88,9 @@ def check(*, config: ConfigPath | None = None) -> None:
     print(f"  database:  {loaded.database}")
     for code, task in sorted(loaded.task.items()):
         state = "open" if task.open else "closed"
-        example = task.dataset_path(
-            {name: f"<{name}>" for name in task.parameters}, run_number=1
-        )
         print(f"\n{code} ({state})")
         print(f"  expects:     {', '.join(task.parameters)}")
         print(f"  run key:     {', '.join(task.run_key)}")
-        print(f"  data lands:  {loaded.complete_root / example}")
         print(
             f"  runs expire: {describe_duration(task.expires_after)} after they start"
         )
@@ -147,16 +147,16 @@ def serve(
 
 @app.command
 def sweep(*, config: ConfigPath | None = None) -> None:
-    """File finished datasets and expire runs that have been open too long.
+    """Finish closed runs and expire runs that have been open too long.
 
     This is the scheduled half of Pig. Until it runs, finalized runs sit in `finalizing`
-    and their data stays in the in-progress directory.
+    and their directories stay under `in_progress/`.
     """
     loaded, connection = _open(config)
     report = sweep_module.sweep(loaded, connection)
-    print(f"Expired {len(report.expired)} run(s), filed {len(report.filed)}.")
+    print(f"Expired {len(report.expired)} run(s), finished {len(report.finished)}.")
     for run_id, why in report.failed.items():
-        print(f"  couldn't file {run_id}: {why}", file=sys.stderr)
+        print(f"  couldn't finish {run_id}: {why}", file=sys.stderr)
     if report.failed:
         raise SystemExit(1)
 
@@ -168,7 +168,11 @@ def runs(
     status: str | None = None,
     config: ConfigPath | None = None,
 ) -> None:
-    """List runs, most recent first."""
+    """List runs, most recent first.
+
+    Shows both the status a task sees and Pig's own phase, because the status alone
+    doesn't say whether an expired run has been finished yet. See issue #16.
+    """
     if status is not None and status not in API_STATUSES:
         print(
             f"{status!r} isn't a run status. Pig uses: {', '.join(API_STATUSES)}.",
@@ -188,7 +192,7 @@ def runs(
         count = runs_module.count_stored_events(connection, run.run_id)
         print(
             f"{run.run_id}  {run.task_code:<12} run-{run.run_number:04d}  "
-            f"{run.api_status:<12} {count:>5} events  {described}"
+            f"{run.api_status:<12} {run.phase:<11} {count:>5} events  {described}"
         )
 
 

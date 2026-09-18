@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # A safe value: letters, digits, underscore, and a non-leading dash, 1-64 characters.
 # Narrow enough that "." and ".." can't be expressed, so traversal isn't something we
-# have to defend against. See docs/configuration.md.
+# have to defend against. Pig itself never puts a parameter value in a path any more —
+# run directories are named for the run ID — but `pig organize` will, on another machine,
+# and checking at run start is what makes that safe. See docs/configuration.md.
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 
 SAFE_VALUE_EXPLANATION = (
@@ -93,13 +95,6 @@ def describe_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
-def placeholders_in(pattern: str) -> set[str]:
-    """The {names} in a storage pattern."""
-    return {
-        name for _, name, _, _ in string.Formatter().parse(pattern) if name is not None
-    }
-
-
 class TaskDefinition(BaseModel):
     """One task's entry in the configuration file."""
 
@@ -107,7 +102,6 @@ class TaskDefinition(BaseModel):
 
     parameters: list[str]
     run_key: list[str]
-    path: str
     open: bool = True
     max_event_size: int = Field(default=1024 * 1024)
     # How long a run may stay open, counted from when it started. After this, the next
@@ -126,6 +120,13 @@ class TaskDefinition(BaseModel):
             raise ValueError(
                 "abandon_after is now called expires_after. It means the same thing: how "
                 "long a run may stay open, counted from when it started."
+            )
+        if isinstance(raw, dict) and "path" in raw:
+            raise ValueError(
+                "path is no longer a task setting. Pig stores every run in a directory "
+                "named for its run ID; a readable layout is built afterwards by "
+                "`pig organize`, on whatever machine the data ends up on. Remove this "
+                "line. See docs/configuration.md."
             )
         return raw
 
@@ -158,40 +159,7 @@ class TaskDefinition(BaseModel):
             raise ValueError(
                 "run_key can't be empty; a run has to be a repeat of something"
             )
-
-        self._check_path()
         return self
-
-    def _check_path(self) -> None:
-        placeholders = placeholders_in(self.path)
-        available = set(self.parameters) | {"run_number"}
-        unknown = sorted(placeholders - available)
-        if unknown:
-            raise ValueError(
-                f"path uses {unknown}, which this task doesn't have. Available: "
-                f"{sorted(available)}."
-            )
-        if "run_number" not in placeholders:
-            raise ValueError(
-                "path has no {run_number}, so the second run of a participant would "
-                "overwrite the first."
-            )
-        if Path(self.path).is_absolute():
-            raise ValueError("path has to be relative to the data root")
-        if ".." in Path(self.path).parts:
-            raise ValueError("path can't contain '..'")
-
-    def dataset_path(self, parameters: dict[str, str], run_number: int) -> Path:
-        """Where this run's dataset belongs, relative to the completed-data directory.
-
-        Values are lowercased on their way into a path, and only here — the original
-        spelling stays on the run. See docs/configuration.md.
-        """
-        values: dict[str, str] = {
-            name: parameters[name].lower() for name in self.parameters
-        }
-        values["run_number"] = f"run-{run_number:04d}"
-        return Path(self.code) / self.path.format(**values)
 
 
 class Config(BaseModel):
@@ -203,17 +171,19 @@ class Config(BaseModel):
     database: Path
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
+    # Two trees under the data root, and a run directory moves from one to the other
+    # exactly once, by a rename. Both trees are on one filesystem or that rename isn't
+    # atomic; see docs/deployment.md.
+
     @property
     def in_progress_root(self) -> Path:
+        """Runs still collecting, and closed runs the sweep hasn't finished yet."""
         return self.data_root / "in_progress"
 
     @property
-    def complete_root(self) -> Path:
-        return self.data_root / "complete"
-
-    @property
-    def expired_root(self) -> Path:
-        return self.data_root / "expired"
+    def done_root(self) -> Path:
+        """Finished runs, whichever way they closed. Nothing here ever changes again."""
+        return self.data_root / "done"
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:
