@@ -25,3 +25,11 @@ expires_after = "24h"     # a run closes this long after it starts, finished or 
 parameters = ["participant_id"]
 run_key = ["participant_id"]
 open = true
+
+# A task that records audio answers. Media is off for a task unless it says so, and the
+# web server in front of Pig has to allow request bodies at least max_part_size large.
+[task.interview]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+media = true
+max_part_size = "8M"      # optional, defaults to 8M; most tasks never set it

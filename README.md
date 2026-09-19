@@ -16,7 +16,7 @@ Technically, Pig consists of a few components:
 - A Python / FastAPI service that handles data collection and storage
 - A file, in version control, containing your task definitions
 - A SQLite database of runtime state -- runs in progress, participants seen, which events have been stored
-- Somewhere on the server to keep the data, one directory per run
+- Somewhere on the server to keep the data, one directory per run, with any audio or video a task recorded alongside its events
 - A command-line program that does everything happening on a schedule rather than on request, plus checking your configuration
 
 Tasks are the top level: there's no notion of a study or a project that owns them. A lab
@@ -47,6 +47,11 @@ Four URLs, and you only need the first three. All of them take and return JSON.
 | `POST /task/{task_code}/run/{run_id}` | Send events. One JSON object per event, keyed by an event ID you make up. |
 | `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig finishes up from there. |
 | `GET /task/{task_code}/run/{run_id}` | Check on a run -- its status and which events Pig has. |
+
+A task that records audio, video, or anything else too big for an event has three more,
+under `/task/{task_code}/run/{run_id}/media`: start a media item (which is an ordinary
+event, with a media ID handed back), send its bytes in numbered parts, and say how many
+parts you sent. It's off unless a task's configuration turns it on.
 
 The event ID is the important part. You assign one to every event, unique within the run,
 and Pig stores each ID exactly once. That means a failed request is always safe to send
@@ -115,10 +120,6 @@ task might reasonably want to say "one and done," or "at most three" -- a `max_r
 setting. That needs a defined answer for what the participant past the limit gets told,
 since turning someone away mid-study is a real event and the task has to say something
 useful to them.
-
-### Saving binary data
-
-Audio, images, video could be generated during a study. Right now you could bodge them into the `data` field for an event, base64 encoded, but that will only work for very small content and is generally silly.
 
 ### Pre-defining the participants / runs for a study
 

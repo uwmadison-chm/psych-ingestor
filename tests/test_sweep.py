@@ -58,7 +58,7 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
 
     manifest = storage.read_manifest(done(pig, run_id))
     assert manifest["type"] == "pig_run_manifest"
-    assert manifest["manifest_version"] == 1
+    assert manifest["manifest_version"] == 2
     assert manifest["run_id"] == run_id
     assert manifest["task_code"] == "stroop"
     assert manifest["run_number"] == 1
@@ -67,6 +67,7 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
     # Parameters exactly as the link sent them. Nothing lowercases anything.
     assert manifest["parameters"] == BASELINE
     assert manifest["extra_parameters"] == {"utm_source": "email"}
+    assert manifest["media"] == []
     for stamp in ("started_at", "closed_at", "done_at"):
         assert datetime.fromisoformat(manifest[stamp]).tzinfo is not None
     assert manifest["started_at"] <= manifest["closed_at"] <= manifest["done_at"]

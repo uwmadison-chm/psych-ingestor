@@ -58,6 +58,19 @@ curl -X POST localhost:8000/task/stroop/run/YOUR-RUN-ID/finalize
 
 [api.md](api.md) has the full detail and a JavaScript example you can paste into a task.
 
+The example configuration also has an `interview` task that takes media. Start a run of
+it, then send a recording as an event plus its bytes:
+
+```
+curl -X POST localhost:8000/task/interview/run/YOUR-RUN-ID/media \
+  -H 'Content-Type: application/json' \
+  -d '{"event_id": "prompt1_audio", "data": {"content_type": "audio/webm"}}'
+curl -X PUT localhost:8000/task/interview/run/YOUR-RUN-ID/media/1/1 \
+  --data-binary @some-file.webm
+curl -X POST localhost:8000/task/interview/run/YOUR-RUN-ID/media/1/finish \
+  -H 'Content-Type: application/json' -d '{"parts": 1}'
+```
+
 ## See where the data went
 
 Every run is a directory named for its run ID. While a run is in progress it's under
@@ -82,6 +95,7 @@ uv run pig health               # what GET /health reports
 ls local/data/done/stroop/YOUR-RUN-ID/
 cat local/data/done/stroop/YOUR-RUN-ID/manifest.json
 cat local/data/done/stroop/YOUR-RUN-ID/events.jsonl
+ls local/data/done/interview/YOUR-RUN-ID/media/00001/     # the parts, if you sent any
 ```
 
 The manifest says what the run is — who, which session, which run number, when — and the
@@ -108,13 +122,18 @@ wrong:
 - **Post events after finalizing.** `409`, the events aren't stored, and the message tells
   you to start a new run.
 - **Add a parameter the task doesn't know about.** Ignored, and recorded on the run.
+- **Send a media part to `stroop`.** `404`: that task isn't set up for media, and the
+  message says what to set.
+- **Finish a media item with the wrong count.** Refused, and the message says which
+  parts are missing, or that Pig holds more than you said.
+- **Send a part after finishing.** `409`, and the reply lists what Pig holds.
 
 ## What isn't here yet
 
-The service is the four endpoints in [api.md](api.md) plus `/health`. Not built: parameter
+The service is the requests in [api.md](api.md) plus `/health`. Not built: parameter
 signing, participant rosters, `max_runs`, settings returned at run start, copying runs
-offsite, `pig organize`, and per-task allowed origins (every task currently allows any
-origin). See
+offsite, `pig organize`, a JavaScript helper for media uploads, and per-task allowed
+origins (every task currently allows any origin). See
 [configuration.md](configuration.md) for what's marked *built* and what isn't.
 
 ## The other commands

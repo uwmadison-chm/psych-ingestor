@@ -4,6 +4,7 @@ import pytest
 
 from psych_ingestor.config import (
     ConfigurationError,
+    describe_size,
     is_safe_value,
     load_config,
     parse_duration,
@@ -220,3 +221,34 @@ def test_load_config_valid_config_with_two_tasks(tmp_path: Path) -> None:
     assert set(config.task) == {"stroop", "balloons"}
     assert config.task["stroop"].code == "stroop"
     assert config.task["balloons"].code == "balloons"
+
+
+# --- media ---
+
+
+def test_media_is_off_unless_asked_for(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    assert config.task["stroop"].media is False
+    assert config.task["stroop"].max_part_size == 8 * 1024 * 1024
+
+
+def test_max_part_size_reads_a_size(tmp_path: Path) -> None:
+    config_text = """
+data_root = "./data"
+database = "./pig.db"
+
+[task.interview]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+media = true
+max_part_size = "2M"
+"""
+    config = load_config(write_config(tmp_path, config_text))
+    assert config.task["interview"].media is True
+    assert config.task["interview"].max_part_size == 2 * 1024 * 1024
+
+
+def test_describe_size() -> None:
+    assert describe_size(8 * 1024 * 1024) == "8M"
+    assert describe_size(1024) == "1k"
+    assert describe_size(1500) == "1500 bytes"

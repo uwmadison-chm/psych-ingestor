@@ -184,6 +184,8 @@ and, once the sweep has finished the run, a manifest describing it.
 done/stroop/9f3c1a7e-6b2d-4f80-9c11-2a5e8d40b7c3/
     manifest.json
     events.jsonl
+    media/00001/000001.part      # only if the task sent media
+                000002.part
 ```
 
 `events.jsonl` is the events, one JSON object per line, in the order they arrived. Pig
@@ -194,8 +196,9 @@ event still has an empty `events.jsonl`, so "is the dataset there" always has on
 
 `manifest.json` says what the run is without reference to Pig: the task code, the run
 number and which parameters it counts, the parameters the link carried, whether the run
-was finalized or expired, when it started, closed and was finished, and the size and hash
-of every other file in the directory. It's written once, when the sweep finishes the run,
+was finalized or expired, when it started, closed and was finished, which events are
+media items and whether each was finished, and the size and hash of every other file in
+the directory, media parts included. It's written once, when the sweep finishes the run,
 and never changed. Until then the database is the record for the run; afterwards the
 manifest is. The two never overlap, so they can't disagree.
 
@@ -211,6 +214,24 @@ builds from the manifests, on whatever machine the data ends up on. See issue #9
 
 One JSON object — a trial, a response, a marker, whatever the task records. Events are the
 unit Pig stores and counts, and it doesn't interpret their contents.
+
+## Media item
+
+An event with bytes attached: a recording, an image, any file a task produces that's too
+big to live inside an event. The task starts one by sending an ordinary event, which is
+stored in `events.jsonl` like any other with a **media ID** noted in its `metadata`, and
+then sends the bytes as numbered **parts**, one request each, into
+`media/{media_id}/` beside the events file. A part is a slice of the bytes and nothing
+more; Pig doesn't know or care what's in it.
+
+The task finishes the item by saying how many parts it sent, and Pig checks it holds
+exactly those. A finished item is the media counterpart of a `complete` run: the task
+vouched for it and Pig verified it. An item the task never finished is the counterpart
+of an `expired` run: Pig keeps every part that arrived, and the manifest says the item
+wasn't finished. Finalizing a run doesn't require its media items to be finished.
+
+Pig never joins the parts. They stay as parts, each hashed in the manifest, and whoever
+works with the data joins them. See [api.md](api.md).
 
 This is the BIDS sense of the word, not the REDCap one. A REDCap event is closer to what Pig
 calls a session.

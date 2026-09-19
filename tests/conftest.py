@@ -21,6 +21,12 @@ expires_after = "24h"
 parameters = ["participant_id"]
 run_key = ["participant_id"]
 open = false
+
+[task.interview]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+media = true
+max_part_size = "1k"
 """
 
 
