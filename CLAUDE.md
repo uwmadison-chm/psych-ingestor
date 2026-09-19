@@ -10,7 +10,7 @@ The main developer is Nate Vack. In these documents, "I" normally refers to him,
 
 Early. Much of `docs/` is draft, and open questions are marked as such in place. Don't treat a draft as a decision, and don't quietly resolve an open question — raise it.
 
-There is now a working first implementation (the four API endpoints, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
+There is now a working first implementation (the run, event, and media endpoints in `docs/api.md`, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
 
 This guidance applies generally -- when I've asked for something that conflicts with past decisions, or past decisions seem inappropriate for work you're doing, stop and ask rather than tying to brute-force your way through things, or guess what I mean. Sometimes I forget stuff. Sometimes I change my mind and forget to write it down.
 
@@ -88,6 +88,11 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   `PPT-1003` and `ppt-1003` are two participants.
 - **Closing a task refuses new runs only.** Runs in progress keep going and expire on
   their own schedule.
+- **A media item is an event with bytes attached.** Starting one stores an ordinary
+  event with `media_id` in its `metadata`; parts are `PUT` by number into
+  `media/{media_id}/`; `finish` takes a count and is strict. Pig defines no media fields,
+  never joins parts, and caps per part only. Off per task unless `media = true`. See
+  issue #4.
 
 ## Open scoping questions
 

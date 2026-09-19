@@ -167,6 +167,27 @@ and a line count is an upper bound on the number of events. That's why the manif
 carries no count, and why, if finalize ever reports one, it has to come from the file and
 not from the database.
 
+### Media parts go the other way round
+
+A media part is not appended; it's a whole file, written to a scratch name as the bytes
+arrive and renamed into place. A rename replaces whatever had that name, so the events
+rule — check, write, and let the database's unique constraint sort out two writers —
+doesn't carry over: two uploads of the same part number could both pass the check, and
+the loser's bytes would end up on disk under the winner's receipt. So the check, the
+rename and the receipt happen under one database write lock, and nobody else gets in
+between.
+
+The order inside the lock is still file first, then database. A crash after the rename
+leaves a part on disk with no receipt; the retry writes the same bytes over it and
+records the receipt. Nothing is duplicated, because a rename over a file is not an
+append. A crash *before* the rename leaves a scratch file, which Pig never claimed was
+stored and which the sweep deletes before it writes the manifest, so the manifest never
+vouches for bytes nobody acknowledged.
+
+Starting a media item is an event, so it follows the events rule, with one addition: the
+media ID goes on the event's line, so it has to be handed out before the line is written
+and recorded after. That's the same lock, for the same reason.
+
 ### The case this doesn't catch
 
 A dataset can still end up with two lines sharing an event ID and holding different data.

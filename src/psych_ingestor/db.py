@@ -9,13 +9,15 @@ overlap, so they can't disagree.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 # Bumped whenever the tables below change shape. There's no migration: a database from a
 # different version is refused with a message saying so, which beats a confusing "no such
 # column" from the first query that touches it.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -82,6 +84,36 @@ CREATE TABLE IF NOT EXISTS event_receipts (
     stored_at    TEXT NOT NULL,
     PRIMARY KEY (run_id, event_id)
 );
+
+-- One row per media item: an event with bytes attached. The event itself is an ordinary
+-- line in `events.jsonl` with an ordinary receipt above; this row is what says the event
+-- has parts, which directory they're in, and whether the task said it was done sending
+-- them. `declared_parts` is how many parts the task said it sent, set when it finishes
+-- the item and checked against what Pig holds at that moment; both columns are null
+-- until then.
+CREATE TABLE IF NOT EXISTS media (
+    run_id         TEXT NOT NULL REFERENCES runs (run_id),
+    media_id       INTEGER NOT NULL,
+    event_id       TEXT NOT NULL,
+    declared_parts INTEGER,
+    finished_at    TEXT,
+    PRIMARY KEY (run_id, media_id),
+    UNIQUE (run_id, event_id),
+    CHECK ((declared_parts IS NULL) = (finished_at IS NULL))
+);
+
+-- One row per part Pig has durably written, the media counterpart of event_receipts.
+-- Same job: proof the bytes are on disk, and the hash that tells a retry from a
+-- different part sent under the same number.
+CREATE TABLE IF NOT EXISTS media_parts (
+    run_id     TEXT NOT NULL,
+    media_id   INTEGER NOT NULL,
+    part       INTEGER NOT NULL,
+    bytes      INTEGER NOT NULL,
+    sha256     TEXT NOT NULL,
+    stored_at  TEXT NOT NULL,
+    PRIMARY KEY (run_id, media_id, part)
+);
 """
 
 
@@ -111,6 +143,25 @@ def parse_time(stored: str) -> datetime:
     if moment.tzinfo is None:
         return moment.replace(tzinfo=UTC)
     return moment.astimezone(UTC)
+
+
+@contextmanager
+def write_transaction(connection: sqlite3.Connection) -> Iterator[None]:
+    """A block that holds the database's write lock from start to finish.
+
+    Connections are opened in autocommit mode, so each statement is its own transaction
+    unless something says otherwise. This says otherwise: everything inside the block
+    either all commits or none of it does, and no other writer gets in between. Used
+    where a check and the write it guards have to see the same state, and where a file
+    operation sits between them.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        connection.execute("ROLLBACK")
+        raise
+    connection.execute("COMMIT")
 
 
 def connect(path: Path) -> sqlite3.Connection:

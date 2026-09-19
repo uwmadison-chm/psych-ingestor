@@ -35,6 +35,42 @@ that isn't a rename, and the guarantee goes with it. Nothing about a normal depl
 splits the two, but a data root that's a mount point with `in_progress/` symlinked
 elsewhere would, so don't.
 
+## Media and the web server in front of Pig
+
+If any task has `media = true`, participants' browsers send recordings to Pig in parts of
+up to that task's `max_part_size`, 8M by default. The web server in front of Pig has its
+own limit on request bodies, and the usual default is far smaller: nginx allows 1M
+unless told otherwise, and rejects anything bigger with a `413` that never reaches Pig.
+From the browser that looks like a dropped connection, not a refusal, so it's a
+confusing thing to debug after the fact. Raise the limit to at least the largest
+`max_part_size` in your configuration; `pig check` prints the number.
+
+nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    client_max_body_size 8m;
+}
+```
+
+Caddy:
+
+```
+reverse_proxy 127.0.0.1:8000
+request_body {
+    max_size 8MB
+}
+```
+
+nginx also holds each request body on its own disk before handing it to Pig, so its
+temporary directory needs room for a few parts at once. Caddy passes bodies straight
+through. Pig writes every part to disk as it arrives and holds none of it in memory.
+
+Media is the one thing in Pig that can fill a disk. Nothing bounds how much a run may
+send except how long it may stay open, so watch free space under the data root;
+`GET /health` reports it.
+
 ## The health check
 
 ### `GET /health`
@@ -43,9 +79,11 @@ Status information about the service, as JSON, for monitoring and for answering 
 anything wrong right now." People writing tasks don't use this; see [api.md](api.md) for
 what they need.
 
-Partly built. What it reports today: whether the database and data root are writable, and
-for each task whether it's open, how many runs are in each status, how many are waiting
-for the sweep, how many have been `finalizing` too long, and when data last arrived. It
+Partly built. What it reports today: whether the database and data root are writable,
+how many bytes are free under the data root, and for each task whether it's open,
+whether it takes media, how many runs are in each status, how many are waiting for the
+sweep, how many have been `finalizing` too long, and when data last arrived (a media
+part counts). It
 answers `503` rather than `200` when something is wrong, so a monitor can watch the status
 code. `pig health` prints the same report.
 

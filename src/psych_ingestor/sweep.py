@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 
-from . import db, runs, storage
+from . import db, media, runs, storage
 from .config import Config
 from .runs import Disposition
 
@@ -105,10 +105,37 @@ def finish_closed_runs(
             )
             continue
 
+        # The same guard for media parts: a receipt means the part was on disk, so a
+        # receipt with no file is data that's gone, and finishing the run would make
+        # that permanent and silent.
+        gone = [
+            storage.part_path(source, media_id, part).relative_to(source).as_posix()
+            for media_id, part in media.parts_for_run(connection, run.run_id)
+            if not storage.part_path(source, media_id, part).exists()
+        ]
+        if gone:
+            report.refused[run.run_id] = (
+                f"Pig recorded {len(gone)} media part(s) for this run that aren't in "
+                f"{source}, starting with {gone[0]}. Not finishing the run without "
+                "them. The run stays where it is."
+            )
+            continue
+
         try:
             if not events.exists():
                 storage.create_empty_file(events)
-            storage.write_manifest(source, storage.manifest_for(run, source, now))
+            # An upload that was interrupted leaves its scratch file, which Pig never
+            # said was stored and the manifest must not vouch for.
+            storage.remove_partial_files(source)
+            storage.write_manifest(
+                source,
+                storage.manifest_for(
+                    run,
+                    source,
+                    now,
+                    media.describe_for_manifest(connection, run.run_id),
+                ),
+            )
             storage.move_directory(source, destination)
         except OSError as error:
             if destination.exists() and not source.exists():

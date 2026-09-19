@@ -49,6 +49,13 @@ how much they buy you:
 - **Knowing your participants in advance.** Checking arrivals against a roster, so a run
   can only start for someone you expect. Not built; see `README.md`.
 
+Media is the one place the exposure grows. A task with `media = true` has a URL that
+accepts uploads of up to `max_part_size` from anyone who has a run ID, and nothing caps
+how much a run sends in total before it expires. That's why media is off for every task
+unless its configuration turns it on, and why free space under the data root is in the
+health report. Beyond that, the same reasoning applies: the realistic problem is a
+broken task filling a disk, and the fix is closing the task.
+
 Run IDs are also load-bearing here, in a small way. A participant can see their own run ID
 in their browser's network tab, so a guessable one would let them post events into someone
 else's run. They're random UUIDs for that reason — see [definitions.md](definitions.md).

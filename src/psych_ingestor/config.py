@@ -95,6 +95,14 @@ def describe_duration(seconds: int) -> str:
     return f"{seconds} second{'s' if seconds != 1 else ''}"
 
 
+def describe_size(size: int) -> str:
+    """Say '8M' rather than '8388608', for anything a person reads."""
+    for unit, name in ((1024**3, "G"), (1024**2, "M"), (1024, "k")):
+        if size >= unit and size % unit == 0:
+            return f"{size // unit}{name}"
+    return f"{size} bytes"
+
+
 class TaskDefinition(BaseModel):
     """One task's entry in the configuration file."""
 
@@ -107,6 +115,13 @@ class TaskDefinition(BaseModel):
     # How long a run may stay open, counted from when it started. After this, the next
     # sweep marks it expired and files what arrived. See docs/configuration.md.
     expires_after: int = Field(default=24 * 3600)
+    # Whether this task may send audio, video, and other bytes as media items. Off unless
+    # asked for: an open URL taking multi-megabyte bodies is a different exposure from
+    # one taking trial data, and most tasks record nothing. See docs/configuration.md.
+    media: bool = False
+    # The most one media part may be. The web server in front of Pig has to allow request
+    # bodies at least this big, or parts are refused before Pig sees them.
+    max_part_size: int = Field(default=8 * 1024 * 1024)
 
     # Filled in by load_config, since a task doesn't know its own code.
     code: str = ""
@@ -127,7 +142,7 @@ class TaskDefinition(BaseModel):
             )
         return raw
 
-    @field_validator("max_event_size", mode="before")
+    @field_validator("max_event_size", "max_part_size", mode="before")
     @classmethod
     def _size(cls, value: str | int) -> int:
         return parse_size(value)

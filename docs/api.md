@@ -314,11 +314,182 @@ it received is already saved.
 
 If the run ID doesn't exist, you get `404 Not Found`.
 
+If your task is set up to take media, the reply also has a `media` list, one entry per
+media item in the run, in the same shape the media requests below reply with.
+
+## Sending audio, video, and other files
+
+*Only for tasks whose configuration says `media = true`. Any other task gets `404` from
+these requests, with a message saying so.*
+
+Events are for trial data, a few hundred bytes at a time. A recording is megabytes, and
+putting it in an event as text would make your data file unreadable and hit the size
+limit. So Pig takes audio, video, images, and any other file as a **media item**, in
+three steps that mirror a run: start it, send it in parts, say when you're done.
+
+**A media item is an event with bytes attached.** You start one by sending an ordinary
+event, with an event ID and `data` like any other, and Pig gives it a **media ID**. The
+event is stored in your data file with everything else you record, so whoever reads the
+data later finds the recording in sequence with the trial it belongs to. The bytes go
+next to the data file, in a directory named for the media ID.
+
+### Starting a media item
+
+#### `POST /task/{task_code}/run/{run_id}/media`
+
+```json
+{
+  "event_id": "prompt3_audio",
+  "data": { "content_type": "audio/webm;codecs=opus", "prompt": 3 }
+}
+```
+
+The same rules as any event: `event_id` is yours and unique within the run, `data` is
+yours and Pig doesn't look inside it, and the same size limit applies. Pig defines no
+fields for media. The content type, a filename you'd like the assembled recording to
+have, which trial it belongs to: all of that goes in `data`, if you want it. Do record
+the content type, though. It's what tells someone how to play a recording later, and
+Pig has no other way of knowing.
+
+You get back the media ID and the largest part this task will take:
+
+```json
+{ "media_id": 1, "max_part_size": 8388608 }
+```
+
+Media IDs count from 1 within the run. Sending the same start again is safe: same event
+ID, same `data` gets `200 OK` and the same media ID back. Same event ID with different
+`data` is refused, exactly as an event would be, with the ID in `errors` and
+`can_retry: false`.
+
+### Sending the parts
+
+#### `PUT /task/{task_code}/run/{run_id}/media/{media_id}/{part}`
+
+The body is the bytes, and nothing else: no JSON around them, no base64, no form
+encoding. Send whatever your recorder hands you, as it hands it to you. `part` is a
+number counting from 1, and it's required even if there's only one part. Parts can
+arrive in any order.
+
+```javascript
+await fetch(`${PIG}/task/${TASK}/run/${runId}/media/${mediaId}/${part}`, {
+  method: "PUT",
+  body: blob
+});
+```
+
+The part number is what makes a retry safe. Send the same part with the same bytes again
+and you get `200 OK`; nothing is written twice. Send the same part number with different
+bytes and Pig refuses it and keeps what it had, because two parts were given the same
+number and that's a bug in the task. So hold on to each blob until you've seen its part
+number in `stored`, and resend that same blob, never a rebuilt one.
+
+Every reply tells you where the item stands:
+
+```json
+{
+  "status": "in_progress",
+  "media": {
+    "media_id": 1,
+    "event_id": "prompt3_audio",
+    "stored": [1, 2, 3, 4, 5],
+    "finished": false
+  }
+}
+```
+
+`stored` is every part Pig holds for this item, not just the one you sent, so compare it
+against what you've sent and resend anything absent. Pig doesn't say what's *missing*,
+because until you finish the item it has no idea how many parts you mean to send.
+
+| Code | Means |
+| --- | --- |
+| `201 Created` | Stored, and this request is what stored it. |
+| `200 OK` | Pig already had this part, byte for byte. A successful retry. |
+| `422 Unprocessable Entity` | Same part number, different bytes. Read `errors`; `can_retry` is `false`. |
+| `413 Payload Too Large` | The part is bigger than this task allows. Send smaller parts. |
+| `409 Conflict` | The run has closed, or you already finished this item. |
+| `404 Not Found` | No such run, no such media item, or the run belongs to another task. |
+
+Pig writes each part to disk as it arrives and doesn't hold it in memory, so the size
+limit is about your deployment, not Pig. Whoever runs your Pig sets `max_part_size`,
+8 MB unless they chose otherwise, and the web server in front of Pig has to allow bodies
+at least that big. A part a few seconds long is well under that at normal recording
+settings.
+
+### Finishing a media item
+
+#### `POST /task/{task_code}/run/{run_id}/media/{media_id}/finish`
+
+```json
+{ "parts": 37 }
+```
+
+Tell Pig how many parts you sent. Pig checks that it holds exactly parts 1 through 37,
+and if it does, the item is finished and takes no more parts:
+
+```json
+{
+  "status": "in_progress",
+  "media": { "media_id": 1, "event_id": "prompt3_audio", "stored": [1, 2, 3], "finished": true, "parts": 3 }
+}
+```
+
+If a part is missing, you get `422` and the message says which. Send the missing parts,
+then finish again. If Pig holds parts *beyond* your count, that's also `422`, with
+`can_retry: false`: the count your task sent is wrong, and Pig kept the parts.
+
+The count is what makes a finished item mean something. `finished: true` says the task
+vouched for the recording and Pig holds all of it, the same way `complete` says that for
+a run. An item you never finish is still kept, every part of it, and marked as never
+finished. Finalizing the run doesn't mind an unfinished item; a recording cut off when
+the participant closed the tab is a fact to record, not an error.
+
+Finishing twice with the same count is `200 OK`. Finishing with a different count is
+refused.
+
+### Putting it together
+
+Your task needs a small upload queue, and this isn't optional. Two things force it. A
+browser's `MediaRecorder` starts handing you blobs as soon as it's running, possibly
+before Pig has answered your start request, so blobs have to wait for the media ID. And
+every blob has to be held until Pig confirms its part, because a retry must send the
+same bytes.
+
+The shape of it:
+
+1. Start the recorder, with a timeslice so it hands you a blob every few seconds.
+   Around five seconds is a good default: little is lost if the tab dies, and the parts
+   stay small. Read `recorder.mimeType` *after* starting; browsers don't reliably fill
+   it in until then.
+2. Send the start request. Blobs that arrive meanwhile wait in the queue.
+3. Number each blob as it arrives, from 1, in order. Send them one at a time, and don't
+   drop a blob until its number is in `stored`. On a failed request, send the same blob
+   again.
+4. When the recorder stops, wait for the queue to empty, then finish with the number of
+   parts you sent.
+
+A blob doesn't have to be one part. The recording is a stream of bytes and where you
+cut it doesn't matter as long as the order is kept, so a blob bigger than
+`max_part_size` can be sliced with `Blob.slice()` and sent as several consecutive parts.
+
+A helper that does all of this, so each task doesn't repeat it, is planned but not
+written yet.
+
+**Pig never joins the parts back together.** They stay as parts, each hashed in the
+run's manifest, and whoever works with the data later joins them: for the WebM and
+fragmented MP4 that browsers record, that's concatenating the files in order. Pig
+doesn't join them because joining means deciding what to do about a gap, and a file
+that looks whole and isn't is exactly the kind of quiet mistake Pig exists to avoid.
+
+Pig doesn't look at the bytes at all. No list of allowed types, no checking that parts
+belong together, no file extension chosen for you. What you send is what's stored.
+
 ## Cross-origin requests
 
 Your task will almost never be hosted on the same server as Pig, so every request it makes
-is a cross-origin one. Pig's default is to allow them from anywhere, so this should just
-work. If your lab has restricted a task to specific sites, that's set in the task's
+is a cross-origin one. Pig's default is to allow them from anywhere, including the `PUT`
+that media parts use, so this should just work. If your lab has restricted a task to specific sites, that's set in the task's
 configuration. See [security.md](security.md).
 
 ## Things that will change

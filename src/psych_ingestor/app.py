@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -46,7 +46,7 @@ def create_app(config_path: Path) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
         allow_headers=["*"],
         allow_private_network=True,
     )
@@ -83,6 +83,41 @@ def create_app(config_path: Path) -> FastAPI:
         with _pig(source) as pig:
             return JSONResponse(content=pig.describe_run(task_code, run_id))
 
+    @app.post("/task/{task_code}/run/{run_id}/media")
+    def start_media(
+        task_code: str, run_id: str, event: Annotated[Any, Body()]
+    ) -> JSONResponse:
+        # `Body()` because the service checks the shape itself, with its own messages;
+        # left to FastAPI, an untyped parameter is read from the query string.
+        with _pig(source) as pig:
+            reply = pig.start_media(task_code, run_id, event)
+            return JSONResponse(status_code=reply.status_code, content=reply.body)
+
+    @app.put("/task/{task_code}/run/{run_id}/media/{media_id}/{part}")
+    async def store_part(
+        task_code: str, run_id: str, media_id: int, part: int, request: Request
+    ) -> JSONResponse:
+        # Async, unlike everything else here, because the body is streamed to disk
+        # rather than read into memory. See `Pig.store_part`.
+        with _pig(source) as pig:
+            reply = await pig.store_part(
+                task_code,
+                run_id,
+                media_id,
+                part,
+                request.stream(),
+                _content_length(request),
+            )
+            return JSONResponse(status_code=reply.status_code, content=reply.body)
+
+    @app.post("/task/{task_code}/run/{run_id}/media/{media_id}/finish")
+    def finish_media(
+        task_code: str, run_id: str, media_id: int, declared: Annotated[Any, Body()]
+    ) -> JSONResponse:
+        with _pig(source) as pig:
+            reply = pig.finish_media(task_code, run_id, media_id, declared)
+            return JSONResponse(status_code=reply.status_code, content=reply.body)
+
     @app.get("/health")
     def check_health() -> JSONResponse:
         with _pig(source) as pig:
@@ -92,6 +127,13 @@ def create_app(config_path: Path) -> FastAPI:
             )
 
     return app
+
+
+def _content_length(request: Request) -> int | None:
+    """The body size the request claims, if it claims one. Only ever used to refuse
+    early: the real limit is counted as the bytes arrive."""
+    header = request.headers.get("content-length")
+    return int(header) if header and header.isdigit() else None
 
 
 class _pig:

@@ -51,6 +51,12 @@ run_key = ["participant_id", "session"]
 open = true
 max_event_size = "1M"      # optional, defaults to 1M
 expires_after = "24h"      # optional, defaults to 24h
+
+[task.interview]
+parameters = ["participant_id"]
+run_key = ["participant_id"]
+media = true               # this task records audio; off unless you say so
+max_part_size = "8M"       # optional, defaults to 8M
 ```
 
 `data_root` and `database` are relative to the configuration file, so a checkout can move
@@ -69,8 +75,8 @@ data/
 ```
 
 Nothing in the task entry says where its data lands, because nothing about that is a
-choice: it's `done/{task_code}/`, with one directory per run holding `events.jsonl` and a
-`manifest.json` describing the run. A readable layout — one directory per participant,
+choice: it's `done/{task_code}/`, with one directory per run holding `events.jsonl`, a
+`manifest.json` describing the run, and a `media/` directory if the task sent any. A readable layout — one directory per participant,
 files named for session and run number — is built later by `pig organize`, from the
 manifests, on whatever machine the data ends up on. See [definitions.md](definitions.md)
 for what a run directory holds and issue #9 for `pig organize`.
@@ -229,6 +235,26 @@ the service simple, and it's affordable because the durability promise lands at
 `finalizing`, not at `complete` — nobody is waiting on the sweep except whoever wants to
 read the finished run. See [deployment.md](deployment.md) for scheduling it.
 
+### Audio, video, and other files
+
+`media = true` lets a task send media items: recordings, images, any file too big to go
+inside an event. It's off unless you turn it on, because a URL that accepts multi-megabyte
+uploads from anyone who has it is a different thing to leave open than one accepting
+trial data, and most tasks record nothing. A task without it answers `404` to the media
+requests, with a message saying what to set.
+
+`max_part_size` is the largest single part Pig will accept, 8M unless you say otherwise.
+Most tasks never set it: a few seconds of webcam video is one or two megabytes, and audio
+is far smaller. It's a limit on one request, not on a run. Pig doesn't cap how much media
+a run may send in total, because refusing a part partway through a recording is refusing
+data that can't be sent again; the only per-run bound is `expires_after`. That makes
+disk space something to watch: fifty participants at half an hour of video each is tens
+of gigabytes, and `GET /health` reports how much is free under the data root.
+
+The web server in front of Pig has to allow request bodies at least `max_part_size`
+large, or it refuses parts before Pig sees them. `pig check` prints the number to
+allow. See [deployment.md](deployment.md).
+
 ### Open or closed
 
 Whether the task currently accepts new data. Closing a task is how data collection ends
@@ -342,5 +368,5 @@ solve, on the machine where the tree is built; see issue #9.
 
 *Built.* `pig check` reads the file, reports every problem it can describe, and prints each
 task: whether it's open, what parameters it expects, which of them make up the run key,
-and how long its runs may stay open. It exits non-zero on a bad file, so a deployment can
+how long its runs may stay open, and whether it takes media. It exits non-zero on a bad file, so a deployment can
 gate a restart on it.

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -20,16 +21,33 @@ from .runs import Run
 
 EVENTS_FILE = "events.jsonl"
 MANIFEST_FILE = "manifest.json"
+MEDIA_DIRECTORY = "media"
+PART_SUFFIX = ".part"
+# What a file is called while it's being written. Never left behind on purpose, and
+# the sweep removes any that were: see `remove_partial_files`.
+PARTIAL_SUFFIX = ".partial"
 
 # Every manifest carries these two, so a reader can tell what it's looking at and which
 # shape to expect. Bump the version when the manifest's shape changes.
 MANIFEST_TYPE = "pig_run_manifest"
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 
 def run_directory(root: Path, task_code: str, run_id: str) -> Path:
     """Where a run lives under one of the two trees."""
     return root / task_code / run_id
+
+
+def media_directory(run_dir: Path, media_id: int) -> Path:
+    """Where one media item's parts live: `media/00001/` inside the run directory."""
+    return run_dir / MEDIA_DIRECTORY / f"{media_id:05d}"
+
+
+def part_path(run_dir: Path, media_id: int, part: int) -> Path:
+    """One part: `media/00001/000003.part`. Zero-padded so a sorted listing is in part
+    order, and `.part` rather than a media extension because a part isn't a playable
+    file and Pig doesn't parse content types."""
+    return media_directory(run_dir, media_id) / f"{part:06d}{PART_SUFFIX}"
 
 
 # ------------------------------------------------------------------- stored lines
@@ -54,13 +72,19 @@ def canonical(line_object: dict[str, Any]) -> str:
     )
 
 
-def event_line(event_id: str, data: Any, stored_at: datetime) -> dict[str, Any]:
-    """The object one stored event becomes."""
-    return {
-        "event_id": event_id,
-        "data": data,
-        "metadata": {"stored_at": stored_at.isoformat()},
-    }
+def event_line(
+    event_id: str, data: Any, stored_at: datetime, media_id: int | None = None
+) -> dict[str, Any]:
+    """The object one stored event becomes.
+
+    `media_id` is set when the event is a media item: it says which directory under
+    `media/` holds the event's parts. It's a fact Pig generated about the event, which is
+    what `metadata` is for.
+    """
+    metadata: dict[str, Any] = {"stored_at": stored_at.isoformat()}
+    if media_id is not None:
+        metadata["media_id"] = media_id
+    return {"event_id": event_id, "data": data, "metadata": metadata}
 
 
 def hashed_text(line_object: dict[str, Any]) -> str:
@@ -86,6 +110,85 @@ def append_line(path: Path, line: str) -> None:
         handle.write(line + "\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+
+class PartTooLarge(Exception):
+    """More bytes arrived for a part than the task allows."""
+
+
+class PartWriter:
+    """Write one media part to disk as it arrives, without holding it in memory.
+
+    Bytes go straight from each chunk to a scratch file next to where the part will
+    live, hashed and counted on the way through, and the size limit is enforced as they
+    arrive rather than trusted from a header. When the whole body is in, `finish`
+    fsyncs it and hands back the size and hash; whoever called us then decides whether
+    to `keep` it (rename into place) or `discard` it (a retry Pig already has, or a
+    part that differs from one it already has). Nothing is in the part's real name
+    until `keep`, so a crash mid-write leaves a scratch file and never a part that
+    looks whole and isn't.
+
+    The scratch name carries a random suffix so two uploads of the same part at once
+    don't write over each other's scratch file.
+    """
+
+    def __init__(self, final: Path, limit: int):
+        self.final = final
+        self.limit = limit
+        self.scratch = final.with_name(
+            f"{final.name}.{secrets.token_hex(4)}{PARTIAL_SUFFIX}"
+        )
+        self.size = 0
+        self._hash = hashlib.sha256()
+        # Held open across several calls, so a context manager can't scope it.
+        self._handle = open(self.scratch, "wb")  # noqa: SIM115
+        self._open = True
+
+    def write(self, chunk: bytes) -> None:
+        self.size += len(chunk)
+        if self.size > self.limit:
+            raise PartTooLarge(
+                f"This part is bigger than this task allows ({self.limit} bytes)."
+            )
+        self._hash.update(chunk)
+        self._handle.write(chunk)
+
+    def finish(self) -> str:
+        """The body is all here. Make it durable and return its hash."""
+        self._handle.flush()
+        os.fsync(self._handle.fileno())
+        self._close()
+        return self._hash.hexdigest()
+
+    def keep(self) -> None:
+        """Put the finished scratch file in the part's real place."""
+        self._close()
+        self.scratch.replace(self.final)
+        _fsync_directory(self.final.parent)
+
+    def discard(self) -> None:
+        """Throw the scratch file away. Safe to call at any point, more than once."""
+        self._close()
+        try:
+            self.scratch.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _close(self) -> None:
+        if self._open:
+            self._handle.close()
+            self._open = False
+
+
+def remove_partial_files(directory: Path) -> None:
+    """Delete scratch files an interrupted upload left in a run directory.
+
+    Pig never said any of these were stored, and the manifest is about to hash every
+    file in the directory, so leaving one would make a copy elsewhere responsible for
+    bytes nobody acknowledged.
+    """
+    for path in directory.rglob(f"*{PARTIAL_SUFFIX}"):
+        path.unlink()
 
 
 def create_empty_file(path: Path) -> None:
@@ -130,9 +233,18 @@ def duplicate_event_ids(path: Path) -> list[str]:
 # ------------------------------------------------------------------ the manifest
 
 
-def manifest_for(run: Run, directory: Path, done_at: datetime) -> dict[str, Any]:
+def manifest_for(
+    run: Run,
+    directory: Path,
+    done_at: datetime,
+    media: list[dict[str, Any]],
+) -> dict[str, Any]:
     """Everything needed to understand a finished run without asking Pig, and nothing
     else.
+
+    `media` is one entry per media item — which event it is and whether the task
+    finished it — from `media.describe_for_manifest`. The parts themselves are in
+    `files` like everything else, so their hashes live in one place.
 
     No event count: `events.jsonl` may hold a repeated line, so a count would be an
     upper bound at best. No configuration snapshot, nothing secret.
@@ -156,6 +268,7 @@ def manifest_for(run: Run, directory: Path, done_at: datetime) -> dict[str, Any]
         "done_at": done_at.isoformat(),
         "parameters": run.parameters,
         "extra_parameters": run.extra_parameters,
+        "media": media,
         "files": describe_files(directory),
     }
 

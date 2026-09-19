@@ -23,6 +23,7 @@ from .config import (
     Config,
     ConfigurationError,
     describe_duration,
+    describe_size,
     load_config,
 )
 from .runs import API_STATUSES, Phase
@@ -93,6 +94,19 @@ def check(*, config: ConfigPath | None = None) -> None:
         print(f"  run key:     {', '.join(task.run_key)}")
         print(
             f"  runs expire: {describe_duration(task.expires_after)} after they start"
+        )
+        if task.media:
+            print(
+                f"  media:       yes, parts up to {describe_size(task.max_part_size)}"
+            )
+    largest = max(
+        (task.max_part_size for task in loaded.task.values() if task.media), default=0
+    )
+    if largest:
+        print(
+            f"\nAt least one task takes media, so the web server in front of Pig has to "
+            f"allow request bodies of {describe_size(largest)} or more. See "
+            "docs/deployment.md."
         )
 
 

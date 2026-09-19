@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from . import db, runs
+from . import db, media, runs
 from .config import Config
 
 # How long a run can wait for the sweep before we call it stuck. Finishing a run normally
@@ -39,6 +40,10 @@ def report(
     report: dict[str, Any] = {
         "ok": all(checks.values()) and stuck == 0,
         "checks": checks,
+        # Media is the first thing in Pig that can fill a disk, and nothing bounds how
+        # much a run may send but time, so the number is here for a monitor to watch.
+        # No threshold: what counts as low depends on the deployment.
+        "data_root_free_bytes": _free_bytes(config.data_root),
         "tasks": tasks,
     }
     if configuration_problem is not None:
@@ -54,9 +59,15 @@ def _task_report(
     config: Config, connection: sqlite3.Connection, task_code: str
 ) -> dict[str, Any]:
     task = config.task[task_code]
-    last_event = runs.last_stored_at(connection, task_code)
+    # "Last event" counts a media part as data arriving too, since that's what it is.
+    arrivals = [
+        runs.last_stored_at(connection, task_code),
+        media.last_stored_at(connection, task_code),
+    ]
+    last_event = max((moment for moment in arrivals if moment), default=None)
     return {
         "open": task.open,
+        "media": task.media,
         "runs": runs.counts_by_api_status(connection, task_code),
         "stuck_finalizing": runs.count_stuck(
             connection, task_code, db.now() - STUCK_AFTER
@@ -64,6 +75,13 @@ def _task_report(
         "awaiting_sweep": runs.count_awaiting_sweep(connection, task_code),
         "last_event_at": db.stamp(last_event) if last_event else None,
     }
+
+
+def _free_bytes(directory: Path) -> int | None:
+    try:
+        return shutil.disk_usage(directory).free
+    except OSError:
+        return None
 
 
 def _is_writable(directory: Path) -> bool:
