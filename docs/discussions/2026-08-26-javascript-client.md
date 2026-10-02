@@ -5,8 +5,8 @@ rewritten October 2026. This is the text of that issue beforehand, followed by t
 questions raised while turning it into a plan, with Nate's answers.*
 
 Kept because the rewrite keeps the conclusions and drops the asking. In particular, the
-reasoning behind dropping leftovers for finalized runs, and behind finalize-on-leave
-being a beacon that abandons the queue, is only here.
+reasoning behind dropping leftovers for finalized runs, and the path from
+finalize-on-leave to finalizing abandoned runs on the next launch, is only here.
 
 ---
 
@@ -154,6 +154,21 @@ And then, on what happens to the orphans:
 > sessions for _explicitly_ closed runs, and discard the remaining data. (Honestly,
 > dropping data for all closed runs is also okay, as long as that is well-documented. Make
 > your expiry time long if you want to allow data for a long time.)
+
+That didn't survive. No event reliably fires when a page is left: on mobile, and in an
+installed PWA, the OS freezes or kills the page without one. A PWA helps only with the
+*next* visit (on iOS an installed PWA's storage isn't cleared after seven days, and people
+reopen it). The options were a beacon on `pagehide` (fast, unreliable, drops what's
+queued), finalizing abandoned runs on the next launch (reliable, slow, loses nothing), or
+both. Because the client sends as soon as it can, the queue is small anyway:
+
+> we should be sending the queue as soon as we can! If we're online the queue should be
+> small. And mostly we will be online
+
+> 2 is the winner for now
+
+So: finalize abandoned runs on the next launch, with `expires_after` for people who never
+come back.
 
 **Cloning event data to the worker costs main-thread time.**
 
