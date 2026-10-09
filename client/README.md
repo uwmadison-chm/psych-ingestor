@@ -196,6 +196,11 @@ few seconds rather than one at the very end; if the tab closes partway through, 
 everything up to the last blob. Read `recorder.mimeType` after calling `start()`, because
 browsers don't reliably fill it in before.
 
+To record several clips with the camera left on in between, keep one recorder and call
+`start()` and `stop()` for each clip, with a new `startMedia()` and `record()` each
+time. Each clip becomes its own media item and its own playable file. (`pause()` would
+instead make one long recording with the gaps cut out.)
+
 Anything else is three calls:
 
 ```javascript

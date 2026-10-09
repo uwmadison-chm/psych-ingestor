@@ -80,6 +80,37 @@ test("record() sends what a MediaRecorder records and finishes when it stops", a
   expect(catParts(runId, item.media_id).bytes.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
 });
 
+test("one recorder, stopped and started again, makes one media item per clip", async ({ page, request }) => {
+  await page.goto("/script.html");
+  const runId = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const draw = setInterval(() => context.fillRect(0, 0, 10, 10), 20);
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+
+    for (const clip of ["first", "second"]) {
+      recorder.start(200);
+      const item = await run.startMedia({ content_type: recorder.mimeType, clip });
+      item.record(recorder);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const stopped = new Promise((resolve) => recorder.addEventListener("stop", resolve, { once: true }));
+      recorder.stop();
+      await stopped;
+    }
+    clearInterval(draw);
+    await run.sent();
+    return run.runId;
+  }, PIG);
+
+  const { media } = await serverRun(request, runId);
+  expect(media).toHaveLength(2);
+  for (const item of media) {
+    expect(item.finished).toBe(true);
+    expect(catParts(runId, item.media_id).bytes.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  }
+});
+
 test("progress counts down while a part uploads", async ({ page }) => {
   await page.goto("/script.html");
   const seen = await page.evaluate(async (server) => {
