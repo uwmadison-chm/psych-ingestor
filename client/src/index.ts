@@ -153,6 +153,8 @@ export function debugLog(): string[] {
 /** One run. Get one from start(), startForURL(), or resume(). */
 export class Run extends EventTarget {
   #connection: Connection;
+  /** Recordings record() started that aren't finished yet. */
+  #recordings = new Set<Recording>();
   /** This run's ID on this device. Keep it to resume() the run on another page. */
   readonly id: string;
   readonly task: string;
@@ -191,14 +193,111 @@ export class Run extends EventTarget {
       throw new PigError("bad-event", "_client is filled in by the client. Use another name for your field.");
     }
     const queued = this.#connection.call("add", this.id, data, stamp) as Promise<string>;
-    queued.catch((error: PigError) =>
-      this.#connection.report({ type: "error", run: this.id, code: error.code, message: error.message }),
-    );
+    queued.catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
     return queued;
   }
 
-  /** Finalize the run, after everything already added. Resolves once that's queued. */
+  /**
+   * Start a media item: a recording, an image, or any other file. It's an event like
+   * any other, with `data` stored the same way, and bytes attached with the item's
+   * add(). Record the content type in `data`; nothing else knows how to play it.
+   * Resolves once the event is stored on this device. Refused if the task isn't set
+   * up to take media.
+   */
+  async startMedia(data: Record<string, unknown>): Promise<Media> {
+    const stamp = timeStamp();
+    const eventId = (await this.#connection.call("startMedia", this.id, data, stamp)) as string;
+    return new Media(this.#connection, this.id, eventId);
+  }
+
+  /**
+   * Record from a MediaRecorder into a new media item. Starts the recorder itself, with
+   * `timeslice` (milliseconds between blobs), and stamps the item with the moment the
+   * recorder says it started, on the same clock as every event's `_client`. Sends each
+   * blob as it comes, and finishes the item when the recorder stops. Stop it with the
+   * item's stop(), or the recorder's own. `data` is stored as the item's event, with
+   * `content_type` filled in from the recorder unless you give one. Resolves once the
+   * item's event is stored.
+   */
+  async record(recorder: MediaRecorder, data: Record<string, unknown> = {}, { timeslice = 5000 } = {}): Promise<Media> {
+    if (recorder.state !== "inactive") {
+      throw new PigError("bad-call", "record() starts the recorder itself, so give it one that isn't recording yet.");
+    }
+    // Settles once the item's finish is queued, or once it's clear there won't be one.
+    let settle!: () => void;
+    const recording: Recording = { recorder, finished: new Promise<void>((resolve) => (settle = resolve)) };
+    this.#recordings.add(recording);
+    const done = () => {
+      this.#recordings.delete(recording);
+      settle();
+    };
+    const finish = (item: Media) =>
+      item
+        .finish()
+        .catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)))
+        .finally(done);
+
+    // Blobs can arrive before the item exists. They wait here, in order.
+    const waiting: Blob[] = [];
+    let item: Media | undefined;
+    let stopped = false;
+    const onData = (event: BlobEvent) => {
+      if (item) item.add(event.data);
+      else waiting.push(event.data);
+    };
+    const onStop = () => {
+      // The browser always delivers the last blob before `stop`.
+      recorder.removeEventListener("dataavailable", onData);
+      stopped = true;
+      if (item) finish(item);
+    };
+    recorder.addEventListener("dataavailable", onData);
+    recorder.addEventListener("stop", onStop, { once: true });
+
+    let started: Event;
+    try {
+      started = await new Promise<Event>((resolve, reject) => {
+        recorder.addEventListener("start", resolve, { once: true });
+        recorder.addEventListener("error", (event) => reject((event as ErrorEvent).error ?? event), { once: true });
+        recorder.start(timeslice);
+      });
+    } catch (error) {
+      recorder.removeEventListener("dataavailable", onData);
+      recorder.removeEventListener("stop", onStop);
+      done();
+      throw new PigError("recorder", `The recorder didn't start: ${(error as Error)?.message ?? "no details"}`);
+    }
+    // An event's timeStamp is on the performance.now() clock.
+    const stamp: Stamp = { wall_time: wallTime(), performance_now: started.timeStamp };
+
+    let eventId: string;
+    try {
+      eventId = (await this.#connection.call(
+        "startMedia",
+        this.id,
+        { content_type: recorder.mimeType, ...data },
+        stamp,
+      )) as string;
+    } catch (error) {
+      recorder.removeEventListener("dataavailable", onData);
+      recorder.removeEventListener("stop", onStop);
+      if (recorder.state !== "inactive") recorder.stop();
+      done();
+      throw error;
+    }
+    item = new Media(this.#connection, this.id, eventId, recording);
+    for (const blob of waiting.splice(0)) item.add(blob);
+    if (stopped) finish(item);
+    return item;
+  }
+
+  /**
+   * Finalize the run, after everything already added. Resolves once that's queued. Stops
+   * any recording record() started and waits for its last blob, which a finalize queued
+   * first would refuse.
+   */
   async finalize(): Promise<void> {
+    await Promise.all([...this.#recordings].map(stopRecording));
     await this.#connection.call("finalize", this.id);
   }
 
@@ -214,6 +313,62 @@ export class Run extends EventTarget {
   pending(): Promise<Pending> {
     return this.#connection.call("pending", { run: this.id }) as Promise<Pending>;
   }
+}
+
+/** One media item. Get one from run.startMedia() or run.record(). */
+export class Media {
+  #connection: Connection;
+  #run: string;
+  /** The item's event ID, the one its start was stored under. */
+  readonly eventId: string;
+  #recording: Recording | undefined;
+
+  /** @internal */
+  constructor(connection: Connection, run: string, eventId: string, recording?: Recording) {
+    this.#connection = connection;
+    this.#run = run;
+    this.eventId = eventId;
+    this.#recording = recording;
+  }
+
+  /**
+   * Queue some of the item's bytes. Returns at once, like run.add(); the promise
+   * resolves once they're stored on this device, with the part numbers they were
+   * given. Parts are numbered in the order you call this, so the stored parts join
+   * back together in that order. A blob too big for one part becomes several.
+   */
+  add(blob: Blob): Promise<number[]> {
+    const queued = this.#connection.call("addMedia", this.#run, this.eventId, blob) as Promise<number[]>;
+    queued.catch((error: PigError) => this.#connection.report(errorNotice(this.#run, error)));
+    return queued;
+  }
+
+  /** Say the item is complete. Resolves once that's queued, after everything added. */
+  async finish(): Promise<void> {
+    await this.#connection.call("finishMedia", this.#run, this.eventId);
+  }
+
+  /**
+   * For an item from run.record(): stop the recorder. Resolves once its last blob and
+   * the item's finish are queued.
+   */
+  async stop(): Promise<void> {
+    if (!this.#recording) {
+      throw new PigError("bad-call", "stop() is for items from run.record(). Use finish() for this one.");
+    }
+    await stopRecording(this.#recording);
+  }
+}
+
+/** A recorder record() is running, and when the item it's recording into is finished. */
+interface Recording {
+  recorder: MediaRecorder;
+  finished: Promise<void>;
+}
+
+async function stopRecording({ recorder, finished }: Recording): Promise<void> {
+  if (recorder.state !== "inactive") recorder.stop();
+  await finished;
 }
 
 // ------------------------------------------------------------------ plumbing
@@ -306,6 +461,11 @@ class Connection {
 function connected(): Connection {
   connection ??= new Connection({});
   return connection;
+}
+
+/** A failed call, as an `error` event for the run it was about. */
+function errorNotice(run: string, error: PigError): Notice {
+  return { type: "error", run, code: error.code, message: error.message };
 }
 
 function timeStamp(): Stamp {

@@ -54,18 +54,44 @@ export interface RunRecord {
   failed: Failure | null;
   created_at: number;
   last_active: number;
+  /** The run's media items, by their event ID. */
+  media: Record<string, MediaRecord>;
+}
+
+/** One media item, as a run's record keeps it. */
+export interface MediaRecord {
+  event_id: string;
+  /** The server's media ID, or null until the server has started the item. */
+  server_media_id: number | null;
+  next_part: number;
+  finish_queued: boolean;
+  /** The server refused part of it for good; what's left of it is in `failed`. */
+  failed: boolean;
+  /** The start, as JSON, for starting it again in a new server run. */
+  start_json: string;
+  /**
+   * Its parts went to more than one server run, because one expired partway through.
+   * Then neither server run holds all of it, and it isn't finished in either.
+   */
+  split: boolean;
 }
 
 /** Something that has to reach the server, before IndexedDB has numbered it. */
 export type NewOp =
   | { kind: "start" }
   | { kind: "finalize" }
-  | { kind: "event"; event_id: string; json: string; bytes: number };
+  | { kind: "event"; event_id: string; json: string; bytes: number }
+  | { kind: "media-start"; event_id: string; json: string; bytes: number }
+  | { kind: "media-part"; event_id: string; part: number; blob: Blob; bytes: number }
+  | { kind: "media-finish"; event_id: string; parts: number };
 
 /** A queued op: which run it's for, and its place in the queue. */
 export type Op = NewOp & { run: string; seq: number };
 
 export type EventOp = Extract<Op, { kind: "event" }>;
+export type MediaStartOp = Extract<Op, { kind: "media-start" }>;
+export type PartOp = Extract<Op, { kind: "media-part" }>;
+export type MediaFinishOp = Extract<Op, { kind: "media-finish" }>;
 
 /** An op the server refused for good, and why. */
 export type FailedOp = Op & { reason: string; failed_at: number };
@@ -74,7 +100,7 @@ export type FailedOp = Op & { reason: string; failed_at: number };
 export interface Pending {
   events: number;
   bytes: number;
-  /** Events the server refused for good. Kept, never sent. See discardFailed(). */
+  /** Events and media parts the server refused for good. Kept, never sent. See discardFailed(). */
   failed: number;
   /** Runs with anything left to send. */
   runs: number;

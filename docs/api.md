@@ -517,8 +517,8 @@ A blob doesn't have to be one part. The recording is a stream of bytes and where
 cut it doesn't matter as long as the order is kept, so a blob bigger than
 `max_part_size` can be sliced with `Blob.slice()` and sent as several consecutive parts.
 
-A helper that does all of this, so each task doesn't repeat it, is planned but not
-written yet.
+The [JavaScript client](../client/README.md) does all of this for you, so a task doesn't
+have to.
 
 **Pig never joins the parts back together.** They stay as parts, each hashed in the
 run's manifest, and whoever works with the data later joins them: for the WebM and

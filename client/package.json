@@ -1,6 +1,6 @@
 {
   "name": "psych-ingestor-client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Send a task's data to Psych Ingestor (Pig), durably, online or off.",
   "license": "MIT",
   "type": "module",

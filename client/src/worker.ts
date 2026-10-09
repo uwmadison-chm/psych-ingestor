@@ -22,7 +22,7 @@ export interface WorkerSetup {
 }
 
 // What the page may call. Anything else is refused.
-const METHODS = new Set(["start", "resume", "add", "finalize", "sent", "pending", "discardFailed", "nudge"]);
+const METHODS = new Set(["start", "resume", "add", "startMedia", "addMedia", "finishMedia", "finalize", "sent", "pending", "discardFailed", "nudge"]);
 
 let core: Core | undefined;
 let ready: Promise<void> | undefined;

@@ -1,7 +1,7 @@
 # The Psych Ingestor JavaScript client
 
-**Status: early.** Starting runs, events, finalizing, offline runs, and resuming across
-pages all work. Media and encryption aren't here yet. Names marked *provisional* below may
+**Status: early.** Starting runs, events, media, finalizing, offline runs, and resuming
+across pages all work. Encryption isn't here yet. Names marked *provisional* below may
 change. See [issue #11](https://github.com/uwmadison-chm/psych-ingestor/issues/11).
 
 This is a small library for tasks that run in a web browser. It talks to Pig for you:
@@ -172,6 +172,70 @@ There's no reliable way to finalize at the moment someone leaves. Browsers, phon
 especially, often close a page without warning it. That's why this waits for the next
 visit.
 
+## Recordings and other files
+
+A recording, an image, or any other file goes to Pig as a **media item**: an event like
+any other, with bytes attached. The task's configuration has to say `media = true`; if
+it doesn't, `startMedia()` refuses straight away. See the media section of
+[docs/api.md](../docs/api.md) for what Pig does with it.
+
+With a `MediaRecorder`, let the client run it:
+
+```javascript
+const recording = await run.record(recorder, { prompt: 3 });
+
+// Later, moving on to the next prompt:
+await recording.stop();
+```
+
+**`run.record(recorder, data)`** starts the recorder, sends each blob it hands over, and
+finishes the item when the recorder stops. **`recording.stop()`** stops the recorder and
+resolves once its last blob is queued. Calling `recorder.stop()` yourself works too.
+`run.finalize()` waits for that last blob either way, and stops any recording still
+going. The item's event is stamped with the
+moment the recorder says it started, on the same clock as your events' `_client`, so you
+can line the recording up with your trials. `content_type` is filled in from the
+recorder unless you put one in `data`.
+
+The recorder hands over a blob every five seconds; `run.record(recorder, data, {
+timeslice: 2000 })` changes that. A blob every few seconds, rather than one at the very
+end, means that if the tab closes partway through, you keep everything up to the last
+blob.
+
+To record several clips with the camera left on in between, keep one recorder and call
+`run.record()` and `recording.stop()` for each clip. Each clip becomes its own media item
+and its own playable file. (`recorder.pause()` would instead make one long recording
+with the gaps cut out.)
+
+Anything else is three calls:
+
+```javascript
+const image = await run.startMedia({ content_type: blob.type, name: "drawing.png" });
+image.add(blob);
+await image.finish();
+```
+
+**`run.startMedia(data)`** stores an event, with `data` kept the same way as any other
+event's, and resolves with the item. Put the content type in `data`. Pig doesn't look
+at the bytes, so `data` is the only record of what they are.
+
+**`item.add(blob)`** queues bytes, and returns at once, like `run.add()`. Each call's
+bytes are given the next part numbers, in the order you call it, and a blob bigger than
+the task allows in one part is cut into several. Pig stores each part in its own file,
+named by its number, so `cat media/00001/*.part` joins them back into the recording.
+
+**`item.finish()`** says the item is complete. Pig then checks it has every part. An item
+you never finish is still kept, every part of it, and marked as never finished.
+
+Media goes in the run's queue with everything else, in the order you added it, so
+`run.finalize()` waits for every part added before it, and `run.sent()` waits for them
+to reach the server.
+
+If a run expires on the server partway through a recording (a device offline for hours,
+say), the rest of the recording goes to the new run described under "When something goes
+wrong", with its parts keeping their numbers. Neither run then holds the whole recording,
+so neither marks it finished; joining it means taking the parts from both. *Provisional.*
+
 ## Showing progress
 
 ```javascript
@@ -180,11 +244,23 @@ const everything = await pig.pending();                     // every run on this
 const forTask = await pig.pending({ task: "stroop" });      // one task
 ```
 
-`events` and `bytes` are what's still waiting to be sent. To update a progress display as
-things are sent, listen for `progress`:
+`events` and `bytes` are what's still waiting to be sent, media included. To update a
+progress display as things are sent, listen for `progress`:
 
 ```javascript
 pig.events.addEventListener("progress", (e) => show(e.detail.pending));
+```
+
+While a media part uploads, `progress` fires as it goes, with `bytes` counting down. So
+a bar for "sending your recording" at the end of a task is:
+
+```javascript
+await run.finalize();
+const total = (await run.pending()).bytes;
+run.addEventListener("progress", (e) => {
+  bar.value = total === 0 ? 1 : 1 - e.detail.pending.bytes / total;
+});
+await run.sent();
 ```
 
 ## Checking the browser first
@@ -215,7 +291,8 @@ run.addEventListener("error", (e) => console.warn(e.detail.code, e.detail.messag
 
 If Pig refuses an event for good (because it's too big, or reuses an ID), the client keeps
 it on the device rather than dropping it, counts it in `failed`, and carries on with the
-rest. Call `pig.discardFailed()` to throw those away. *Provisional.*
+rest. The same goes for a media part, except that the rest of that item is kept aside
+with it, since later parts can't make it whole. Call `pig.discardFailed()` to throw those away. *Provisional.*
 
 If a run expires on the server while events are still waiting (a device offline for a
 long time, say), the client starts a new run for the same participant and sends them

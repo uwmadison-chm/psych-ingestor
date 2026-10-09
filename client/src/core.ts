@@ -6,10 +6,12 @@
 // on running in a worker in particular.
 //
 // The shape, briefly. Each run has one ordered queue of ops in IndexedDB: start the
-// server run, events, finalize. One sender per run works through that queue from the
-// front, batching consecutive events into one request. Strict order means a finalize
-// can't overtake the events it closes, and being offline is just a sender that can't get
-// past the first op yet.
+// server run, events, media items, finalize. One sender per run works through that
+// queue from the front, batching consecutive events into one request. Strict order
+// means a finalize can't overtake the events and media parts it closes, and being
+// offline is just a sender that can't get past the first op yet. A run's calls are
+// handled one at a time, in the order the page made them (`#inOrder`), so the queue's
+// order is the task's order, and a recording's parts are numbered as they were added.
 //
 // Exactly one page sends for any run, enforced with a Web Lock named for the run. The
 // page that started or resumed a run holds its lock for as long as the page is open. A
@@ -24,9 +26,12 @@ import type {
   ClientInfo,
   LogLevel,
   EventOp,
+  MediaFinishOp,
+  MediaStartOp,
   NewOp,
   Notice,
   Op,
+  PartOp,
   Pending,
   RunRecord,
   RunSummary,
@@ -92,6 +97,8 @@ export class Core {
   senders = new Map<string, Sender>();
   /** Runs this page is sending for only because their own page is gone. */
   orphans = new Set<string>();
+  /** Each run's calls, so they're handled one at a time: run ID → the latest one. */
+  chains = new Map<string, Promise<unknown>>();
   /** Callers waiting for a run's queue to empty: run ID → [resolve] */
   sentWaiters = new Map<string, (() => void)[]>();
   timers: ReturnType<typeof setInterval>[] = [];
@@ -187,10 +194,10 @@ export class Core {
       failed: null,
       created_at: now,
       last_active: now,
+      media: {},
     });
     await this.#hold(id);
-    await this.store.queue(id, () => ({ kind: "start" }));
-    await this.store.queue(id, () => firstEvent(clientInfo, stamp, null));
+    await this.store.queue(id, () => [{ kind: "start" }, firstEvent(clientInfo, stamp, null)]);
     this.log("info", `Started collecting data for task ${task}, run ${id}.`);
 
     // Try to start the server run now, so a refusal reaches the task.
@@ -245,62 +252,149 @@ export class Core {
    * Queue an event. Resolves with its event ID once it's stored in IndexedDB. `stamp` is
    * taken on the page when add() was called.
    */
-  async add(id: string, data: unknown, stamp: Stamp): Promise<string> {
-    const run = await this.#heldRun(id);
-    if (run.finalize_queued) {
-      throw new PigError("finished", `Run ${id} has been finalized, so it can't take more events.`);
-    }
-    if (!isPlainObject(data)) {
-      throw new PigError("bad-event", "An event has to be a plain object, like { type: \"trial\", rt: 843 }.");
-    }
-    if (Object.hasOwn(data, "_client")) {
-      throw new PigError("bad-event", "_client is filled in by the client. Use another name for your field.");
-    }
-    const json = JSON.stringify({ data: { ...data, _client: stamp } });
-    const size = byteLength(json);
-    const limit = run.settings.max_event_size_bytes;
-    if (limit && size > limit) {
-      throw new PigError("too-big", `This event is ${size} bytes, and this task allows ${limit}.`);
-    }
-    const op = await this.store.queue(id, (eventId) => ({ kind: "event", event_id: eventId!, json, bytes: size }), {
-      withEventId: true,
+  add(id: string, data: unknown, stamp: Stamp): Promise<string> {
+    return this.#inOrder(id, async () => {
+      const run = await this.#openRun(id);
+      const json = this.#eventJson(run, data, stamp);
+      const [op] = await this.store.queue(id, (r) => [
+        { kind: "event", event_id: takeEventId(r), json, bytes: byteLength(json) },
+      ]);
+      const eventId = (op as EventOp).event_id;
+      this.log("debug", `Queued event ${eventId} for run ${id}.`);
+      this.#wake(id);
+      return eventId;
     });
-    const eventId = op.kind === "event" ? op.event_id : "";
-    this.log("debug", `Queued event ${eventId} for run ${id}.`);
-    this.#wake(id);
-    return eventId;
   }
 
-  /** Queue the finalize. It's sent after every event queued before it. */
-  async finalize(id: string): Promise<void> {
-    const run = await this.#heldRun(id);
-    if (run.finalize_queued) return;
-    await this.store.updateRun(id, (r) => {
-      r.finalize_queued = true;
+  /** Queue the finalize. It's sent after everything queued before it. */
+  finalize(id: string): Promise<void> {
+    return this.#inOrder(id, async () => {
+      const run = await this.#heldRun(id);
+      if (run.finalize_queued) return;
+      await this.store.queue(id, (r) => {
+        r.finalize_queued = true;
+        return [{ kind: "finalize" }];
+      });
+      this.log("info", `Queued finalize for run ${id}.`);
+      this.#wake(id);
     });
-    await this.store.queue(id, () => ({ kind: "finalize" }));
-    this.log("info", `Queued finalize for run ${id}.`);
-    this.#wake(id);
   }
 
-  /** Resolves once nothing is queued for this run. Never rejects; it just waits. */
+  /**
+   * Resolves once nothing is queued for this run, including anything added before this
+   * was called. Never rejects; it just waits.
+   */
   async sent(id: string): Promise<void> {
     const done = new Promise<void>((resolve) => {
       const waiting = this.sentWaiters.get(id) ?? [];
       waiting.push(resolve);
       this.sentWaiters.set(id, waiting);
     });
-    // Checked after registering, so an emptying that happens in between isn't missed.
-    if ((await this.store.ops(id, 1)).length === 0) this.#settleSent(id);
+    // In line behind earlier calls, so an add() the task didn't await is counted. And
+    // checked after registering, so an emptying that happens in between isn't missed.
+    await this.#inOrder(id, async () => {
+      if ((await this.store.ops(id, 1)).length === 0) this.#settleSent(id);
+    });
     await done;
+  }
+
+  // ------------------------------------------------------------------ media
+
+  /**
+   * Start a media item: an event with bytes attached. Queues the event, and resolves
+   * with its event ID, which names the item from then on.
+   */
+  startMedia(id: string, data: unknown, stamp: Stamp): Promise<string> {
+    return this.#inOrder(id, async () => {
+      const run = await this.#openRun(id);
+      if (!run.settings.media) {
+        throw new PigError(
+          "media-off",
+          `The task ${JSON.stringify(run.task)} isn't set up to take recordings or other files.`,
+        );
+      }
+      // Calls for this run are handled one at a time, so this is the ID it will get.
+      const eventId = String(run.next_event_id);
+      const json = JSON.stringify({ event_id: eventId, data: { ...this.#checkedData(data), _client: stamp } });
+      const size = byteLength(json);
+      const limit = run.settings.max_event_size_bytes;
+      if (limit && size > limit) {
+        throw new PigError("too-big", `This event is ${size} bytes, and this task allows ${limit}.`);
+      }
+      await this.store.queue(id, (r) => {
+        if (takeEventId(r) !== eventId) throw new Error(`Run ${id}'s next event ID changed underneath startMedia().`);
+        r.media[eventId] = {
+          event_id: eventId,
+          server_media_id: null,
+          next_part: 1,
+          finish_queued: false,
+          failed: false,
+          start_json: json,
+          split: false,
+        };
+        return [{ kind: "media-start", event_id: eventId, json, bytes: size }];
+      });
+      this.log("debug", `Queued the start of media item ${eventId} for run ${id}.`);
+      this.#wake(id);
+      return eventId;
+    });
+  }
+
+  /**
+   * Queue a media item's bytes. A blob bigger than the task's largest part is cut into
+   * several parts. Resolves with the part numbers it was given, once they're stored.
+   */
+  addMedia(id: string, eventId: string, blob: unknown): Promise<number[]> {
+    return this.#inOrder(id, async () => {
+      const run = await this.#openRun(id);
+      this.#openMedia(run, eventId);
+      if (!(blob instanceof Blob)) {
+        throw new PigError("bad-media", "Media has to be added as a Blob, like the ones MediaRecorder hands you.");
+      }
+      if (blob.size === 0) return []; // MediaRecorder can hand you empty ones.
+      const partSize = run.settings.media!.max_part_size_bytes;
+      const ops = await this.store.queue(id, (r) => {
+        const item = r.media[eventId];
+        const parts: NewOp[] = [];
+        for (let offset = 0; offset < blob.size; offset += partSize) {
+          const slice = blob.slice(offset, offset + partSize, blob.type);
+          parts.push({ kind: "media-part", event_id: eventId, part: item.next_part, blob: slice, bytes: slice.size });
+          item.next_part += 1;
+        }
+        return parts;
+      });
+      const numbers = ops.map((op) => (op as PartOp).part);
+      this.log("debug", `Queued part(s) ${numbers.join(", ")} of media item ${eventId} for run ${id}.`);
+      this.#wake(id);
+      return numbers;
+    });
+  }
+
+  /** Queue a media item's finish, with the number of parts it was given. */
+  finishMedia(id: string, eventId: string): Promise<void> {
+    return this.#inOrder(id, async () => {
+      const run = await this.#heldRun(id);
+      const item = run.media?.[eventId];
+      if (item === undefined) throw new PigError("not-found", `Run ${id} has no media item ${eventId}.`);
+      if (item.finish_queued) return;
+      if (run.finalize_queued) {
+        throw new PigError("finished", `Run ${id} has been finalized, so its media can't be finished now.`);
+      }
+      await this.store.queue(id, (r) => {
+        r.media[eventId].finish_queued = true;
+        return [{ kind: "media-finish", event_id: eventId, parts: r.media[eventId].next_part - 1 }];
+      });
+      this.log("info", `Queued the finish of media item ${eventId} for run ${id}.`);
+      this.#wake(id);
+    });
   }
 
   // --------------------------------------------------------- what's queued
 
   /**
    * How much is waiting to be sent: for one run, for one task, or for everything on
-   * this device. `failed` counts events the server refused for good; they're kept, but
-   * never sent. `runs` counts runs with anything left to send.
+   * this device. `bytes` includes media. `failed` counts events and media parts the
+   * server refused for good; they're kept, but never sent. `runs` counts runs with anything left to send.
    */
   async pending({ run, task }: { run?: string; task?: string } = {}): Promise<Pending> {
     const runs = await this.store.allRuns();
@@ -311,10 +405,8 @@ export class Core {
     for (const op of await this.store.allOps()) {
       if (!matches(op)) continue;
       withWork.add(op.run);
-      if (op.kind === "event") {
-        counts.events += 1;
-        counts.bytes += op.bytes;
-      }
+      if (op.kind === "event" || op.kind === "media-start") counts.events += 1;
+      if ("bytes" in op) counts.bytes += op.bytes;
     }
     for (const op of await this.store.allFailed()) {
       if (matches(op)) counts.failed += 1;
@@ -323,7 +415,7 @@ export class Core {
     return counts;
   }
 
-  /** Throw away every event the server refused for good. */
+  /** Throw away every event and media part the server refused for good. */
   async discardFailed(): Promise<void> {
     await this.store.discardFailed();
     this.log("info", "Discarded failed events.");
@@ -381,7 +473,7 @@ export class Core {
         await this.store.updateRun(run.id, (r) => {
           r.finalize_queued = true;
         });
-        await this.store.queue(run.id, () => ({ kind: "finalize" }));
+        await this.store.queue(run.id, () => [{ kind: "finalize" }]);
       }
       this.log("info", `Sending what run ${run.id} left behind.`);
       this.#ensureSender(run.id, { orphan: true });
@@ -438,7 +530,7 @@ export class Core {
           return;
         }
         if (orphan) return;
-        await sender.idle(); // until add() or finalize() has something for us
+        await sender.idle(); // until there's something new to send
         continue;
       }
 
@@ -454,6 +546,12 @@ export class Core {
         outcome = await this.#sendStart(run, head);
       } else if (head.kind === "finalize") {
         outcome = await this.#sendFinalize(run, head);
+      } else if (head.kind === "media-start") {
+        outcome = await this.#sendMediaStart(run, head);
+      } else if (head.kind === "media-part") {
+        outcome = await this.#sendPart(run, head);
+      } else if (head.kind === "media-finish") {
+        outcome = await this.#sendMediaFinish(run, head);
       } else {
         const batch = takeBatch(ops, oneAtATime ? 1 : this.options.maxBatchEvents, this.options.maxBatchBytes);
         outcome = await this.#sendEvents(run, batch);
@@ -553,10 +651,100 @@ export class Core {
     return retryable ? "later" : "done";
   }
 
+  async #sendMediaStart(run: RunRecord, op: MediaStartOp): Promise<Attempt> {
+    const reply = await this.http.startMedia(run.server, run.task, run.server_run_id!, op.json);
+    if (!reply.ok && reply.retry) return "later";
+    if (reply.status === 409) return this.#serverRunClosed(run, reply);
+    if (!reply.ok) return this.#mediaRefused(run, op.event_id, reply.message);
+    await this.store.updateRun(run.id, (r) => {
+      r.media[op.event_id].server_media_id = reply.body.media_id;
+    });
+    await this.store.deleteOps([op.seq]);
+    this.log("debug", `Run ${run.id}: media item ${op.event_id} is server media ${reply.body.media_id}.`);
+    return "done";
+  }
+
+  async #sendPart(run: RunRecord, op: PartOp): Promise<Attempt> {
+    const item = run.media[op.event_id];
+    if (item.failed) return this.#keepAside(op, "Part of this media item was refused, so the rest of it is kept here too.");
+    // While the part goes up, say how far it's got, so a progress bar moves smoothly.
+    const before = await this.pending({ run: run.id });
+    const reply = await this.http.sendPart(
+      run.server,
+      run.task,
+      run.server_run_id!,
+      item.server_media_id!,
+      op.part,
+      op.blob,
+      (sentBytes) => {
+        this.notify({ type: "progress", run: run.id, pending: { ...before, bytes: before.bytes - sentBytes } });
+      },
+    );
+    if (!reply.ok && reply.retry) return "later";
+    if (reply.status === 409 && reply.body?.status !== "in_progress") return this.#serverRunClosed(run, reply);
+    if (reply.status === 413) {
+      return this.#mediaRefused(
+        run,
+        op.event_id,
+        `The server said part ${op.part} (${op.bytes} bytes) is too big. The web server in front of Pig may allow less than Pig does; see docs/deployment.md.`,
+      );
+    }
+    if (!reply.ok) return this.#mediaRefused(run, op.event_id, reply.message);
+    await this.store.deleteOps([op.seq]);
+    return "done";
+  }
+
+  async #sendMediaFinish(run: RunRecord, op: MediaFinishOp): Promise<Attempt> {
+    const item = run.media[op.event_id];
+    if (item.failed) return this.#keepAside(op, "Part of this media item was refused, so the rest of it is kept here too.");
+    if (item.split) {
+      // No one server run holds every part, so there's nothing it could check the
+      // count against. Both halves stay unfinished.
+      this.log("info", `Not finishing media item ${op.event_id} of run ${run.id}: it's split between two server runs.`);
+      await this.store.deleteOps([op.seq]);
+      return "done";
+    }
+    const reply = await this.http.finishMedia(run.server, run.task, run.server_run_id!, item.server_media_id!, op.parts);
+    if (!reply.ok && reply.retry) return "later";
+    if (reply.status === 409 && reply.body?.status !== "in_progress") return this.#serverRunClosed(run, reply);
+    if (!reply.ok) return this.#mediaRefused(run, op.event_id, reply.message);
+    await this.store.deleteOps([op.seq]);
+    this.log("info", `Media item ${op.event_id} of run ${run.id} is finished, with ${op.parts} parts.`);
+    return "done";
+  }
+
+  /** Move an op to `failed` without sending it, when its media item has already failed. */
+  async #keepAside(op: Op, reason: string): Promise<"done"> {
+    await this.store.failOps([{ seq: op.seq, reason }]);
+    return "done";
+  }
+
+  /**
+   * The server refused part of a media item for good. Everything still queued for the
+   * item goes to `failed`: later parts can't make it whole, and a finish would be
+   * refused. The rest of the run carries on.
+   */
+  async #mediaRefused(run: RunRecord, eventId: string, message: string): Promise<"done"> {
+    const ops = await this.store.ops(run.id);
+    const own = ops.filter((op) => op.kind.startsWith("media-") && "event_id" in op && op.event_id === eventId);
+    await this.store.failOps(own.map((op) => ({ seq: op.seq, reason: message })));
+    await this.store.updateRun(run.id, (r) => {
+      r.media[eventId].failed = true;
+    });
+    this.log("error", `The server refused media item ${eventId} of run ${run.id} for good: ${message}`);
+    this.notify({ type: "error", run: run.id, code: "media-refused", events: [eventId], message });
+    return "done";
+  }
+
   /**
    * The server run closed under us. If it expired, start a new server run and send the
    * rest there, with a first event naming the run it continues. If it was finalized,
    * nothing more belongs in it: throw away what's left.
+   *
+   * A media item caught partway is started again in the new server run, and its
+   * remaining parts go there with the numbers they already had. If some of its parts
+   * reached the old server run, the item is split between the two: it can't be
+   * finished in either, and joining it means taking the parts from both.
    */
   async #serverRunClosed(run: RunRecord, reply: Outcome): Promise<"done"> {
     const status = reply.body?.status;
@@ -566,31 +754,56 @@ export class Core {
       const leftover = await this.store.ops(run.id);
       const oldFirst = leftover.filter((op) => op.kind === "event" && op.event_id === "0");
       await this.store.deleteOps(oldFirst.map((op) => op.seq));
+
+      const current = await this.#stored(run.id);
+      const restarts: NewOp[] = [];
+      const split: string[] = [];
+      for (const item of Object.values(current.media ?? {})) {
+        if (item.server_media_id === null || item.failed) continue; // Its start is still queued.
+        const ownOps = leftover.filter((op) => op.kind.startsWith("media-") && "event_id" in op && op.event_id === item.event_id);
+        const queuedParts = ownOps.filter((op) => op.kind === "media-part").length;
+        const moreToCome = ownOps.length > 0 || !item.finish_queued;
+        if (!moreToCome) continue; // All of it reached the old server run.
+        restarts.push({ kind: "media-start", event_id: item.event_id, json: item.start_json, bytes: byteLength(item.start_json) });
+        if (queuedParts < item.next_part - 1) split.push(item.event_id);
+      }
+
       const stamp: Stamp = { wall_time: wallTime(), performance_now: null };
-      await this.store.prepend(run.id, [{ kind: "start" }, firstEvent(run.client_info, stamp, run.server_run_id)]);
+      await this.store.prepend(run.id, [
+        { kind: "start" },
+        firstEvent(run.client_info, stamp, run.server_run_id),
+        ...restarts,
+      ]);
       await this.store.updateRun(run.id, (r) => {
         r.server_run_id = null;
         r.run_number = null;
         r.server_started_at = null;
+        for (const item of Object.values(r.media ?? {})) item.server_media_id = null;
+        for (const eventId of split) r.media[eventId].split = true;
       });
+      for (const eventId of split) {
+        this.log("warn", `Media item ${eventId} of run ${run.id} is split: its first parts are in expired server run ${run.server_run_id}.`);
+      }
       this.notify({ type: "run", run: this.summary(await this.#stored(run.id)) });
       return "done";
     }
 
-    const left = (await this.store.ops(run.id)).filter((op) => op.kind === "event");
-    this.log("warn", `Server run ${run.server_run_id} was already finalized; discarding ${left.length} events.`);
     const rest = (await this.store.ops(run.id)).filter((op) => op.kind !== "start");
+    const events = rest.filter((op) => op.kind === "event" || op.kind === "media-start").length;
+    const parts = rest.filter((op) => op.kind === "media-part").length;
+    const what = parts > 0 ? `${events} events and ${parts} media parts` : `${events} events`;
+    this.log("warn", `Server run ${run.server_run_id} was already finalized; discarding ${what}.`);
     await this.store.deleteOps(rest.map((op) => op.seq));
     await this.store.updateRun(run.id, (r) => {
       r.closed = true;
       r.finalize_queued = true;
     });
-    if (left.length > 0) {
+    if (events + parts > 0) {
       this.notify({
         type: "error",
         run: run.id,
         code: "discarded",
-        message: `The server had already finalized this run, so ${left.length} events were thrown away.`,
+        message: `The server had already finalized this run, so ${what} were thrown away.`,
       });
     }
     return "done";
@@ -684,6 +897,66 @@ export class Core {
   #letGo(id: string): void {
     this.held.get(id)?.();
     this.held.delete(id);
+  }
+
+  /**
+   * Run `work` after every earlier call made for this run has finished. The page's
+   * calls arrive in order, but each one waits on IndexedDB, so without this two calls
+   * made back to back could be stored in either order, and a recording's parts must
+   * be numbered in the order they were added.
+   */
+  #inOrder<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.chains.get(id) ?? Promise.resolve();
+    const result = previous.then(work);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.chains.set(id, settled);
+    settled.then(() => {
+      if (this.chains.get(id) === settled) this.chains.delete(id);
+    });
+    return result;
+  }
+
+  /** A run this page holds that can still take events. */
+  async #openRun(id: string): Promise<RunRecord> {
+    const run = await this.#heldRun(id);
+    if (run.finalize_queued) {
+      throw new PigError("finished", `Run ${id} has been finalized, so it can't take more events.`);
+    }
+    run.media ??= {}; // Not there on runs saved by version 0.1.0 of the client.
+    return run;
+  }
+
+  /** The JSON an event is stored as, after checking it's one the server will take. */
+  #eventJson(run: RunRecord, data: unknown, stamp: Stamp): string {
+    const json = JSON.stringify({ data: { ...this.#checkedData(data), _client: stamp } });
+    const size = byteLength(json);
+    const limit = run.settings.max_event_size_bytes;
+    if (limit && size > limit) {
+      throw new PigError("too-big", `This event is ${size} bytes, and this task allows ${limit}.`);
+    }
+    return json;
+  }
+
+  #checkedData(data: unknown): Record<string, unknown> {
+    if (!isPlainObject(data)) {
+      throw new PigError("bad-event", "An event has to be a plain object, like { type: \"trial\", rt: 843 }.");
+    }
+    if (Object.hasOwn(data, "_client")) {
+      throw new PigError("bad-event", "_client is filled in by the client. Use another name for your field.");
+    }
+    return data;
+  }
+
+  /** Check a media item can still take parts. */
+  #openMedia(run: RunRecord, eventId: string): void {
+    const item = run.media[eventId];
+    if (item === undefined) throw new PigError("not-found", `Run ${run.id} has no media item ${eventId}.`);
+    if (item.finish_queued) {
+      throw new PigError("finished", `Media item ${eventId} has been finished, so it can't take more parts.`);
+    }
   }
 
   async #heldRun(id: string): Promise<RunRecord> {
@@ -789,6 +1062,13 @@ function firstEvent(clientInfo: ClientInfo, stamp: Stamp, continues: string | nu
   if (continues) _client.continues_run = continues;
   const json = JSON.stringify({ data: { _client } });
   return { kind: "event", event_id: "0", json, bytes: byteLength(json) };
+}
+
+/** Take the run's next event ID. Called inside Store.queue's transaction. */
+function takeEventId(run: RunRecord): string {
+  const eventId = String(run.next_event_id);
+  run.next_event_id += 1;
+  return eventId;
 }
 
 function checkParameters(settings: TaskSettings, parameters: TaskParameters): void {
