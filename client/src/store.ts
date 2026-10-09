@@ -1,13 +1,14 @@
 // The queue, kept in IndexedDB so it survives a closed tab, a reload, or a dead battery.
 //
-// Three object stores:
+// Four object stores:
 //
 //   settings  One task's settings, as GET /task/{code} last returned them, keyed by
 //             server and task code. Used when the device is offline.
 //   runs      One record per run this browser started. The record outlives any one
 //             page: a run can be resumed on the next page, or finished by a later visit.
 //   ops       What still has to reach the server, in order: start the run, events,
-//             finalize. Each op is deleted only once the server has confirmed it.
+//             media items (a start, parts as Blobs, a finish), finalize. Each op is
+//             deleted only once the server has confirmed it.
 //   failed    Ops the server refused for good (`can_retry: false`). Moved out of `ops`
 //             so they don't block what's behind them, and kept, because dropping a
 //             participant's data silently is the one thing the client must not do.
@@ -111,33 +112,30 @@ export class Store {
   // --------------------------------------------------------------------- ops
 
   /**
-   * Queue an op for a run. If `withEventId` is true, the run's event counter is read,
-   * given to the op as its `event_id`, and advanced, all in the same transaction as the
-   * op is written. So an event ID is never handed out twice, and never handed out for
-   * an event that wasn't stored.
+   * Queue ops for a run. `build` gets the run's record and returns the ops to store,
+   * and may change the record while it does: take the next event ID, or note a media
+   * item's next part number. The changed record and the ops are written in one
+   * transaction, so a number is never handed out twice, and never handed out for
+   * something that wasn't stored.
    *
-   * `build` gets the event ID (or undefined) and returns the op to store. Resolves with
-   * the stored op, with its `seq`.
+   * Resolves with the stored ops, each with its `seq`.
    */
-  queue(
-    runId: string,
-    build: (eventId: string | undefined) => NewOp,
-    { withEventId = false } = {},
-  ): Promise<Op> {
+  queue(runId: string, build: (run: RunRecord) => NewOp[]): Promise<Op[]> {
     return this.#transaction(["runs", "ops"], "readwrite", async (t) => {
       const runs = t.objectStore("runs");
       const run = await settle<RunRecord | undefined>(runs.get(runId));
       if (run === undefined) throw new Error(`There's no run ${runId} on this device.`);
-      let eventId: string | undefined;
-      if (withEventId) {
-        eventId = String(run.next_event_id);
-        run.next_event_id += 1;
-      }
+      run.media ??= {}; // Not there on runs saved by version 0.1.0 of the client.
+      const built = build(run);
       run.last_active = Date.now();
       runs.put(run);
-      const op = { ...build(eventId), run: runId };
-      const seq = await settle<number>(t.objectStore("ops").add(op));
-      return { ...op, seq };
+      const stored: Op[] = [];
+      for (const newOp of built) {
+        const op = { ...newOp, run: runId };
+        const seq = await settle<number>(t.objectStore("ops").add(op));
+        stored.push({ ...op, seq });
+      }
+      return stored;
     });
   }
 

@@ -16,12 +16,23 @@ interface FakeTask {
   parameters: string[];
   open: boolean;
   max_event_size_bytes: number;
+  /** The largest media part, for a task that takes media. */
+  max_part_size?: number;
+}
+
+interface FakeMedia {
+  event_id: string;
+  /** Part number → its bytes, as text. */
+  parts: Map<number, string>;
+  finished: boolean;
 }
 
 interface FakeRun {
   status: string;
   events: Map<string, string>;
   parameters: TaskParameters;
+  /** Media ID → item. */
+  media: Map<number, FakeMedia>;
 }
 
 interface Request {
@@ -52,7 +63,7 @@ export class FakePig {
   async fetch(url: string | URL | globalThis.Request, init: RequestInit = {}): Promise<Response> {
     const { pathname } = new URL(String(url));
     const method = init.method ?? "GET";
-    const body = init.body as string | undefined;
+    const body = init.body instanceof Blob ? await init.body.text() : (init.body as string | undefined);
     this.requests.push({ method, path: pathname, body });
     if (this.offline) throw new TypeError("Failed to fetch");
     const intercepted = this.intercept?.(method, pathname, body);
@@ -67,6 +78,19 @@ export class FakePig {
   /** The events the server holds for a run, as { id: data }. */
   stored(runId: string): Record<string, any> {
     return Object.fromEntries([...this.run(runId).events].map(([id, text]) => [id, JSON.parse(text)]));
+  }
+
+  /** A run's media item, by the event ID it was started with. */
+  media(runId: string, eventId: string): FakeMedia | undefined {
+    return [...this.run(runId).media.values()].find((item) => item.event_id === eventId);
+  }
+
+  /** A media item's parts, joined in part order, the way `cat` would. */
+  joined(item: FakeMedia): string {
+    return [...item.parts.keys()]
+      .sort((a, b) => a - b)
+      .map((n) => item.parts.get(n))
+      .join("");
   }
 
   /** Requests of one kind, like "events" or "start". */
@@ -85,6 +109,55 @@ export class FakePig {
     this.run(runId).status = "expired";
   }
 
+  /** The media requests: start, a part, finish. `rest` is what follows /media. */
+  #media(method: string, task: FakeTask, record: FakeRun, rest: string[], body?: string): Answer {
+    if (!task.max_part_size) return { status: 404, body: { message: "This task isn't set up to take media." } };
+    const closed = () => ({ status: 409, body: { status: record.status, errors: { run: { message: "Closed.", can_retry: true } } } });
+
+    if (rest.length === 0) {
+      const { event_id, data } = JSON.parse(body!);
+      if (record.status !== "in_progress") return closed();
+      const text = JSON.stringify(data);
+      const existing = [...record.media.entries()].find(([, item]) => item.event_id === event_id);
+      if (existing && record.events.get(event_id) === text) {
+        return { status: 200, body: { media_id: existing[0], max_part_size: task.max_part_size } };
+      }
+      if (record.events.has(event_id)) {
+        return { status: 422, body: { status: "in_progress", errors: { [event_id]: { message: "Already have a different one.", can_retry: false } } } };
+      }
+      const mediaId = record.media.size + 1;
+      record.events.set(event_id, text);
+      record.media.set(mediaId, { event_id, parts: new Map(), finished: false });
+      return { status: 201, body: { media_id: mediaId, max_part_size: task.max_part_size } };
+    }
+
+    const item = record.media.get(Number(rest[0]));
+    if (!item) return { status: 404, body: { message: "There's no such media item." } };
+    const summary = () => ({ status: record.status, media: { stored: [...item.parts.keys()].sort((a, b) => a - b), finished: item.finished } });
+
+    if (rest[1] === "finish") {
+      if (record.status !== "in_progress") return closed();
+      const { parts } = JSON.parse(body!);
+      const held = [...item.parts.keys()];
+      if (held.length !== parts || held.some((n) => n > parts)) {
+        return { status: 422, body: { ...summary(), errors: { media: { message: "Wrong count.", can_retry: false } } } };
+      }
+      item.finished = true;
+      return { status: 200, body: summary() };
+    }
+
+    const part = Number(rest[1]);
+    if (record.status !== "in_progress") return closed();
+    if (item.finished) return { status: 409, body: { ...summary(), errors: { [part]: { message: "Finished.", can_retry: false } } } };
+    if ((body ?? "").length > task.max_part_size) return { status: 413, body: { message: "Too big." } };
+    const known = item.parts.get(part);
+    if (known !== undefined && known !== body) {
+      return { status: 422, body: { ...summary(), errors: { [part]: { message: "A different part.", can_retry: false } } } };
+    }
+    item.parts.set(part, body ?? "");
+    return { status: known === undefined ? 201 : 200, body: summary() };
+  }
+
   #route(method: string, parts: string[], body?: string): Answer {
     const [, code, run, runId, action] = parts; // task, {code}, run, {run_id}, finalize
     const task = this.tasks[code];
@@ -99,7 +172,7 @@ export class FakePig {
           parameters: task.parameters,
           expires_after_sec: 86400,
           max_event_size_bytes: task.max_event_size_bytes,
-          media: null,
+          media: task.max_part_size ? { max_part_size_bytes: task.max_part_size } : null,
         },
       };
     }
@@ -109,13 +182,15 @@ export class FakePig {
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
       const id = `run-${this.runs.size + 1}`;
-      this.runs.set(id, { status: "in_progress", events: new Map(), parameters });
+      this.runs.set(id, { status: "in_progress", events: new Map(), parameters, media: new Map() });
       return { status: 201, body: { run_id: id, run_number: this.runs.size } };
     }
 
     const record = this.runs.get(runId!);
     if (!record) return { status: 404, body: { message: "There's no such run." } };
     const stored = () => [...record.events.keys()];
+
+    if (action === "media") return this.#media(method, task, record, parts.slice(5), body);
 
     if (action === "finalize") {
       if (record.status === "in_progress") record.status = "finalizing";
@@ -149,6 +224,8 @@ export class FakePig {
 function requestKind({ method, path }: Request): string {
   const parts = path.split("/").filter(Boolean);
   if (method === "GET") return "settings";
+  if (method === "PUT") return "part";
+  if (parts[4] === "media") return parts.length === 5 ? "media-start" : "media-finish";
   if (parts.length === 3) return "start";
   if (parts.length === 5) return "finalize";
   return "events";

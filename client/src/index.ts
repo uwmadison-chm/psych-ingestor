@@ -197,6 +197,19 @@ export class Run extends EventTarget {
     return queued;
   }
 
+  /**
+   * Start a media item: a recording, an image, or any other file. It's an event like
+   * any other, with `data` stored the same way, and bytes attached with the item's
+   * add(). Record the content type in `data`; nothing else knows how to play it.
+   * Resolves once the event is stored on this device. Refused if the task isn't set
+   * up to take media.
+   */
+  async startMedia(data: Record<string, unknown>): Promise<Media> {
+    const stamp = timeStamp();
+    const eventId = (await this.#connection.call("startMedia", this.id, data, stamp)) as string;
+    return new Media(this.#connection, this.id, eventId);
+  }
+
   /** Finalize the run, after everything already added. Resolves once that's queued. */
   async finalize(): Promise<void> {
     await this.#connection.call("finalize", this.id);
@@ -213,6 +226,60 @@ export class Run extends EventTarget {
   /** How much of this run is still waiting to be sent. */
   pending(): Promise<Pending> {
     return this.#connection.call("pending", { run: this.id }) as Promise<Pending>;
+  }
+}
+
+/** One media item. Get one from run.startMedia(). */
+export class Media {
+  #connection: Connection;
+  #run: string;
+  /** The item's event ID, the one its start was stored under. */
+  readonly eventId: string;
+
+  constructor(connection: Connection, run: string, eventId: string) {
+    this.#connection = connection;
+    this.#run = run;
+    this.eventId = eventId;
+  }
+
+  /**
+   * Queue some of the item's bytes. Returns at once, like run.add(); the promise
+   * resolves once they're stored on this device, with the part numbers they were
+   * given. Parts are numbered in the order you call this, so the stored parts join
+   * back together in that order. A blob too big for one part becomes several.
+   */
+  add(blob: Blob): Promise<number[]> {
+    const queued = this.#connection.call("addMedia", this.#run, this.eventId, blob) as Promise<number[]>;
+    queued.catch((error: PigError) =>
+      this.#connection.report({ type: "error", run: this.#run, code: error.code, message: error.message }),
+    );
+    return queued;
+  }
+
+  /** Say the item is complete. Resolves once that's queued, after everything added. */
+  async finish(): Promise<void> {
+    await this.#connection.call("finishMedia", this.#run, this.eventId);
+  }
+
+  /**
+   * Send everything a MediaRecorder records to this item, and finish the item when
+   * the recorder stops. Start the recorder with a timeslice, like recorder.start(5000),
+   * so it hands over a blob every few seconds rather than one at the end.
+   */
+  record(recorder: MediaRecorder): void {
+    const add = (event: BlobEvent) => this.add(event.data);
+    recorder.addEventListener("dataavailable", add);
+    recorder.addEventListener(
+      "stop",
+      () => {
+        // The last dataavailable always comes before stop.
+        recorder.removeEventListener("dataavailable", add);
+        this.finish().catch((error: PigError) =>
+          this.#connection.report({ type: "error", run: this.#run, code: error.code, message: error.message }),
+        );
+      },
+      { once: true },
+    );
   }
 }
 
