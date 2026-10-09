@@ -102,6 +102,41 @@ await fetch(`${PIG}/task/${TASK}/run/${run_id}`, {
 await fetch(`${PIG}/task/${TASK}/run/${run_id}/finalize`, { method: "POST" });
 ```
 
+## Reading a task's settings
+
+### `GET /task/{task_code}`
+
+You don't need this to record data. It's for a task that wants to check its own settings
+before it starts a run: which link parameters to expect, how big an event can be, whether
+it may send media. The JavaScript client uses it so it can start a run while offline.
+
+```json
+{
+  "task_code": "stroop",
+  "open": true,
+  "parameters": ["participant_id", "session"],
+  "expires_after_sec": 86400,
+  "max_event_size_bytes": 1048576,
+  "accepts_media": false,
+  "max_part_size_bytes": 8388608
+}
+```
+
+| Field | Means |
+| --- | --- |
+| `open` | Whether Pig will start new runs for this task. |
+| `parameters` | The link parameters a run needs. |
+| `expires_after_sec` | How long a run may stay open, in seconds, counted from when it started. See [When a run expires](#when-a-run-expires). |
+| `max_event_size_bytes` | The biggest event Pig will store, in bytes, measured as JSON. |
+| `accepts_media` | Whether this task may send audio, video, and other files. |
+| `max_part_size_bytes` | The biggest media part Pig will store, in bytes. Only matters if `accepts_media` is true. |
+
+A closed task gives the same answer with `"open": false`. Runs already going keep going
+when a task closes, and they still need the rest of these settings. If there's no task by
+that name, you get `404 Not Found`.
+
+Anyone can read this. Everything in it is something your task could learn by trying.
+
 ## Starting a run
 
 ### `POST /task/{task_code}/run`

@@ -52,6 +52,38 @@ def test_an_unknown_task_is_a_404(client: TestClient):
     assert client.post("/task/nope/run", json=BASELINE).status_code == 404
 
 
+def test_reading_a_tasks_settings(client: TestClient):
+    described = client.get("/task/stroop")
+    assert described.status_code == 200
+    assert described.json() == {
+        "task_code": "stroop",
+        "open": True,
+        "parameters": ["participant_id", "session"],
+        "expires_after_sec": 86400,
+        "max_event_size_bytes": 1048576,
+        "accepts_media": False,
+        "max_part_size_bytes": 8388608,
+    }
+
+
+def test_a_media_tasks_settings_give_its_part_size(client: TestClient):
+    described = client.get("/task/interview").json()
+    assert described["accepts_media"] is True
+    assert described["max_part_size_bytes"] == 1024
+
+
+def test_a_closed_task_gives_its_settings_too(client: TestClient):
+    """Closing refuses new runs only. The runs still going need the rest."""
+    described = client.get("/task/balloons")
+    assert described.status_code == 200
+    assert described.json()["open"] is False
+    assert described.json()["parameters"] == ["participant_id"]
+
+
+def test_settings_for_an_unknown_task_are_a_404(client: TestClient):
+    assert client.get("/task/nope").status_code == 404
+
+
 def test_an_unknown_run_is_a_404(client: TestClient):
     assert client.get("/task/stroop/run/no-such-run").status_code == 404
 

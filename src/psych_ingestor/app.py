@@ -57,6 +57,11 @@ def create_app(config_path: Path) -> FastAPI:
             status_code=problem.status_code, content={"message": problem.message}
         )
 
+    @app.get("/task/{task_code}")
+    def describe_task(task_code: str) -> JSONResponse:
+        with _pig(source) as pig:
+            return JSONResponse(content=pig.describe_task(task_code))
+
     @app.post("/task/{task_code}/run")
     def start_run(task_code: str, parameters: dict[str, Any]) -> JSONResponse:
         with _pig(source) as pig:
