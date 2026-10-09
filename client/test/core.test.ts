@@ -3,10 +3,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
 
-import { eventually, FakeLocks, FakePig, makeCore, PARAMETERS, SERVER, STAMP, startRun } from "./helpers.js";
+import { eventually, FakeLocks, FakePig, makeCore, PARAMETERS, SERVER, STAMP, startRun } from "./helpers.ts";
 
-const cores = [];
-async function setUp(options) {
+type Made = Awaited<ReturnType<typeof makeCore>>;
+const cores: Made[] = [];
+async function setUp(options: Parameters<typeof makeCore>[0]): Promise<Made> {
   const made = await makeCore(options);
   cores.push(made);
   return made;
@@ -25,7 +26,7 @@ describe("a run while online", () => {
     const run = await startRun(core);
     assert.equal(run.runId, "run-1");
     assert.equal(run.runNumber, 1);
-    assert.deepEqual(pig.runs.get("run-1").parameters, PARAMETERS);
+    assert.deepEqual(pig.run("run-1").parameters, PARAMETERS);
   });
 
   test("sends the client's first event, then the task's, then finalizes", async () => {
@@ -43,7 +44,7 @@ describe("a run while online", () => {
     assert.equal(stored["0"]._client.event, "run_start");
     assert.equal(stored["0"]._client.user_agent, "test");
     assert.deepEqual(stored["1"], { type: "trial", rt: 843, _client: STAMP });
-    assert.equal(pig.runs.get("run-1").status, "finalizing");
+    assert.equal(pig.run("run-1").status, "finalizing");
     await eventually(async () => (await store.run(run.id)) === undefined, { what: "the finished run to be forgotten" });
   });
 
@@ -62,7 +63,7 @@ describe("a run while online", () => {
   test("refuses a link that's missing a parameter, before asking the server", async () => {
     const pig = new FakePig();
     const { core } = await setUp({ pig });
-    await assert.rejects(startRun(core, { parameters: { participant_id: "10351" } }), (error) => {
+    await assert.rejects(startRun(core, { parameters: { participant_id: "10351" } }), (error: any) => {
       assert.equal(error.code, "parameters");
       assert.match(error.message, /session is missing/);
       return true;
@@ -81,7 +82,7 @@ describe("a run while online", () => {
     const pig = new FakePig();
     const { core } = await setUp({ pig });
     await startRun(core, { parameters: { ...PARAMETERS, utm_source: "email" } });
-    assert.equal(pig.runs.get("run-1").parameters.utm_source, "email");
+    assert.equal(pig.run("run-1").parameters.utm_source, "email");
   });
 });
 
@@ -135,7 +136,7 @@ describe("offline", () => {
     await core.sent(run.id);
 
     assert.deepEqual(Object.keys(pig.stored("run-2")), ["0", "1", "2", "3", "4", "5"]);
-    assert.equal(pig.runs.get("run-2").status, "finalizing");
+    assert.equal(pig.run("run-2").status, "finalizing");
   });
 
   test("batches what built up into one request", async () => {
@@ -152,7 +153,7 @@ describe("offline", () => {
     await core.sent(run.id);
     const batches = pig.sent("events").filter((r) => r.path.includes("run-2"));
     assert.equal(batches.length, 1);
-    assert.equal(Object.keys(JSON.parse(batches[0].body)).length, 31);
+    assert.equal(Object.keys(JSON.parse(batches[0].body!)).length, 31);
   });
 
   test("can't start a task this device has never seen", async () => {
@@ -193,15 +194,15 @@ describe("refusals", () => {
     const run = await startRun(core);
     await core.sent(run.id);
     // Make the server already hold a different event 1, so ours collides.
-    pig.runs.get("run-1").events.set("1", JSON.stringify({ something: "else" }));
+    pig.run("run-1").events.set("1", JSON.stringify({ something: "else" }));
 
     await core.add(run.id, { trial: 1 }, STAMP);
     await core.add(run.id, { trial: 2 }, STAMP);
     await core.sent(run.id);
 
-    assert.deepEqual(JSON.parse(pig.runs.get("run-1").events.get("2")).trial, 2);
+    assert.deepEqual(JSON.parse(pig.run("run-1").events.get("2")!).trial, 2);
     const refusal = notes.find((n) => n.type === "error" && n.code === "event-refused");
-    assert.deepEqual(refusal.events, ["1"]);
+    assert.deepEqual(refusal?.type === "error" && refusal.events, ["1"]);
     assert.deepEqual(await core.pending({ run: run.id }), { events: 0, bytes: 0, failed: 1, runs: 0 });
 
     await core.discardFailed();
@@ -241,7 +242,7 @@ describe("closed server runs", () => {
     const continued = pig.stored("run-2");
     assert.equal(continued["0"]._client.continues_run, "run-1");
     assert.equal(continued["2"].trial, 2);
-    assert.deepEqual(pig.runs.get("run-2").parameters, PARAMETERS);
+    assert.deepEqual(pig.run("run-2").parameters, PARAMETERS);
     assert.ok(notes.some((n) => n.type === "run" && n.run.runId === "run-2"));
   });
 
@@ -262,7 +263,7 @@ describe("closed server runs", () => {
     const { core, notes } = await setUp({ pig });
     const run = await startRun(core);
     await core.sent(run.id);
-    pig.runs.get("run-1").status = "finalizing";
+    pig.run("run-1").status = "finalizing";
     await core.add(run.id, { trial: 1 }, STAMP);
     await core.sent(run.id);
     assert.equal(pig.runs.size, 1);
@@ -317,7 +318,7 @@ describe("pages", () => {
     const later = await setUp({ pig, locks, factory: first.factory });
     await later.core.sweep();
     await eventually(() => pig.runs.get("run-2")?.events.size === 2, { what: "the leftovers to be sent" });
-    assert.equal(pig.runs.get("run-2").status, "in_progress");
+    assert.equal(pig.run("run-2").status, "in_progress");
   });
 
   test("an abandoned run that asked for it is finalized by a later page", async () => {
@@ -331,11 +332,11 @@ describe("pages", () => {
 
     const later = await setUp({ pig, locks, factory: first.factory });
     await later.core.sweep(); // too soon: it might be about to be resumed
-    assert.equal(pig.runs.get("run-1").status, "in_progress");
+    assert.equal(pig.run("run-1").status, "in_progress");
 
     await new Promise((r) => setTimeout(r, 120));
     await later.core.sweep();
-    await eventually(() => pig.runs.get("run-1").status === "finalizing", { what: "the abandoned run to be finalized" });
+    await eventually(() => pig.run("run-1").status === "finalizing", { what: "the abandoned run to be finalized" });
   });
 
   test("a run whose page is still open isn't treated as abandoned", async () => {
@@ -349,7 +350,7 @@ describe("pages", () => {
     await new Promise((r) => setTimeout(r, 150));
     await other.core.sweep();
     await new Promise((r) => setTimeout(r, 30));
-    assert.equal(pig.runs.get("run-1").status, "in_progress");
+    assert.equal(pig.run("run-1").status, "in_progress");
   });
 });
 

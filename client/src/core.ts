@@ -17,8 +17,24 @@
 // client picks up orphans and sends what they have left, and, if the task asked for it,
 // finalizes the ones that were abandoned. See `sweep()`.
 
-import { PigError, wallTime } from "./shared.js";
-import { CLIENT_VERSION } from "./version.js";
+import type { Http, Outcome } from "./http.ts";
+import { PigError, wallTime } from "./shared.ts";
+import type { Store } from "./store.ts";
+import type {
+  ClientInfo,
+  LogLevel,
+  EventOp,
+  NewOp,
+  Notice,
+  Op,
+  Pending,
+  RunRecord,
+  RunSummary,
+  Stamp,
+  TaskParameters,
+  TaskSettings,
+} from "./types.ts";
+import { CLIENT_VERSION } from "./version.ts";
 
 export { PigError };
 
@@ -52,45 +68,67 @@ export const DEFAULTS = {
   startWaitMs: 5_000,
 };
 
+export type Timing = typeof DEFAULTS;
+
+/** The part of Web Locks the client uses. */
+export interface Locks {
+  request(name: string, options: LockOptions, callback: (lock: Lock | null) => unknown): Promise<unknown>;
+}
+
+/** What a sender's attempt at the op at the front of the queue came to. */
+type Attempt = "done" | "later" | "refused" | "too-big";
+
 export class Core {
-  /**
-   * @param {object} deps
-   * @param {import("./store.js").Store} deps.store
-   * @param {ReturnType<typeof import("./http.js").makeHttp>} deps.http
-   * @param {LockManager} deps.locks
-   * @param {(message: object) => void} [deps.notify] tells the page about progress and errors
-   * @param {(level: string, ...args: unknown[]) => void} [deps.log]
-   * @param {Partial<typeof DEFAULTS>} [deps.options]
-   */
-  constructor({ store, http, locks, notify = () => {}, log = () => {}, options = {} }) {
+  store: Store;
+  http: Http;
+  locks: Locks;
+  /** Tells the page about progress and errors. */
+  notify: (message: Notice) => void;
+  log: (level: LogLevel, ...parts: unknown[]) => void;
+  options: Timing;
+  /** Runs this page holds the lock for: run ID → function that lets go of it. */
+  held = new Map<string, () => void>();
+  /** Runs with a sender working on them. */
+  senders = new Map<string, Sender>();
+  /** Runs this page is sending for only because their own page is gone. */
+  orphans = new Set<string>();
+  /** Callers waiting for a run's queue to empty: run ID → [resolve] */
+  sentWaiters = new Map<string, (() => void)[]>();
+  timers: ReturnType<typeof setInterval>[] = [];
+  closed = false;
+
+  constructor({
+    store,
+    http,
+    locks,
+    notify = () => {},
+    log = () => {},
+    options = {},
+  }: {
+    store: Store;
+    http: Http;
+    locks: Locks;
+    notify?: (message: Notice) => void;
+    log?: (level: LogLevel, ...parts: unknown[]) => void;
+    options?: Partial<Timing>;
+  }) {
     this.store = store;
     this.http = http;
     this.locks = locks;
     this.notify = notify;
     this.log = log;
     this.options = { ...DEFAULTS, ...options };
-
-    /** Runs this page holds the lock for: run ID → function that lets go of it. */
-    this.held = new Map();
-    /** Runs with a sender working on them: run ID → { wake } */
-    this.senders = new Map();
-    /** Runs this page is sending for only because their own page is gone. */
-    this.orphans = new Set();
-    /** Callers waiting for a run's queue to empty: run ID → [resolve] */
-    this.sentWaiters = new Map();
-    this.timers = [];
-    this.closed = false;
   }
 
   /** Start the background work: looking for orphaned runs, now and every so often. */
-  begin() {
+  begin(): Promise<void> {
     this.#every(this.options.sweepMs, () => this.sweep());
     this.#every(this.options.heartbeatMs, () => this.#heartbeat());
     return this.sweep();
   }
 
   /** Stop everything and let go of every run. Used by the tests. */
-  async close() {
+  async close(): Promise<void> {
     this.closed = true;
     for (const timer of this.timers) clearInterval(timer);
     for (const sender of this.senders.values()) sender.wake();
@@ -105,15 +143,24 @@ export class Core {
    * returns, so a closed task or a bad link fails here, where the task can tell the
    * participant. Offline, the run starts locally and the server run starts later.
    *
-   * @param {object} request
-   * @param {string} request.server
-   * @param {string} request.task
-   * @param {Record<string, string>} request.parameters
-   * @param {boolean} [request.finalizeWhenAbandoned]
-   * @param {object} request.clientInfo  what the page knows about itself, for the first event
-   * @param {object} request.stamp       { wall_time, performance_now } at the moment start() was called
+   * `clientInfo` is what the page knows about itself, for the first event; `stamp` is
+   * when start() was called.
    */
-  async start({ server, task, parameters, finalizeWhenAbandoned = false, clientInfo, stamp }) {
+  async start({
+    server,
+    task,
+    parameters,
+    finalizeWhenAbandoned = false,
+    clientInfo,
+    stamp,
+  }: {
+    server: string;
+    task: string;
+    parameters: TaskParameters;
+    finalizeWhenAbandoned?: boolean;
+    clientInfo: ClientInfo;
+    stamp: Stamp;
+  }): Promise<RunSummary> {
     const settings = await this.#settings(server, task);
     if (!settings.open) {
       throw new PigError("task-closed", `The task ${JSON.stringify(task)} isn't accepting new runs right now.`);
@@ -147,26 +194,26 @@ export class Core {
     this.log("info", `Started run ${id} for task ${task}.`);
 
     // Try to start the server run now, so a refusal reaches the task.
-    const run = await this.store.run(id);
+    const run = await this.#stored(id);
     const [startOp] = await this.store.ops(id, 1);
     const outcome = await this.#sendStart(run, startOp, this.options.startWaitMs);
     if (outcome === "refused") {
-      const failed = (await this.store.run(id)).failed;
+      const failed = (await this.#stored(id)).failed ?? { code: "refused", message: "The server refused the run." };
       await this.store.deleteRun(id);
       this.#letGo(id);
       throw new PigError(failed.code, failed.message);
     }
     if (outcome === "later") this.log("info", `Couldn't reach ${server}; run ${id} will start on the server once it can.`);
     this.#ensureSender(id);
-    return this.summary(await this.store.run(id));
+    return this.summary(await this.#stored(id));
   }
 
   /**
    * Pick up a run this page or an earlier one started. Waits a few seconds for another
    * page to let go of it, which is what happens while a task moves between pages.
    */
-  async resume(id) {
-    if (this.held.has(id)) return this.summary(await this.store.run(id));
+  async resume(id: string): Promise<RunSummary> {
+    if (this.held.has(id)) return this.summary(await this.#stored(id));
     const run = await this.store.run(id);
     if (run === undefined) {
       throw new PigError("not-found", `There's no run ${id} on this device. It may have finished already.`);
@@ -195,12 +242,10 @@ export class Core {
   // ------------------------------------------------------------------ events
 
   /**
-   * Queue an event. Resolves with its event ID once it's stored in IndexedDB.
-   * @param {string} id
-   * @param {object} data
-   * @param {object} stamp  { wall_time, performance_now }, taken on the page when add() was called
+   * Queue an event. Resolves with its event ID once it's stored in IndexedDB. `stamp` is
+   * taken on the page when add() was called.
    */
-  async add(id, data, stamp) {
+  async add(id: string, data: unknown, stamp: Stamp): Promise<string> {
     const run = await this.#heldRun(id);
     if (run.finalize_queued) {
       throw new PigError("finished", `Run ${id} has been finalized, so it can't take more events.`);
@@ -217,16 +262,17 @@ export class Core {
     if (limit && size > limit) {
       throw new PigError("too-big", `This event is ${size} bytes, and this task allows ${limit}.`);
     }
-    const op = await this.store.queue(id, (eventId) => ({ kind: "event", event_id: eventId, json, bytes: size }), {
+    const op = await this.store.queue(id, (eventId) => ({ kind: "event", event_id: eventId!, json, bytes: size }), {
       withEventId: true,
     });
-    this.log("debug", `Queued event ${op.event_id} for run ${id}.`);
+    const eventId = op.kind === "event" ? op.event_id : "";
+    this.log("debug", `Queued event ${eventId} for run ${id}.`);
     this.#wake(id);
-    return op.event_id;
+    return eventId;
   }
 
   /** Queue the finalize. It's sent after every event queued before it. */
-  async finalize(id) {
+  async finalize(id: string): Promise<void> {
     const run = await this.#heldRun(id);
     if (run.finalize_queued) return;
     await this.store.updateRun(id, (r) => {
@@ -238,8 +284,8 @@ export class Core {
   }
 
   /** Resolves once nothing is queued for this run. Never rejects; it just waits. */
-  async sent(id) {
-    const done = new Promise((resolve) => {
+  async sent(id: string): Promise<void> {
+    const done = new Promise<void>((resolve) => {
       const waiting = this.sentWaiters.get(id) ?? [];
       waiting.push(resolve);
       this.sentWaiters.set(id, waiting);
@@ -256,10 +302,10 @@ export class Core {
    * this device. `failed` counts events the server refused for good; they're kept, but
    * never sent. `runs` counts runs with anything left to send.
    */
-  async pending({ run, task } = {}) {
+  async pending({ run, task }: { run?: string; task?: string } = {}): Promise<Pending> {
     const runs = await this.store.allRuns();
     const runTask = new Map(runs.map((r) => [r.id, r.task]));
-    const matches = (op) => (run === undefined || op.run === run) && (task === undefined || runTask.get(op.run) === task);
+    const matches = (op: Op) => (run === undefined || op.run === run) && (task === undefined || runTask.get(op.run) === task);
     const counts = { events: 0, bytes: 0, failed: 0, runs: 0 };
     const withWork = new Set();
     for (const op of await this.store.allOps()) {
@@ -278,13 +324,13 @@ export class Core {
   }
 
   /** Throw away every event the server refused for good. */
-  async discardFailed() {
+  async discardFailed(): Promise<void> {
     await this.store.discardFailed();
     this.log("info", "Discarded failed events.");
   }
 
   /** Something changed that might let a waiting sender succeed: try again now. */
-  nudge() {
+  nudge(): void {
     for (const sender of this.senders.values()) sender.wake();
   }
 
@@ -295,7 +341,7 @@ export class Core {
    * still queued, and finalize the ones that asked for it once they're abandoned.
    * Also forgets runs with nothing left to send whose server run has certainly expired.
    */
-  async sweep() {
+  async sweep(): Promise<void> {
     if (this.closed) return;
     const runs = await this.store.allRuns();
     const allOps = await this.store.allOps();
@@ -344,7 +390,7 @@ export class Core {
 
   // ---------------------------------------------------------------- sending
 
-  #ensureSender(id, { orphan = false } = {}) {
+  #ensureSender(id: string, { orphan = false } = {}): void {
     if (this.senders.has(id) || this.closed) return;
     const sender = new Sender();
     this.senders.set(id, sender);
@@ -364,7 +410,7 @@ export class Core {
   }
 
   /** There's new work for this run's sender. Doesn't cut short a wait after a failure. */
-  #wake(id) {
+  #wake(id: string): void {
     this.senders.get(id)?.newWork();
   }
 
@@ -373,7 +419,7 @@ export class Core {
    * An orphaned run's sender stops when the queue is empty; the page's own runs' senders
    * wait for more.
    */
-  async #sendLoop(id, sender, orphan) {
+  async #sendLoop(id: string, sender: Sender, orphan: boolean): Promise<void> {
     let failures = 0;
     let oneAtATime = false;
 
@@ -403,7 +449,7 @@ export class Core {
       }
 
       const head = ops[0];
-      let outcome;
+      let outcome: Attempt;
       if (head.kind === "start") {
         outcome = await this.#sendStart(run, head);
       } else if (head.kind === "finalize") {
@@ -437,8 +483,7 @@ export class Core {
     }
   }
 
-  /** @returns {Promise<"done" | "later" | "refused">} */
-  async #sendStart(run, op, waitMs) {
+  async #sendStart(run: RunRecord, op: Op, waitMs?: number): Promise<"done" | "later" | "refused"> {
     const reply = await this.http.startRun(run.server, run.task, run.parameters, waitMs);
     if (reply.ok) {
       await this.store.updateRun(run.id, (r) => {
@@ -448,7 +493,7 @@ export class Core {
       });
       await this.store.deleteOps([op.seq]);
       this.log("info", `Run ${run.id} is server run ${reply.body.run_id} (run number ${reply.body.run_number}).`);
-      this.notify({ type: "run", run: this.summary(await this.store.run(run.id)) });
+      this.notify({ type: "run", run: this.summary(await this.#stored(run.id)) });
       return "done";
     }
     if (reply.retry) {
@@ -464,10 +509,9 @@ export class Core {
     return "refused";
   }
 
-  /** @returns {Promise<"done" | "later" | "refused">} */
-  async #sendFinalize(run, op) {
-    const reply = await this.http.finalize(run.server, run.task, run.server_run_id);
-    if (reply.retry) return "later";
+  async #sendFinalize(run: RunRecord, op: Op): Promise<"done" | "later" | "refused"> {
+    const reply = await this.http.finalize(run.server, run.task, run.server_run_id!);
+    if (!reply.ok && reply.retry) return "later";
     if (reply.ok || reply.status === 409) {
       // 409 means the server run had already closed: expired, most likely. Either way
       // there's nothing left to do. Everything it received is saved.
@@ -481,16 +525,15 @@ export class Core {
     return this.#runRefused(run, reply);
   }
 
-  /** @returns {Promise<"done" | "later" | "refused" | "too-big">} */
-  async #sendEvents(run, batch) {
+  async #sendEvents(run: RunRecord, batch: EventOp[]): Promise<Attempt> {
     const body = `{${batch.map((op) => `${JSON.stringify(op.event_id)}:${op.json}`).join(",")}}`;
-    const reply = await this.http.sendEvents(run.server, run.task, run.server_run_id, body);
-    if (reply.retry) return "later";
+    const reply = await this.http.sendEvents(run.server, run.task, run.server_run_id!, body);
+    if (!reply.ok && reply.retry) return "later";
     if (reply.status === 413) return "too-big";
     if (!reply.ok && reply.status !== 422 && reply.status !== 409) return this.#runRefused(run, reply);
 
-    const stored = new Set(reply.body?.stored ?? []);
-    const errors = reply.body?.errors ?? {};
+    const stored = new Set<string>(reply.body?.stored ?? []);
+    const errors: Record<string, { message: string; can_retry: boolean }> = reply.body?.errors ?? {};
     // `stored` lists every ID the server holds, so an event it refused as a collision
     // is in there too, under the other version. Only ours counts as sent if there's no
     // error for it.
@@ -515,7 +558,7 @@ export class Core {
    * rest there, with a first event naming the run it continues. If it was finalized,
    * nothing more belongs in it: throw away what's left.
    */
-  async #serverRunClosed(run, reply) {
+  async #serverRunClosed(run: RunRecord, reply: Outcome): Promise<"done"> {
     const status = reply.body?.status;
     if (status === "expired") {
       this.log("info", `Server run ${run.server_run_id} expired; starting a new one for run ${run.id}.`);
@@ -523,14 +566,14 @@ export class Core {
       const leftover = await this.store.ops(run.id);
       const oldFirst = leftover.filter((op) => op.kind === "event" && op.event_id === "0");
       await this.store.deleteOps(oldFirst.map((op) => op.seq));
-      const stamp = { wall_time: wallTime(), performance_now: null };
+      const stamp: Stamp = { wall_time: wallTime(), performance_now: null };
       await this.store.prepend(run.id, [{ kind: "start" }, firstEvent(run.client_info, stamp, run.server_run_id)]);
       await this.store.updateRun(run.id, (r) => {
         r.server_run_id = null;
         r.run_number = null;
         r.server_started_at = null;
       });
-      this.notify({ type: "run", run: this.summary(await this.store.run(run.id)) });
+      this.notify({ type: "run", run: this.summary(await this.#stored(run.id)) });
       return "done";
     }
 
@@ -554,7 +597,7 @@ export class Core {
   }
 
   /** The server doesn't know this run, or refused a request about it outright. */
-  async #runRefused(run, reply) {
+  async #runRefused(run: RunRecord, reply: Outcome & { ok: false }): Promise<"refused"> {
     const code = reply.status === 404 ? "run-unknown" : "refused";
     await this.store.updateRun(run.id, (r) => {
       r.failed = { code, message: reply.message };
@@ -564,16 +607,16 @@ export class Core {
     return "refused";
   }
 
-  #reportFailed(run, eventIds, message) {
+  #reportFailed(run: RunRecord, eventIds: string[], message: string): void {
     this.log("error", `The server refused events ${eventIds.join(", ")} of run ${run.id} for good: ${message}`);
     this.notify({ type: "error", run: run.id, code: "event-refused", events: eventIds, message });
   }
 
-  async #progress(run) {
+  async #progress(run: RunRecord): Promise<void> {
     this.notify({ type: "progress", run: run.id, pending: await this.pending({ run: run.id }) });
   }
 
-  #settleSent(id) {
+  #settleSent(id: string): void {
     const waiting = this.sentWaiters.get(id);
     if (!waiting) return;
     this.sentWaiters.delete(id);
@@ -586,7 +629,7 @@ export class Core {
    * The task's settings: fresh from the server when it can be reached, otherwise the
    * copy saved the last time it could. A task's first run on a device has to be online.
    */
-  async #settings(server, task) {
+  async #settings(server: string, task: string): Promise<TaskSettings> {
     const reply = await this.http.taskSettings(server, task, this.options.startWaitMs);
     if (reply.ok) {
       await this.store.saveSettings(server, task, reply.body);
@@ -612,12 +655,12 @@ export class Core {
   /**
    * Take the run's lock and keep it until #letGo. With `waitMs`, waits that long for
    * another page to let go; without it, gives up at once if the lock is taken.
-   * @returns {Promise<boolean>} whether we got it
+   * Resolves with whether we got it.
    */
-  #hold(id, { waitMs } = {}) {
+  #hold(id: string, { waitMs }: { waitMs?: number } = {}): Promise<boolean> {
     if (this.held.has(id)) return Promise.resolve(true);
     return new Promise((resolve) => {
-      let options = { ifAvailable: true };
+      let options: LockOptions = { ifAvailable: true };
       if (waitMs !== undefined) {
         const giveUp = new AbortController();
         setTimeout(() => giveUp.abort(), waitMs);
@@ -629,7 +672,7 @@ export class Core {
             resolve(false);
             return undefined;
           }
-          return new Promise((release) => {
+          return new Promise<void>((release) => {
             this.held.set(id, release);
             resolve(true);
           });
@@ -638,12 +681,12 @@ export class Core {
     });
   }
 
-  #letGo(id) {
+  #letGo(id: string): void {
     this.held.get(id)?.();
     this.held.delete(id);
   }
 
-  async #heldRun(id) {
+  async #heldRun(id: string): Promise<RunRecord> {
     if (!this.held.has(id)) {
       throw new PigError("not-held", `Run ${id} isn't open on this page. Use resume() to pick it up.`);
     }
@@ -653,7 +696,7 @@ export class Core {
   }
 
   /** Say the page holding these runs is still here, so they don't count as abandoned. */
-  async #heartbeat() {
+  async #heartbeat(): Promise<void> {
     for (const id of this.held.keys()) {
       if (this.orphans.has(id)) continue;
       if (!(await this.store.run(id))?.closed) {
@@ -664,7 +707,14 @@ export class Core {
     }
   }
 
-  #every(ms, work) {
+  /** A run's record, which the caller knows is there. */
+  async #stored(id: string): Promise<RunRecord> {
+    const run = await this.store.run(id);
+    if (run === undefined) throw new PigError("not-found", `There's no run ${id} on this device.`);
+    return run;
+  }
+
+  #every(ms: number, work: () => Promise<void>): void {
     const timer = setInterval(() => {
       work().catch((error) => this.log("error", "Background work failed:", error));
     }, ms);
@@ -672,7 +722,7 @@ export class Core {
   }
 
   /** What the page gets to know about a run. */
-  summary(run) {
+  summary(run: RunRecord): RunSummary {
     return {
       id: run.id,
       task: run.task,
@@ -691,37 +741,37 @@ export class Core {
  * event added. wake() ends either, for when there's reason to think the network is back.
  */
 class Sender {
-  #resolve = null;
+  #resolve: (() => void) | null = null;
   #idle = false;
   #missed = false;
 
-  idle() {
+  idle(): Promise<void> {
     return this.#sleep(undefined, true);
   }
 
-  wait(ms) {
+  wait(ms: number): Promise<void> {
     return this.#sleep(ms, false);
   }
 
-  newWork() {
+  newWork(): void {
     if (this.#resolve === null) this.#missed = true; // Busy: look again before idling.
     else if (this.#idle) this.wake();
   }
 
-  wake() {
+  wake(): void {
     const resolve = this.#resolve;
     this.#resolve = null;
     resolve?.();
   }
 
-  #sleep(ms, idle) {
+  #sleep(ms: number | undefined, idle: boolean): Promise<void> {
     if (idle && this.#missed) {
       this.#missed = false;
       return Promise.resolve();
     }
     this.#missed = false;
     this.#idle = idle;
-    return new Promise((resolve) => {
+    return new Promise<void>((resolve) => {
       const timer = ms === undefined ? undefined : setTimeout(() => this.wake(), ms);
       this.#resolve = () => {
         clearTimeout(timer);
@@ -734,14 +784,14 @@ class Sender {
 // ------------------------------------------------------------------ helpers
 
 /** The op for a run's first event: who the client is, and which run this one continues. */
-function firstEvent(clientInfo, stamp, continues) {
-  const _client = { ...stamp, ...clientInfo, version: CLIENT_VERSION, event: "run_start" };
+function firstEvent(clientInfo: ClientInfo, stamp: Stamp, continues: string | null): NewOp {
+  const _client: Record<string, unknown> = { ...stamp, ...clientInfo, version: CLIENT_VERSION, event: "run_start" };
   if (continues) _client.continues_run = continues;
   const json = JSON.stringify({ data: { _client } });
   return { kind: "event", event_id: "0", json, bytes: byteLength(json) };
 }
 
-function checkParameters(settings, parameters) {
+function checkParameters(settings: TaskSettings, parameters: TaskParameters): void {
   const missing = settings.parameters.filter((name) => !(name in parameters));
   if (missing.length > 0) {
     throw new PigError(
@@ -761,8 +811,8 @@ function checkParameters(settings, parameters) {
 }
 
 /** Consecutive event ops from the front of the queue, within the batch limits. */
-function takeBatch(ops, maxEvents, maxBytes) {
-  const batch = [];
+function takeBatch(ops: Op[], maxEvents: number, maxBytes: number): EventOp[] {
+  const batch: EventOp[] = [];
   let bytes = 0;
   for (const op of ops) {
     if (op.kind !== "event" || batch.length >= maxEvents) break;
@@ -773,25 +823,25 @@ function takeBatch(ops, maxEvents, maxBytes) {
   return batch;
 }
 
-function retryWait(failures, { firstRetryMs, maxRetryMs }) {
+function retryWait(failures: number, { firstRetryMs, maxRetryMs }: Timing): number {
   const full = Math.min(maxRetryMs, firstRetryMs * 2 ** (failures - 1));
   return full * (0.5 + Math.random() / 2);
 }
 
-function lockName(id) {
+function lockName(id: string): string {
   return `psych-ingestor:run:${id}`;
 }
 
-function randomId() {
+function randomId(): string {
   return crypto.randomUUID();
 }
 
-function isPlainObject(value) {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 }
 
-function byteLength(text) {
+function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }

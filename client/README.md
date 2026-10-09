@@ -27,6 +27,10 @@ Download them from the [latest release](https://github.com/uwmadison-chm/psych-i
 or build them yourself with `npm install` and `npm run build` in this directory, which puts
 them in `dist/`.
 
+The client is written in TypeScript, but these files are plain JavaScript; you don't need
+TypeScript to use them. If your task is written in TypeScript, the build also puts type
+declarations in `dist/types/`.
+
 Host them yourself, next to your task, rather than linking to them from somewhere else.
 Browsers only start a worker from the same site as the page.
 
@@ -36,7 +40,10 @@ Browsers only start a worker from the same site as the page.
 <script src="pig.script.js"></script>
 <script>
   async function main() {
-    const run = await pig.start({ server: "https://pig.yourlab.edu", task: "stroop" });
+    const run = await pig.start("https://pig.yourlab.edu", "stroop", {
+      participant_id: "10351",
+      session: "baseline",
+    });
 
     // ... for each trial:
     run.add({ type: "trial", word: "GREEN", ink: "red", rt: 843 });
@@ -53,14 +60,24 @@ Or, as a module:
 
 ```javascript
 import * as pig from "./pig.js";
-const run = await pig.start({ server: "https://pig.yourlab.edu", task: "stroop" });
+const run = await pig.start("https://pig.yourlab.edu", "stroop", parameters);
 ```
 
-**`pig.start()`** reads the participant's link parameters from the page's address, checks
-them against what your task needs, and starts a run. If Pig can be reached, the run is
-started on the server before `start()` returns, so a closed task or a bad link fails right
-there, where you can show the participant a message. To pass parameters yourself instead
-of using the link, give `start()` a `parameters` object.
+**`pig.start(server, task, parameters)`** checks the parameters against what your task
+needs and starts a run. `parameters` is every name and value you want the run started
+with, all strings. Pig records any it doesn't need. If Pig can be reached, the run is
+started on the server before `start()` returns, so a closed task or a bad parameter fails
+right there, where you can show the participant a message.
+
+**`pig.startForURL(server, task, url)`** does the same with the parameters in a URL's
+query string, every one of them. Most often, that's the address of the page the
+participant followed a link to:
+
+```javascript
+const run = await pig.startForURL("https://pig.yourlab.edu", "stroop", window.location);
+```
+
+`url` can also be a `URL` or a string.
 
 **`run.add(data)`** queues an event. `data` is any plain object that can be turned into
 JSON. It returns straight away, with a promise. If you `await` the promise, you'll wait
@@ -124,7 +141,7 @@ it up. Keep the run's `id` somewhere that survives the page change, and pass it 
 
 ```javascript
 // First page
-const run = await pig.start({ server, task: "sret" });
+const run = await pig.start(server, "sret", parameters);
 sessionStorage.setItem("pigRun", run.id);
 
 // Next page
@@ -143,7 +160,7 @@ they've been open as long as the task allows (`expires_after` in its configurati
 If you'd rather they were finalized, ask for it when you start the run:
 
 ```javascript
-const run = await pig.start({ server, task: "dd_game", finalizeWhenAbandoned: true });
+const run = await pig.start(server, "dd_game", parameters, { finalizeWhenAbandoned: true });
 ```
 
 Then, the next time any page using the client opens on the same site, it sends whatever
@@ -170,10 +187,23 @@ things are sent, listen for `progress`:
 pig.events.addEventListener("progress", (e) => show(e.detail.pending));
 ```
 
+## Checking the browser first
+
+```javascript
+if (!(await pig.supported())) {
+  // Ask the participant to use another browser.
+}
+```
+
+`pig.supported()` says whether this browser has what the client needs, and logs what's
+missing if it doesn't. The client needs a browser from about 2022 on: Safari 15.4, Chrome
+93, Firefox 96, or later. The page has to be served over `https`. Some browsers turn off
+storage in a private window; `supported()` checks for that too.
+
 ## When something goes wrong
 
 Mistakes you can fix in your task come back from the call that made them: `start()` with a
-closed task or a bad link, `add()` with an event that's too big or isn't an object. Each is
+closed task or a bad parameter, `add()` with an event that's too big or isn't an object. Each is
 a `PigError` with a `code` saying which kind, and a `message` for people.
 
 Problems that turn up later, while sending, are reported as `error` events, on the run and
@@ -193,15 +223,12 @@ there. That run's first event names the run it continues. *Provisional.*
 
 ## Debugging
 
-Turn on logging with `pig.connect({ debug: true })` before anything else, or, in a task
-that's already deployed, by running this in the browser's console and reloading:
+The client logs what it does to the browser's console, starting each line with
+`[psych-ingestor]`. Routine things are logged with `console.debug`, which most browsers
+hide unless you ask for "verbose" messages; problems are warnings and errors.
 
-```javascript
-localStorage.setItem("psych-ingestor:debug", "true");
-```
-
-`pig.debugLog()` returns the client's recent log lines whether or not logging is on, for
-when a participant reports a problem after the fact.
+`pig.debugLog()` returns the client's recent log lines, for when a participant reports a
+problem after the fact.
 
 ## A single file, if you need one
 
@@ -213,10 +240,13 @@ strict Content Security Policy may block that. This isn't the usual way.
 
 ```
 npm install
+npm run check        # type-check
 npm test             # the queue and sender, in Node, against a pretend Pig
 npm run build        # dist/
 npm run e2e          # a real browser against a real `pig serve`
 ```
 
+Node runs the TypeScript sources directly, without compiling them, so the code sticks to
+TypeScript that only adds types: no enums, no namespaces. It needs Node 22.18 or later.
 The browser tests start Pig with `uv run pig`; set `PIG_COMMAND` to run it some other way.
-`src/core.js` has the interesting part, and explains itself at the top.
+`src/core.ts` has the interesting part, and explains itself at the top.

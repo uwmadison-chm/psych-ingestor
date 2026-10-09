@@ -6,8 +6,12 @@
   "type": "module",
   "main": "./dist/pig.js",
   "module": "./dist/pig.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
-    ".": "./dist/pig.js",
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "default": "./dist/pig.js"
+    },
     "./pig-worker.js": "./dist/pig-worker.js"
   },
   "files": [
@@ -15,13 +19,16 @@
     "src"
   ],
   "scripts": {
-    "build": "node scripts/build.js",
-    "test": "node --test test/*.test.js",
+    "build": "node scripts/build.js && tsc -p tsconfig.types.json",
+    "check": "tsc -p .",
+    "test": "node --test test/*.test.ts",
     "e2e": "npm run build && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",
+    "@types/node": "22.20.5",
     "fake-indexeddb": "6.2.5",
+    "typescript": "5.9.3",
     "vite": "7.3.6"
   }
 }

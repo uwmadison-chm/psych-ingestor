@@ -19,21 +19,22 @@
 // IndexedDB's own API is callbacks and events. Everything here wraps it in promises and
 // does nothing else, so the rest of the client can read as ordinary async code.
 
+import type { FailedOp, NewOp, Op, RunRecord, TaskSettings } from "./types.ts";
+
 const DATABASE = "psych-ingestor";
 const VERSION = 1;
 
+type StoreName = "settings" | "runs" | "ops" | "failed";
+
 export class Store {
-  /** @param {IDBDatabase} db */
-  constructor(db) {
+  db: IDBDatabase;
+
+  constructor(db: IDBDatabase) {
     this.db = db;
   }
 
-  /**
-   * Open the database, creating it the first time.
-   * @param {IDBFactory} [factory]
-   * @returns {Promise<Store>}
-   */
-  static async open(factory = globalThis.indexedDB) {
+  /** Open the database, creating it the first time. */
+  static async open(factory: IDBFactory = globalThis.indexedDB): Promise<Store> {
     const request = factory.open(DATABASE, VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -43,7 +44,7 @@ export class Store {
       ops.createIndex("by_run", ["run", "seq"]);
       db.createObjectStore("failed", { keyPath: "seq" });
     };
-    return new Store(await settle(request));
+    return new Store(await settle<IDBDatabase>(request));
   }
 
   close() {
@@ -52,43 +53,40 @@ export class Store {
 
   // ---------------------------------------------------------------- settings
 
-  /** @returns {Promise<object | undefined>} */
-  async settings(server, task) {
-    const record = await this.#get("settings", [server, task]);
+  async settings(server: string, task: string): Promise<TaskSettings | undefined> {
+    const record = await this.#get<{ settings: TaskSettings }>("settings", [server, task]);
     return record?.settings;
   }
 
-  async saveSettings(server, task, settings) {
+  async saveSettings(server: string, task: string, settings: TaskSettings): Promise<void> {
     await this.#put("settings", { server, task, settings, saved_at: Date.now() });
   }
 
   // -------------------------------------------------------------------- runs
 
-  /** @returns {Promise<object | undefined>} */
-  run(id) {
-    return this.#get("runs", id);
+  run(id: string): Promise<RunRecord | undefined> {
+    return this.#get<RunRecord>("runs", id);
   }
 
-  /** @returns {Promise<object[]>} */
-  allRuns() {
+  allRuns(): Promise<RunRecord[]> {
     return this.#transaction(["runs"], "readonly", (t) =>
-      settle(t.objectStore("runs").getAll()),
+      settle<RunRecord[]>(t.objectStore("runs").getAll()),
     );
   }
 
-  saveRun(run) {
+  saveRun(run: RunRecord): Promise<void> {
     return this.#put("runs", run);
   }
 
   /**
    * Change a run record in place. `change` gets the current record and returns nothing;
    * the read and the write happen in one transaction, so two changes can't interleave.
-   * @returns {Promise<object | undefined>} the changed record, or undefined if there's none
+   * Resolves with the changed record, or undefined if there's none.
    */
-  updateRun(id, change) {
+  updateRun(id: string, change: (run: RunRecord) => void): Promise<RunRecord | undefined> {
     return this.#transaction(["runs"], "readwrite", async (t) => {
       const runs = t.objectStore("runs");
-      const run = await settle(runs.get(id));
+      const run = await settle<RunRecord | undefined>(runs.get(id));
       if (run === undefined) return undefined;
       change(run);
       runs.put(run);
@@ -100,10 +98,10 @@ export class Store {
    * Remove a run and everything still queued for it. Failed ops are kept: they're
    * only ever removed by `discardFailed()`.
    */
-  deleteRun(id) {
+  deleteRun(id: string): Promise<void> {
     return this.#transaction(["runs", "ops"], "readwrite", async (t) => {
       t.objectStore("runs").delete(id);
-      const keys = await settle(
+      const keys = await settle<IDBValidKey[]>(
         t.objectStore("ops").index("by_run").getAllKeys(runRange(id)),
       );
       for (const key of keys) t.objectStore("ops").delete(key);
@@ -118,15 +116,19 @@ export class Store {
    * op is written. So an event ID is never handed out twice, and never handed out for
    * an event that wasn't stored.
    *
-   * `build` gets the event ID (or undefined) and returns the op to store.
-   * @returns {Promise<object>} the stored op, with its `seq`
+   * `build` gets the event ID (or undefined) and returns the op to store. Resolves with
+   * the stored op, with its `seq`.
    */
-  queue(runId, build, { withEventId = false } = {}) {
+  queue(
+    runId: string,
+    build: (eventId: string | undefined) => NewOp,
+    { withEventId = false } = {},
+  ): Promise<Op> {
     return this.#transaction(["runs", "ops"], "readwrite", async (t) => {
       const runs = t.objectStore("runs");
-      const run = await settle(runs.get(runId));
+      const run = await settle<RunRecord | undefined>(runs.get(runId));
       if (run === undefined) throw new Error(`There's no run ${runId} on this device.`);
-      let eventId;
+      let eventId: string | undefined;
       if (withEventId) {
         eventId = String(run.next_event_id);
         run.next_event_id += 1;
@@ -134,30 +136,27 @@ export class Store {
       run.last_active = Date.now();
       runs.put(run);
       const op = { ...build(eventId), run: runId };
-      op.seq = await settle(t.objectStore("ops").add(op));
-      return op;
+      const seq = await settle<number>(t.objectStore("ops").add(op));
+      return { ...op, seq };
     });
   }
 
-  /**
-   * A run's ops in the order they were queued.
-   * @returns {Promise<object[]>}
-   */
-  ops(runId, limit) {
+  /** A run's ops in the order they were queued. */
+  ops(runId: string, limit?: number): Promise<Op[]> {
     return this.#transaction(["ops"], "readonly", (t) =>
-      settle(t.objectStore("ops").index("by_run").getAll(runRange(runId), limit)),
+      settle<Op[]>(t.objectStore("ops").index("by_run").getAll(runRange(runId), limit)),
     );
   }
 
-  /** @returns {Promise<object[]>} every op for every run */
-  allOps() {
+  /** Every op for every run. */
+  allOps(): Promise<Op[]> {
     return this.#transaction(["ops"], "readonly", (t) =>
-      settle(t.objectStore("ops").getAll()),
+      settle<Op[]>(t.objectStore("ops").getAll()),
     );
   }
 
   /** Delete ops by `seq`, in one transaction. */
-  deleteOps(seqs) {
+  deleteOps(seqs: number[]): Promise<void> {
     return this.#transaction(["ops"], "readwrite", async (t) => {
       for (const seq of seqs) t.objectStore("ops").delete(seq);
     });
@@ -167,11 +166,11 @@ export class Store {
    * Move ops the server refused for good out of the queue and into `failed`, with the
    * server's reason. They stay there until someone calls `discardFailed()`.
    */
-  failOps(failures) {
+  failOps(failures: { seq: number; reason: string }[]): Promise<void> {
     return this.#transaction(["ops", "failed"], "readwrite", async (t) => {
       const ops = t.objectStore("ops");
       for (const { seq, reason } of failures) {
-        const op = await settle(ops.get(seq));
+        const op = await settle<Op | undefined>(ops.get(seq));
         if (op === undefined) continue;
         ops.delete(seq);
         t.objectStore("failed").put({ ...op, reason, failed_at: Date.now() });
@@ -179,15 +178,15 @@ export class Store {
     });
   }
 
-  /** @returns {Promise<object[]>} every op the server refused for good */
-  allFailed() {
+  /** Every op the server refused for good. */
+  allFailed(): Promise<FailedOp[]> {
     return this.#transaction(["failed"], "readonly", (t) =>
-      settle(t.objectStore("failed").getAll()),
+      settle<FailedOp[]>(t.objectStore("failed").getAll()),
     );
   }
 
   /** Throw away every failed op. The only way anything in `failed` goes away. */
-  discardFailed() {
+  discardFailed(): Promise<void> {
     return this.#transaction(["failed"], "readwrite", async (t) => {
       t.objectStore("failed").clear();
     });
@@ -198,13 +197,13 @@ export class Store {
    * has expired: the new server run has to be started before anything else is sent.
    * IndexedDB keys only ever grow, so "in front" means re-adding everything after them.
    */
-  prepend(runId, newOps) {
+  prepend(runId: string, newOps: NewOp[]): Promise<void> {
     return this.#transaction(["ops"], "readwrite", async (t) => {
       const store = t.objectStore("ops");
-      const existing = await settle(store.index("by_run").getAll(runRange(runId)));
+      const existing = await settle<Op[]>(store.index("by_run").getAll(runRange(runId)));
       for (const op of existing) store.delete(op.seq);
       for (const op of [...newOps, ...existing]) {
-        const copy = { ...op, run: runId };
+        const copy: NewOp & { run: string; seq?: number } = { ...op, run: runId };
         delete copy.seq;
         await settle(store.add(copy));
       }
@@ -213,13 +212,13 @@ export class Store {
 
   // ------------------------------------------------------------------ helpers
 
-  #get(storeName, key) {
+  #get<T>(storeName: StoreName, key: IDBValidKey): Promise<T | undefined> {
     return this.#transaction([storeName], "readonly", (t) =>
-      settle(t.objectStore(storeName).get(key)),
+      settle<T | undefined>(t.objectStore(storeName).get(key)),
     );
   }
 
-  #put(storeName, value) {
+  #put(storeName: StoreName, value: unknown): Promise<void> {
     return this.#transaction([storeName], "readwrite", async (t) => {
       t.objectStore(storeName).put(value);
     });
@@ -233,11 +232,15 @@ export class Store {
    * `work` may await requests made on this transaction, but nothing else. Waiting on
    * anything outside IndexedDB lets the transaction commit early.
    */
-  #transaction(storeNames, mode, work) {
+  #transaction<T>(
+    storeNames: StoreName[],
+    mode: IDBTransactionMode,
+    work: (t: IDBTransaction) => Promise<T>,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
       const t = this.db.transaction(storeNames, mode, { durability: "strict" });
-      let result;
-      let failure;
+      let result: T;
+      let failure: unknown;
       t.oncomplete = () => (failure ? reject(failure) : resolve(result));
       t.onabort = () => reject(failure ?? t.error ?? new Error("Transaction aborted."));
       t.onerror = () => {}; // onabort follows and reports it
@@ -258,14 +261,13 @@ export class Store {
   }
 }
 
-function runRange(runId) {
+function runRange(runId: string): IDBKeyRange {
   return IDBKeyRange.bound([runId, -Infinity], [runId, Infinity]);
 }
 
-/** @param {IDBRequest | IDBOpenDBRequest} request */
-function settle(request) {
+function settle<T>(request: IDBRequest): Promise<T> {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => resolve(request.result as T);
     request.onerror = () => reject(request.error);
   });
 }

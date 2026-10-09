@@ -4,6 +4,8 @@
 //   pig.script.js    the same, for a plain <script> tag; it defines a global `pig`
 //   pig-worker.js    the web worker both of them start. Keep it next to them.
 //
+// Type declarations for TypeScript users go in dist/types; package.json runs tsc for those.
+//
 // Not minified: they're small, and people debugging a task should be able to read them.
 
 import { fileURLToPath } from "node:url";
@@ -28,7 +30,7 @@ async function bundle(entry, fileName, format, name) {
   });
 }
 
-await bundle("src/index.js", "pig.js", "es");
-await bundle("src/index.js", "pig.script.js", "iife", "pig");
-await bundle("src/worker.js", "pig-worker.js", "iife", "pigWorker");
+await bundle("src/index.ts", "pig.js", "es");
+await bundle("src/index.ts", "pig.script.js", "iife", "pig");
+await bundle("src/worker.ts", "pig-worker.js", "iife", "pigWorker");
 console.log("Built dist/pig.js, dist/pig.script.js, dist/pig-worker.js");

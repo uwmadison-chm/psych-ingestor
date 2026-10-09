@@ -14,18 +14,26 @@
 // A 409 (closed run) and a 422 (some events refused) also come back with their body,
 // because the body says what to do next.
 
+import type { TaskParameters } from "./types.ts";
+
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
-/**
- * @param {object} options
- * @param {typeof fetch} [options.fetch]
- * @param {number} [options.timeoutMs]
- */
-export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  async function request(method, url, body, waitMs = timeoutMs) {
+// `body` is whatever JSON the server answered with. Each caller knows, from docs/api.md,
+// which shape to expect from the request it made.
+export type Outcome =
+  | { ok: true; status: number; body: any }
+  | { ok: false; retry: boolean; status: number; body?: any; message: string };
+
+export type Http = ReturnType<typeof makeHttp>;
+
+export function makeHttp({
+  fetch = globalThis.fetch.bind(globalThis),
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+}: { fetch?: typeof globalThis.fetch; timeoutMs?: number } = {}) {
+  async function request(method: string, url: string, body?: string, waitMs = timeoutMs): Promise<Outcome> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), waitMs);
-    let response;
+    let response: Response;
     try {
       response = await fetch(url, {
         method,
@@ -41,13 +49,13 @@ export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs 
         ok: false,
         retry: true,
         status: 0,
-        message: timedOut ? `No answer from ${url} in ${waitMs} ms.` : `Couldn't reach ${url}: ${error.message}`,
+        message: timedOut ? `No answer from ${url} in ${waitMs} ms.` : `Couldn't reach ${url}: ${(error as Error).message}`,
       };
     } finally {
       clearTimeout(timer);
     }
 
-    let parsed;
+    let parsed: any;
     try {
       parsed = await response.json();
     } catch {
@@ -67,12 +75,12 @@ export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs 
      * GET /task/{task}. With `waitMs`, gives up sooner than usual: a participant is
      * waiting on this one, and saved settings will do if the network is slow.
      */
-    taskSettings(server, task, waitMs) {
+    taskSettings(server: string, task: string, waitMs?: number) {
       return request("GET", `${base(server)}/task/${encodeURIComponent(task)}`, undefined, waitMs);
     },
 
     /** POST /task/{task}/run. `waitMs` as for taskSettings. */
-    startRun(server, task, parameters, waitMs) {
+    startRun(server: string, task: string, parameters: TaskParameters, waitMs?: number) {
       return request(
         "POST",
         `${base(server)}/task/${encodeURIComponent(task)}/run`,
@@ -86,7 +94,7 @@ export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs 
      * The body is built from the exact strings stored in the queue, so a retry sends
      * the same bytes as the first try did.
      */
-    sendEvents(server, task, runId, jsonBody) {
+    sendEvents(server: string, task: string, runId: string, jsonBody: string) {
       return request(
         "POST",
         `${base(server)}/task/${encodeURIComponent(task)}/run/${encodeURIComponent(runId)}`,
@@ -95,7 +103,7 @@ export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs 
     },
 
     /** POST /task/{task}/run/{run_id}/finalize */
-    finalize(server, task, runId) {
+    finalize(server: string, task: string, runId: string) {
       return request(
         "POST",
         `${base(server)}/task/${encodeURIComponent(task)}/run/${encodeURIComponent(runId)}/finalize`,
@@ -104,6 +112,6 @@ export function makeHttp({ fetch = globalThis.fetch.bind(globalThis), timeoutMs 
   };
 }
 
-function base(server) {
+function base(server: string): string {
   return server.replace(/\/+$/, "");
 }
