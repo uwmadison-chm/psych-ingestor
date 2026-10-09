@@ -179,27 +179,30 @@ any other, with bytes attached. The task's configuration has to say `media = tru
 it doesn't, `startMedia()` refuses straight away. See the media section of
 [docs/api.md](../docs/api.md) for what Pig does with it.
 
-With a `MediaRecorder`, let the client listen to it:
+With a `MediaRecorder`, let the client run it:
 
 ```javascript
-recorder.start(5000);   // a blob every five seconds
-const recording = await run.startMedia({ content_type: recorder.mimeType, prompt: 3 });
-recording.record(recorder);
+const recording = await run.record(recorder, { prompt: 3 });
 
 // Later, moving on to the next prompt:
 recorder.stop();
 ```
 
-`record()` sends each blob the recorder hands over, and finishes the item when the
-recorder stops. Start the recorder with a timeslice, as above, so a blob arrives every
-few seconds rather than one at the very end; if the tab closes partway through, you keep
-everything up to the last blob. Read `recorder.mimeType` after calling `start()`, because
-browsers don't reliably fill it in before.
+**`run.record(recorder, data)`** starts the recorder, sends each blob it hands over, and
+finishes the item when you stop the recorder. The item's event is stamped with the
+moment the recorder says it started, on the same clock as your events' `_client`, so you
+can line the recording up with your trials. `content_type` is filled in from the
+recorder unless you put one in `data`.
+
+The recorder hands over a blob every five seconds; `run.record(recorder, data, {
+timeslice: 2000 })` changes that. A blob every few seconds, rather than one at the very
+end, means that if the tab closes partway through, you keep everything up to the last
+blob.
 
 To record several clips with the camera left on in between, keep one recorder and call
-`start()` and `stop()` for each clip, with a new `startMedia()` and `record()` each
-time. Each clip becomes its own media item and its own playable file. (`pause()` would
-instead make one long recording with the gaps cut out.)
+`run.record()` and `recorder.stop()` for each clip. Each clip becomes its own media item
+and its own playable file. (`recorder.pause()` would instead make one long recording
+with the gaps cut out.)
 
 Anything else is three calls:
 

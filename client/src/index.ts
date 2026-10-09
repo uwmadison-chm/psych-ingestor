@@ -191,9 +191,7 @@ export class Run extends EventTarget {
       throw new PigError("bad-event", "_client is filled in by the client. Use another name for your field.");
     }
     const queued = this.#connection.call("add", this.id, data, stamp) as Promise<string>;
-    queued.catch((error: PigError) =>
-      this.#connection.report({ type: "error", run: this.id, code: error.code, message: error.message }),
-    );
+    queued.catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
     return queued;
   }
 
@@ -208,6 +206,70 @@ export class Run extends EventTarget {
     const stamp = timeStamp();
     const eventId = (await this.#connection.call("startMedia", this.id, data, stamp)) as string;
     return new Media(this.#connection, this.id, eventId);
+  }
+
+  /**
+   * Record from a MediaRecorder into a new media item. Starts the recorder itself, with
+   * `timeslice` (milliseconds between blobs), and stamps the item with the moment the
+   * recorder says it started, on the same clock as every event's `_client`. Sends each
+   * blob as it comes, and finishes the item when the recorder stops; stopping it is up
+   * to you. `data` is stored as the item's event, with `content_type` filled in from
+   * the recorder unless you give one. Resolves once the item's event is stored.
+   */
+  async record(recorder: MediaRecorder, data: Record<string, unknown> = {}, { timeslice = 5000 } = {}): Promise<Media> {
+    if (recorder.state !== "inactive") {
+      throw new PigError("bad-call", "record() starts the recorder itself, so give it one that isn't recording yet.");
+    }
+    // Blobs can arrive before the item exists. They wait here, in order.
+    const waiting: Blob[] = [];
+    let item: Media | undefined;
+    let stopped = false;
+    const onData = (event: BlobEvent) => {
+      if (item) item.add(event.data);
+      else waiting.push(event.data);
+    };
+    const onStop = () => {
+      // The browser always delivers the last blob before `stop`.
+      recorder.removeEventListener("dataavailable", onData);
+      stopped = true;
+      item?.finish().catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
+    };
+    recorder.addEventListener("dataavailable", onData);
+    recorder.addEventListener("stop", onStop, { once: true });
+
+    let started: Event;
+    try {
+      started = await new Promise<Event>((resolve, reject) => {
+        recorder.addEventListener("start", resolve, { once: true });
+        recorder.addEventListener("error", (event) => reject((event as ErrorEvent).error ?? event), { once: true });
+        recorder.start(timeslice);
+      });
+    } catch (error) {
+      recorder.removeEventListener("dataavailable", onData);
+      recorder.removeEventListener("stop", onStop);
+      throw new PigError("recorder", `The recorder didn't start: ${(error as Error)?.message ?? "no details"}`);
+    }
+    // An event's timeStamp is on the performance.now() clock.
+    const stamp: Stamp = { wall_time: wallTime(), performance_now: started.timeStamp };
+
+    let eventId: string;
+    try {
+      eventId = (await this.#connection.call(
+        "startMedia",
+        this.id,
+        { content_type: recorder.mimeType, ...data },
+        stamp,
+      )) as string;
+    } catch (error) {
+      recorder.removeEventListener("dataavailable", onData);
+      recorder.removeEventListener("stop", onStop);
+      if (recorder.state !== "inactive") recorder.stop();
+      throw error;
+    }
+    item = new Media(this.#connection, this.id, eventId);
+    for (const blob of waiting.splice(0)) item.add(blob);
+    if (stopped) item.finish().catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
+    return item;
   }
 
   /** Finalize the run, after everything already added. Resolves once that's queued. */
@@ -229,7 +291,7 @@ export class Run extends EventTarget {
   }
 }
 
-/** One media item. Get one from run.startMedia(). */
+/** One media item. Get one from run.startMedia() or run.record(). */
 export class Media {
   #connection: Connection;
   #run: string;
@@ -250,36 +312,13 @@ export class Media {
    */
   add(blob: Blob): Promise<number[]> {
     const queued = this.#connection.call("addMedia", this.#run, this.eventId, blob) as Promise<number[]>;
-    queued.catch((error: PigError) =>
-      this.#connection.report({ type: "error", run: this.#run, code: error.code, message: error.message }),
-    );
+    queued.catch((error: PigError) => this.#connection.report(errorNotice(this.#run, error)));
     return queued;
   }
 
   /** Say the item is complete. Resolves once that's queued, after everything added. */
   async finish(): Promise<void> {
     await this.#connection.call("finishMedia", this.#run, this.eventId);
-  }
-
-  /**
-   * Send everything a MediaRecorder records to this item, and finish the item when
-   * the recorder stops. Start the recorder with a timeslice, like recorder.start(5000),
-   * so it hands over a blob every few seconds rather than one at the end.
-   */
-  record(recorder: MediaRecorder): void {
-    const add = (event: BlobEvent) => this.add(event.data);
-    recorder.addEventListener("dataavailable", add);
-    recorder.addEventListener(
-      "stop",
-      () => {
-        // The last dataavailable always comes before stop.
-        recorder.removeEventListener("dataavailable", add);
-        this.finish().catch((error: PigError) =>
-          this.#connection.report({ type: "error", run: this.#run, code: error.code, message: error.message }),
-        );
-      },
-      { once: true },
-    );
   }
 }
 
@@ -373,6 +412,11 @@ class Connection {
 function connected(): Connection {
   connection ??= new Connection({});
   return connection;
+}
+
+/** A failed call, as an `error` event for the run it was about. */
+function errorNotice(run: string, error: PigError): Notice {
+  return { type: "error", run, code: error.code, message: error.message };
 }
 
 function timeStamp(): Stamp {

@@ -45,7 +45,7 @@ test("a blob bigger than a part is cut up, sent, and joins back together", async
   expect(bytes.every((byte, i) => byte === i % 251)).toBe(true);
 });
 
-test("record() sends what a MediaRecorder records and finishes when it stops", async ({ page, request }) => {
+test("record() starts a MediaRecorder, sends what it records, and finishes when it stops", async ({ page, request }) => {
   await page.goto("/script.html");
   const runId = await page.evaluate(async (server) => {
     // Something to record without a camera: a canvas, redrawn.
@@ -59,17 +59,30 @@ test("record() sends what a MediaRecorder records and finishes when it stops", a
     const recorder = new MediaRecorder(canvas.captureStream(30));
 
     const run = await pig.start(server, "voice", { participant_id: "10351" });
-    recorder.start(200);
-    const recording = await run.startMedia({ content_type: recorder.mimeType });
-    recording.record(recorder);
+    const before = performance.now();
+    await run.record(recorder, { prompt: 3 }, { timeslice: 200 });
+    const after = performance.now();
     await new Promise((resolve) => setTimeout(resolve, 1200));
     recorder.stop();
     clearInterval(draw);
     await new Promise((resolve) => recorder.addEventListener("stop", resolve));
     await run.finalize();
     await run.sent();
+    window.timing = { before, after, mimeType: recorder.mimeType };
     return run.runId;
   }, PIG);
+
+  // The item's event is stamped with the recorder's start, on the page's clock.
+  const { before, after, mimeType } = await page.evaluate(() => window.timing);
+  const event = readFileSync(join(PIG_DIR, "data", "in_progress", "voice", runId, "events.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .find((line) => line.event_id === "1");
+  expect(event.data.prompt).toBe(3);
+  expect(event.data.content_type).toBe(mimeType);
+  expect(event.data._client.performance_now).toBeGreaterThanOrEqual(before);
+  expect(event.data._client.performance_now).toBeLessThanOrEqual(after);
 
   const held = await serverRun(request, runId);
   const [item] = held.media;
@@ -90,9 +103,7 @@ test("one recorder, stopped and started again, makes one media item per clip", a
     const run = await pig.start(server, "voice", { participant_id: "10351" });
 
     for (const clip of ["first", "second"]) {
-      recorder.start(200);
-      const item = await run.startMedia({ content_type: recorder.mimeType, clip });
-      item.record(recorder);
+      await run.record(recorder, { clip }, { timeslice: 200 });
       await new Promise((resolve) => setTimeout(resolve, 600));
       const stopped = new Promise((resolve) => recorder.addEventListener("stop", resolve, { once: true }));
       recorder.stop();
@@ -127,6 +138,41 @@ test("progress counts down while a part uploads", async ({ page }) => {
   expect(seen.length).toBeGreaterThan(0);
   expect(seen.at(-1)).toBe(0);
   for (let i = 1; i < seen.length; i += 1) expect(seen[i]).toBeLessThanOrEqual(seen[i - 1]);
+});
+
+test("record() finishes a clip stopped before its item was even stored", async ({ page, request }) => {
+  await page.goto("/script.html");
+  const runId = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    canvas.getContext("2d").fillRect(0, 0, 10, 10);
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    recorder.addEventListener("start", () => recorder.stop(), { once: true });
+    await run.record(recorder);
+    await run.sent();
+    return run.runId;
+  }, PIG);
+  const [item] = (await serverRun(request, runId)).media;
+  expect(item.finished).toBe(true);
+});
+
+test("record() won't take a recorder that's already running", async ({ page }) => {
+  await page.goto("/script.html");
+  const code = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    canvas.getContext("2d");
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    recorder.start();
+    try {
+      await run.record(recorder);
+    } catch (error) {
+      return error.code;
+    } finally {
+      recorder.stop();
+    }
+  }, PIG);
+  expect(code).toBe("bad-call");
 });
 
 test("a task that doesn't take media says so at startMedia()", async ({ page }) => {
