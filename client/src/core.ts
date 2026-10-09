@@ -163,7 +163,7 @@ export class Core {
   }): Promise<RunSummary> {
     const settings = await this.#settings(server, task);
     if (!settings.open) {
-      throw new PigError("task-closed", `The task ${JSON.stringify(task)} isn't accepting new runs right now.`);
+      throw new PigError("task-closed", `The task ${JSON.stringify(task)} isn't accepting new data right now.`);
     }
     checkParameters(settings, parameters);
 
@@ -191,7 +191,7 @@ export class Core {
     await this.#hold(id);
     await this.store.queue(id, () => ({ kind: "start" }));
     await this.store.queue(id, () => firstEvent(clientInfo, stamp, null));
-    this.log("info", `Started run ${id} for task ${task}.`);
+    this.log("info", `Started collecting data for task ${task}, run ${id}.`);
 
     // Try to start the server run now, so a refusal reaches the task.
     const run = await this.#stored(id);
@@ -223,7 +223,7 @@ export class Core {
     }
     const got = await this.#hold(id, { waitMs: this.options.resumeWaitMs });
     if (!got) {
-      throw new PigError("busy", `Run ${id} is open in another tab or window.`);
+      throw new PigError("busy", `This task is already open in another tab or window.`);
     }
     // Another page may have finalized it while we waited.
     const current = await this.store.run(id);
@@ -643,7 +643,7 @@ export class Core {
     if (saved === undefined) {
       throw new PigError(
         "offline",
-        `Couldn't reach ${server}, and this device has never started task ${JSON.stringify(task)} before, so it doesn't know the task's settings. The first run on a device has to be online.`,
+        `Couldn't reach ${server}, and this device has never done task ${JSON.stringify(task)} before, so it doesn't know the task's settings. The first time a device does a task, it has to be online.`,
       );
     }
     this.log("info", `Couldn't reach ${server}; using the saved settings for ${task}.`);
@@ -796,7 +796,7 @@ function checkParameters(settings: TaskSettings, parameters: TaskParameters): vo
   if (missing.length > 0) {
     throw new PigError(
       "parameters",
-      `This task needs ${settings.parameters.join(", ")} to start a run, and ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing. Check the link.`,
+      `This task needs ${settings.parameters.join(", ")} to start, and ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing. Check the link.`,
     );
   }
   for (const name of settings.parameters) {

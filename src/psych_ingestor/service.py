@@ -98,7 +98,7 @@ class Pig:
         task = self.task(task_code)
         if not task.open:
             raise RequestProblem(
-                409, f"The task {task_code!r} isn't accepting new runs right now."
+                409, f"The task {task_code!r} isn't accepting new data right now."
             )
 
         parameters, extra = self._check_parameters(task, submitted)

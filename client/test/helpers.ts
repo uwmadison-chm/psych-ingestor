@@ -104,7 +104,7 @@ export class FakePig {
       };
     }
     if (method === "POST" && run === "run" && runId === undefined) {
-      if (!task.open) return { status: 409, body: { message: "The task isn't accepting new runs right now." } };
+      if (!task.open) return { status: 409, body: { message: "The task isn't accepting new data right now." } };
       const parameters = JSON.parse(body!);
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
