@@ -71,6 +71,27 @@ class Pig:
             raise RequestProblem(404, f"There's no task called {task_code!r}.")
         return definition
 
+    def describe_task(self, task_code: str) -> dict[str, Any]:
+        """What a task needs to know about itself before it starts a run.
+
+        A closed task gets the same answer with `open` false. Closing refuses new runs
+        only, and the runs already going still need the rest. Nothing here is secret:
+        it's all visible from how the other requests behave.
+        """
+        task = self.task(task_code)
+        return {
+            "task_code": task.code,
+            "open": task.open,
+            "parameters": task.parameters,
+            "expires_after_sec": task.expires_after,
+            "max_event_size_bytes": task.max_event_size,
+            # A feature a task can have off is `null` when it's off and an object of its
+            # settings when it's on. Encryption and signing will follow the same shape.
+            "media": (
+                {"max_part_size_bytes": task.max_part_size} if task.media else None
+            ),
+        }
+
     # ------------------------------------------------------------- starting
 
     def start_run(self, task_code: str, submitted: dict[str, Any]) -> dict[str, Any]:
