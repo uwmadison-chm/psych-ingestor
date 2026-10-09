@@ -1,0 +1,8 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Pig client: module</title>
+<script type="module">
+  import * as pig from "/dist/pig.js";
+  window.pig = pig;
+  window.dispatchEvent(new Event("pig-ready"));
+</script>

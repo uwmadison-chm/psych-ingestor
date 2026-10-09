@@ -1,0 +1,27 @@
+{
+  "name": "psych-ingestor-client",
+  "version": "0.1.0",
+  "description": "Send a task's data to Psych Ingestor (Pig), durably, online or off.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/pig.js",
+  "module": "./dist/pig.js",
+  "exports": {
+    ".": "./dist/pig.js",
+    "./pig-worker.js": "./dist/pig-worker.js"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node --test test/*.test.js",
+    "e2e": "npm run build && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "fake-indexeddb": "6.2.5",
+    "vite": "7.3.6"
+  }
+}
