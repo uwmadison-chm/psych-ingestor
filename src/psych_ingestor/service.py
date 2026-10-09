@@ -85,8 +85,11 @@ class Pig:
             "parameters": task.parameters,
             "expires_after_sec": task.expires_after,
             "max_event_size_bytes": task.max_event_size,
-            "accepts_media": task.media,
-            "max_part_size_bytes": task.max_part_size,
+            # A feature a task can have off is `null` when it's off and an object of its
+            # settings when it's on. Encryption and signing will follow the same shape.
+            "media": (
+                {"max_part_size_bytes": task.max_part_size} if task.media else None
+            ),
         }
 
     # ------------------------------------------------------------- starting

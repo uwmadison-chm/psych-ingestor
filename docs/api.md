@@ -117,8 +117,7 @@ it may send media. The JavaScript client uses it so it can start a run while off
   "parameters": ["participant_id", "session"],
   "expires_after_sec": 86400,
   "max_event_size_bytes": 1048576,
-  "accepts_media": false,
-  "max_part_size_bytes": 8388608
+  "media": null
 }
 ```
 
@@ -128,8 +127,18 @@ it may send media. The JavaScript client uses it so it can start a run while off
 | `parameters` | The link parameters a run needs. |
 | `expires_after_sec` | How long a run may stay open, in seconds, counted from when it started. See [When a run expires](#when-a-run-expires). |
 | `max_event_size_bytes` | The biggest event Pig will store, in bytes, measured as JSON. |
-| `accepts_media` | Whether this task may send audio, video, and other files. |
-| `max_part_size_bytes` | The biggest media part Pig will store, in bytes. Only matters if `accepts_media` is true. |
+| `media` | `null` if this task can't send audio, video, and other files. If it can, the settings for them (below). |
+
+A task that takes media gets its media settings instead of `null`:
+
+```json
+"media": {
+  "max_part_size_bytes": 8388608
+}
+```
+
+`max_part_size_bytes` is the biggest media part Pig will store, in bytes. See
+[Sending audio, video, and other files](#sending-audio-video-and-other-files).
 
 A closed task gives the same answer with `"open": false`. Runs already going keep going
 when a task closes, and they still need the rest of these settings. If there's no task by

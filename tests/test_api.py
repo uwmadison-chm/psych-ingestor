@@ -61,15 +61,13 @@ def test_reading_a_tasks_settings(client: TestClient):
         "parameters": ["participant_id", "session"],
         "expires_after_sec": 86400,
         "max_event_size_bytes": 1048576,
-        "accepts_media": False,
-        "max_part_size_bytes": 8388608,
+        "media": None,
     }
 
 
 def test_a_media_tasks_settings_give_its_part_size(client: TestClient):
     described = client.get("/task/interview").json()
-    assert described["accepts_media"] is True
-    assert described["max_part_size_bytes"] == 1024
+    assert described["media"] == {"max_part_size_bytes": 1024}
 
 
 def test_a_closed_task_gives_its_settings_too(client: TestClient):
