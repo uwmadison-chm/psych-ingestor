@@ -1,0 +1,70 @@
+# The JavaScript client: test it, build it, and keep the built files somewhere a task
+# author can download them without installing anything.
+#
+# Every push and pull request that touches the client runs its tests and builds it; the
+# built files are attached to the run as an artifact called "pig-client". Pushing a tag
+# like client-v0.1.0 also attaches them to a GitHub release of that name.
+
+name: client
+
+on:
+  push:
+    branches: [main]
+    tags: ["client-v*"]
+    paths: ["client/**", "src/**", ".github/workflows/client.yml"]
+  pull_request:
+    paths: ["client/**", "src/**", ".github/workflows/client.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: client
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # The browser tests run against a real `pig serve`.
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+        working-directory: .
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pig-client
+          path: |
+            client/dist/pig.js
+            client/dist/pig.script.js
+            client/dist/pig-worker.js
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/client-v')
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pig-client
+          path: pig-client
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: pig-client/*

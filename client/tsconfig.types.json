@@ -1,0 +1,12 @@
+{
+  // The .d.ts files that go in dist/types, for task authors who use TypeScript.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist/types"
+  },
+  "include": ["src"]
+}
