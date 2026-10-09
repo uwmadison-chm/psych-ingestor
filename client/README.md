@@ -185,11 +185,14 @@ With a `MediaRecorder`, let the client run it:
 const recording = await run.record(recorder, { prompt: 3 });
 
 // Later, moving on to the next prompt:
-recorder.stop();
+await recording.stop();
 ```
 
 **`run.record(recorder, data)`** starts the recorder, sends each blob it hands over, and
-finishes the item when you stop the recorder. The item's event is stamped with the
+finishes the item when the recorder stops. **`recording.stop()`** stops the recorder and
+resolves once its last blob is queued. Calling `recorder.stop()` yourself works too.
+`run.finalize()` waits for that last blob either way, and stops any recording still
+going. The item's event is stamped with the
 moment the recorder says it started, on the same clock as your events' `_client`, so you
 can line the recording up with your trials. `content_type` is filled in from the
 recorder unless you put one in `data`.
@@ -200,7 +203,7 @@ end, means that if the tab closes partway through, you keep everything up to the
 blob.
 
 To record several clips with the camera left on in between, keep one recorder and call
-`run.record()` and `recorder.stop()` for each clip. Each clip becomes its own media item
+`run.record()` and `recording.stop()` for each clip. Each clip becomes its own media item
 and its own playable file. (`recorder.pause()` would instead make one long recording
 with the gaps cut out.)
 

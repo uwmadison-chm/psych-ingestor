@@ -153,6 +153,8 @@ export function debugLog(): string[] {
 /** One run. Get one from start(), startForURL(), or resume(). */
 export class Run extends EventTarget {
   #connection: Connection;
+  /** Recordings record() started that aren't finished yet. */
+  #recordings = new Set<Recording>();
   /** This run's ID on this device. Keep it to resume() the run on another page. */
   readonly id: string;
   readonly task: string;
@@ -212,14 +214,29 @@ export class Run extends EventTarget {
    * Record from a MediaRecorder into a new media item. Starts the recorder itself, with
    * `timeslice` (milliseconds between blobs), and stamps the item with the moment the
    * recorder says it started, on the same clock as every event's `_client`. Sends each
-   * blob as it comes, and finishes the item when the recorder stops; stopping it is up
-   * to you. `data` is stored as the item's event, with `content_type` filled in from
-   * the recorder unless you give one. Resolves once the item's event is stored.
+   * blob as it comes, and finishes the item when the recorder stops. Stop it with the
+   * item's stop(), or the recorder's own. `data` is stored as the item's event, with
+   * `content_type` filled in from the recorder unless you give one. Resolves once the
+   * item's event is stored.
    */
   async record(recorder: MediaRecorder, data: Record<string, unknown> = {}, { timeslice = 5000 } = {}): Promise<Media> {
     if (recorder.state !== "inactive") {
       throw new PigError("bad-call", "record() starts the recorder itself, so give it one that isn't recording yet.");
     }
+    // Settles once the item's finish is queued, or once it's clear there won't be one.
+    let settle!: () => void;
+    const recording: Recording = { recorder, finished: new Promise<void>((resolve) => (settle = resolve)) };
+    this.#recordings.add(recording);
+    const done = () => {
+      this.#recordings.delete(recording);
+      settle();
+    };
+    const finish = (item: Media) =>
+      item
+        .finish()
+        .catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)))
+        .finally(done);
+
     // Blobs can arrive before the item exists. They wait here, in order.
     const waiting: Blob[] = [];
     let item: Media | undefined;
@@ -232,7 +249,7 @@ export class Run extends EventTarget {
       // The browser always delivers the last blob before `stop`.
       recorder.removeEventListener("dataavailable", onData);
       stopped = true;
-      item?.finish().catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
+      if (item) finish(item);
     };
     recorder.addEventListener("dataavailable", onData);
     recorder.addEventListener("stop", onStop, { once: true });
@@ -247,6 +264,7 @@ export class Run extends EventTarget {
     } catch (error) {
       recorder.removeEventListener("dataavailable", onData);
       recorder.removeEventListener("stop", onStop);
+      done();
       throw new PigError("recorder", `The recorder didn't start: ${(error as Error)?.message ?? "no details"}`);
     }
     // An event's timeStamp is on the performance.now() clock.
@@ -264,16 +282,22 @@ export class Run extends EventTarget {
       recorder.removeEventListener("dataavailable", onData);
       recorder.removeEventListener("stop", onStop);
       if (recorder.state !== "inactive") recorder.stop();
+      done();
       throw error;
     }
-    item = new Media(this.#connection, this.id, eventId);
+    item = new Media(this.#connection, this.id, eventId, recording);
     for (const blob of waiting.splice(0)) item.add(blob);
-    if (stopped) item.finish().catch((error: PigError) => this.#connection.report(errorNotice(this.id, error)));
+    if (stopped) finish(item);
     return item;
   }
 
-  /** Finalize the run, after everything already added. Resolves once that's queued. */
+  /**
+   * Finalize the run, after everything already added. Resolves once that's queued. Stops
+   * any recording record() started and waits for its last blob, which a finalize queued
+   * first would refuse.
+   */
   async finalize(): Promise<void> {
+    await Promise.all([...this.#recordings].map(stopRecording));
     await this.#connection.call("finalize", this.id);
   }
 
@@ -297,11 +321,14 @@ export class Media {
   #run: string;
   /** The item's event ID, the one its start was stored under. */
   readonly eventId: string;
+  #recording: Recording | undefined;
 
-  constructor(connection: Connection, run: string, eventId: string) {
+  /** @internal */
+  constructor(connection: Connection, run: string, eventId: string, recording?: Recording) {
     this.#connection = connection;
     this.#run = run;
     this.eventId = eventId;
+    this.#recording = recording;
   }
 
   /**
@@ -320,6 +347,28 @@ export class Media {
   async finish(): Promise<void> {
     await this.#connection.call("finishMedia", this.#run, this.eventId);
   }
+
+  /**
+   * For an item from run.record(): stop the recorder. Resolves once its last blob and
+   * the item's finish are queued.
+   */
+  async stop(): Promise<void> {
+    if (!this.#recording) {
+      throw new PigError("bad-call", "stop() is for items from run.record(). Use finish() for this one.");
+    }
+    await stopRecording(this.#recording);
+  }
+}
+
+/** A recorder record() is running, and when the item it's recording into is finished. */
+interface Recording {
+  recorder: MediaRecorder;
+  finished: Promise<void>;
+}
+
+async function stopRecording({ recorder, finished }: Recording): Promise<void> {
+  if (recorder.state !== "inactive") recorder.stop();
+  await finished;
 }
 
 // ------------------------------------------------------------------ plumbing

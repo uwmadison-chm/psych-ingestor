@@ -63,6 +63,7 @@ test("record() starts a MediaRecorder, sends what it records, and finishes when 
     await run.record(recorder, { prompt: 3 }, { timeslice: 200 });
     const after = performance.now();
     await new Promise((resolve) => setTimeout(resolve, 1200));
+    // The recorder's own stop(), then waiting for it, works as well as recording.stop().
     recorder.stop();
     clearInterval(draw);
     await new Promise((resolve) => recorder.addEventListener("stop", resolve));
@@ -120,6 +121,99 @@ test("one recorder, stopped and started again, makes one media item per clip", a
     expect(item.finished).toBe(true);
     expect(catParts(runId, item.media_id).bytes.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   }
+});
+
+test("recording.stop() waits for the last blob, so finalizing straight after loses nothing", async ({ page, request }) => {
+  await page.goto("/script.html");
+  const { runId, errors } = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const draw = setInterval(() => context.fillRect(0, 0, 10, 10), 20);
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    const errors = [];
+    run.addEventListener("error", (e) => errors.push(e.detail.code));
+
+    const recording = await run.record(recorder, {}, { timeslice: 200 });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await recording.stop();
+    clearInterval(draw);
+    await run.finalize();
+    await run.sent();
+    return { runId: run.runId, errors };
+  }, PIG);
+  expect(errors).toEqual([]);
+  const [item] = (await serverRun(request, runId)).media;
+  expect(item.finished).toBe(true);
+});
+
+test("finalize() straight after the recorder's own stop() still waits for its last blob", async ({ page, request }) => {
+  await page.goto("/script.html");
+  const { runId, errors } = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const draw = setInterval(() => context.fillRect(0, 0, 10, 10), 20);
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    const errors = [];
+    run.addEventListener("error", (e) => errors.push(e.detail.code));
+
+    await run.record(recorder, {}, { timeslice: 60000 });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    recorder.stop();
+    await run.finalize(); // before the recorder has handed over its last blob
+    clearInterval(draw);
+    await run.sent();
+    return { runId: run.runId, errors };
+  }, PIG);
+  expect(errors).toEqual([]);
+  const [item] = (await serverRun(request, runId)).media;
+  expect(item.finished).toBe(true);
+  expect(item.parts).toBeGreaterThan(0);
+});
+
+test("finalize() stops a recording that's still going, and keeps its last blob", async ({ page, request }) => {
+  await page.goto("/script.html");
+  const { runId, errors, state } = await page.evaluate(async (server) => {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const draw = setInterval(() => context.fillRect(0, 0, 10, 10), 20);
+    const recorder = new MediaRecorder(canvas.captureStream(30));
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    const errors = [];
+    run.addEventListener("error", (e) => errors.push(e.detail.code));
+    const sizes = [];
+    recorder.addEventListener("dataavailable", (e) => sizes.push(e.data.size));
+
+    // A long timeslice, so the only blob is the one the recorder hands over as it stops.
+    run.record(recorder, {}, { timeslice: 60000 }); // not awaited
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await run.finalize();
+    clearInterval(draw);
+    await run.sent();
+    window.sizes = sizes;
+    return { runId: run.runId, errors, state: recorder.state };
+  }, PIG);
+  expect(state).toBe("inactive");
+  expect(errors).toEqual([]);
+  const [item] = (await serverRun(request, runId)).media;
+  expect(item.finished).toBe(true);
+  expect(item.parts).toBeGreaterThan(0);
+  expect(catParts(runId, item.media_id).bytes.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+});
+
+test("stop() is only for recordings", async ({ page }) => {
+  await page.goto("/script.html");
+  const code = await page.evaluate(async (server) => {
+    const run = await pig.start(server, "voice", { participant_id: "10351" });
+    const image = await run.startMedia({ content_type: "image/png" });
+    try {
+      await image.stop();
+    } catch (error) {
+      return error.code;
+    }
+  }, PIG);
+  expect(code).toBe("bad-call");
 });
 
 test("progress counts down while a part uploads", async ({ page }) => {
