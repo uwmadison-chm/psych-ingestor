@@ -23,6 +23,8 @@ EVENTS_FILE = "events.jsonl"
 MANIFEST_FILE = "manifest.json"
 MEDIA_DIRECTORY = "media"
 PART_SUFFIX = ".part"
+# Where secure-side commands record what they've done to a run. See `describe_files`.
+STATE_DIRECTORY = ".state"
 # What a file is called while it's being written. Never left behind on purpose, and
 # the sweep removes any that were: see `remove_partial_files`.
 PARTIAL_SUFFIX = ".partial"
@@ -218,9 +220,10 @@ def duplicate_event_ids(path: Path) -> list[str]:
     """Event IDs appearing more than once in an events file.
 
     Pig never rewrites `events.jsonl`, so a line the crash window repeated stays
-    repeated. Exact repeats are harmless and `pig organize` will drop them; two lines
-    sharing an ID but differing in content are the case an analyst needs to know about
-    before they start counting. This reports both, because telling them apart is the
+    repeated, and so does `pig organize`, which copies the file byte for byte. Exact
+    repeats are harmless and whatever reads the data drops them; two lines sharing an
+    ID but differing in content are the case an analyst needs to know about before they
+    start counting. This reports both, because telling them apart is the
     analyst's call.
     """
     counts: dict[str, int] = {}
@@ -278,11 +281,15 @@ def describe_files(directory: Path) -> list[dict[str, Any]]:
 
     This is what makes the directory verifiable standing alone: a copy elsewhere can be
     confirmed by hash, with no reference back to this machine.
+
+    `.state/` is left out too. It's where the secure side records what it's done to a
+    run, the one part of a run directory that changes after the manifest is written,
+    so the manifest must never vouch for it. The web side never writes one.
     """
     described = []
     for path in sorted(p for p in directory.rglob("*") if p.is_file()):
         relative = path.relative_to(directory).as_posix()
-        if relative == MANIFEST_FILE:
+        if relative == MANIFEST_FILE or relative.startswith(STATE_DIRECTORY + "/"):
             continue
         described.append(
             {

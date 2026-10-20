@@ -95,7 +95,7 @@ Run numbers count up from 1 and are never reused. Starting a task again with the
 always produces a new run with a new number, so Pig never has to overwrite or merge
 anything.
 
-This is the number `pig organize` will use in filenames, zero-padded to four digits so
+This is the number `pig organize` uses in paths, zero-padded to four digits so
 that a directory listing sorts the way a person expects. Four digits caps a run key at
 9999 runs, which is far more than any real participant will produce; Pig refuses rather
 than rolling over.
@@ -165,8 +165,8 @@ game people play for as long as they like — may never finalize a run at all; i
 difference between `complete` and `expired` is who vouched for the data: a `complete` run
 carries the task's word that it sent everything it had before it stopped, and an `expired`
 run holds everything that arrived. Both kinds are stored the same way, in the same place,
-and each run's manifest says which kind it is; a reader who wants only vouched-for data
-gets that from `pig organize`, which is where the distinction is applied.
+and each run's manifest says which kind it is. `pig organize` places both kinds the same
+way, so a reader who wants only vouched-for data reads `disposition` in the manifest.
 
 Neither kind of run can be reopened. If the participant is still working after a run closes,
 the task starts a new one, which gets the next run number.
@@ -191,7 +191,8 @@ done/stroop/9f3c1a7e-6b2d-4f80-9c11-2a5e8d40b7c3/
 `events.jsonl` is the events, one JSON object per line, in the order they arrived. Pig
 never rewrites it: no sorting, no tidying. It can hold the same line twice — the retry
 after a crash at the wrong moment writes it again — so a line count is an upper bound on
-the number of events until `pig organize` has dropped the repeats. A run that never sent an
+the number of events until whatever reads the data drops the repeats. `pig organize`
+copies the file as it is. A run that never sent an
 event still has an empty `events.jsonl`, so "is the dataset there" always has one answer.
 
 `manifest.json` says what the run is without reference to Pig: the task code, the run

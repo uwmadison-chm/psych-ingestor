@@ -11,7 +11,7 @@ import string
 import threading
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -179,9 +179,24 @@ class Config(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Which side this file is for. Optional here, since every pig.toml written before
+    # pigsty.toml existed lacks it; pigsty.toml has to say `kind = "secure"`.
+    kind: Literal["web"] = "web"
     data_root: Path
     database: Path
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _not_pigsty(cls, raw: Any) -> Any:
+        # Pydantic would refuse this anyway, but with a message about literals.
+        if isinstance(raw, dict) and raw.get("kind") == "secure":
+            raise ValueError(
+                'This is a secure-side configuration (kind = "secure"), which is '
+                "pigsty.toml. The web server's commands read pig.toml. Keep the two "
+                "files apart, and in production on different machines."
+            )
+        return raw
 
     # Two trees under the data root, and a run directory moves from one to the other
     # exactly once, by a rename. Both trees are on one filesystem or that rename isn't

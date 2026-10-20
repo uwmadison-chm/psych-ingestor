@@ -1,7 +1,8 @@
 """The command line: everything that isn't a request.
 
 Checking configuration, running the service, and the scheduled work — finishing closed
-runs and expiring runs that have been open too long.
+runs and expiring runs that have been open too long. Also the secure side's commands,
+which read pigsty.toml and never pig.toml or the database: `pig organize`, for now.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ from typing import Annotated
 
 import cyclopts
 
-from . import db, health
+from . import db, health, sty
+from . import organize as organize_module
 from . import runs as runs_module
 from . import sweep as sweep_module
 from .config import (
@@ -38,6 +40,15 @@ ConfigPath = Annotated[
     cyclopts.Parameter(
         name=["--config", "-c"],
         help="The task definitions file. Defaults to ./local/pig.toml.",
+    ),
+]
+
+
+StyConfigPath = Annotated[
+    Path,
+    cyclopts.Parameter(
+        name=["--config", "-c"],
+        help="The secure side's configuration file. Defaults to ./local/pigsty.toml.",
     ),
 ]
 
@@ -80,9 +91,34 @@ def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
         raise SystemExit(1) from error
 
 
+def _load_sty(path: Path | None) -> sty.StyConfig:
+    chosen = path or Path(os.environ.get("PIGSTY_CONFIG", sty.DEFAULT_STY_CONFIG))
+    if not chosen.exists():
+        print(f"There's no configuration file at {chosen}.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        return sty.load_sty_config(chosen)
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+
+
 @app.command
 def check(*, config: ConfigPath | None = None) -> None:
-    """Check the configuration file, and say what each task is set up to do."""
+    """Check a configuration file, and say what each task is set up to do.
+
+    Takes either pig.toml or pigsty.toml, and tells them apart by the `kind` each one
+    declares.
+    """
+    chosen = config or _default_config_path()
+    try:
+        kind = sty.read_kind(chosen) if chosen.exists() else None
+    except ConfigurationError:
+        kind = None  # _load says what's wrong with it.
+    if kind == sty.SECURE_KIND:
+        _check_sty(chosen)
+        return
+
     loaded = _load(config)
     print(f"Configuration looks good: {len(loaded.task)} task(s).")
     print(f"  data root: {loaded.data_root}")
@@ -108,6 +144,86 @@ def check(*, config: ConfigPath | None = None) -> None:
             f"allow request bodies of {describe_size(largest)} or more. See "
             "docs/deployment.md."
         )
+
+
+def _check_sty(path: Path) -> None:
+    loaded = _load_sty(path)
+    print(f"Secure-side configuration looks good: {len(loaded.task)} task(s) listed.")
+    print(f"  store:     {loaded.store}")
+    print(f"  organized: {loaded.organized}")
+    for code, task in sorted(loaded.task.items()):
+        print(f"\n{code}")
+        print(f"  pattern: {task.pattern or '(the default)'}")
+    print(
+        "\nA task not listed here is organized with the default pattern: its task "
+        "code, its run-key values, then its run number."
+    )
+
+
+@app.command
+def organize(
+    store: Path | None = None,
+    output: Path | None = None,
+    /,
+    *,
+    config: StyConfigPath | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Copy finished runs into a readable tree, named for their parameters.
+
+    On the secure server, pigsty.toml says where the runs are, where the tree goes, and
+    what each task's paths look like. To organize a copied store without one, give the
+    store and the output directory instead, and every task gets the default pattern.
+
+    Safe to run again: a run already in the tree is left alone. Nothing in the store is
+    ever changed. With --dry-run, prints where each run would go and copies nothing.
+    """
+    if (store is None) != (output is None):
+        print("Give both a store and an output directory, or neither.", file=sys.stderr)
+        raise SystemExit(1)
+    if store is not None and output is not None:
+        if config is not None:
+            print(
+                "Give either a configuration file or a store and output directory, "
+                "not both. To try out a pattern, put it in a small pigsty.toml along "
+                "with the store and output directory.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        patterns: dict[str, str] = {}
+    else:
+        loaded = _load_sty(config)
+        store, output = loaded.store, loaded.organized
+        patterns = {
+            code: task.pattern
+            for code, task in loaded.task.items()
+            if task.pattern is not None
+        }
+
+    report = organize_module.organize(store, output, patterns, dry_run=dry_run)
+
+    verb = "Would place" if dry_run else "Placed"
+    counts = [
+        f"{verb} {len(report.placed)} run(s)",
+        f"{len(report.already_there)} already there",
+    ]
+    if report.errors:
+        counts.append(f"{len(report.errors)} not placed")
+    if report.warnings:
+        counts.append(f"{len(report.warnings)} warning(s)")
+    print(", ".join(counts) + ".")
+    if dry_run:
+        for placement in sorted(report.placed, key=lambda p: p.destination):
+            print(f"  {placement.destination}  {placement.run_id}")
+
+    for where, why in report.errors.items():
+        print(f"  not placed: {where}: {why}", file=sys.stderr)
+    for warning in report.warnings:
+        print(f"  warning: {warning}", file=sys.stderr)
+    # A warning is a file that doesn't match its manifest, which someone has to look
+    # at even though the run was placed, so it fails a scheduled job too.
+    if report.errors or report.warnings:
+        raise SystemExit(1)
 
 
 # The first file descriptor systemd passes to a service it started from a socket unit.
