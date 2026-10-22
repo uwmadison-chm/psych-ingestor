@@ -21,7 +21,7 @@ export default defineConfig({
       timeout: 60_000,
     },
     {
-      command: "node e2e/serve-static.js",
+      command: "node e2e/build-bundled.js && node e2e/serve-static.js",
       url: `http://127.0.0.1:${STATIC_PORT}/script.html`,
       env: { STATIC_PORT: String(STATIC_PORT) },
       reuseExistingServer: false,

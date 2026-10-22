@@ -42,6 +42,19 @@ test("a whole run from an ES module", async ({ page, request }) => {
   expect((await serverRun(request, runId)).stored).toEqual(["0", "1"]);
 });
 
+test("a whole run from a task bundled by Vite, which brings the worker along by itself", async ({ page, request }) => {
+  await page.goto(`/bundled/index.html${LINK}`);
+  await page.waitForFunction(() => window.pig);
+  const runId = await page.evaluate(async ({ server, parameters }) => {
+    const run = await pig.start(server, "stroop", parameters);
+    await run.add({ type: "trial" });
+    await run.finalize();
+    await run.sent();
+    return run.runId;
+  }, { server: PIG, parameters: PARAMETERS });
+  expect((await serverRun(request, runId)).stored).toEqual(["0", "1"]);
+});
+
 test("a closed task fails at start()", async ({ page }) => {
   await page.goto(`/script.html?participant_id=10351`);
   const code = await page.evaluate(async (server) => {
