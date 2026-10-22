@@ -20,10 +20,19 @@ export type { Pending, RunState, TaskParameters };
 
 const LOG_LINES = 500;
 
-// Where this file was loaded from, so the worker can be found next to it. Read now,
-// while it's true: document.currentScript is only set while a <script> first runs.
-const LOADED_FROM =
-  (typeof document !== "undefined" && (document.currentScript as HTMLScriptElement | null)?.src) || import.meta.url;
+// Where pig.script.js was loaded from, if it came in by a <script> tag, so the worker can
+// be found next to it. Read now, while it's true: document.currentScript is only set while
+// a <script> first runs. For an ES module it's never set.
+const SCRIPT_SRC =
+  (typeof document !== "undefined" && (document.currentScript as HTMLScriptElement | null)?.src) || undefined;
+
+// Next to this file. For the ES module, this is written as `new URL("...", import.meta.url)`
+// on purpose: bundlers (Vite, webpack, and others) look for exactly that, and copy the
+// worker into their output alongside the task.
+function defaultWorkerUrl(): URL {
+  if (SCRIPT_SRC) return new URL("./pig-worker.js", SCRIPT_SRC);
+  return new URL("./pig-worker.js", import.meta.url);
+}
 
 /**
  * Everything the client tells you about, whichever run it's about: `error`, `progress`,
@@ -384,7 +393,7 @@ class Connection {
   ready: Promise<unknown>;
 
   constructor({ workerUrl, timing }: ConnectOptions) {
-    const url = workerUrl ?? new URL("./pig-worker.js", LOADED_FROM);
+    const url = workerUrl ?? defaultWorkerUrl();
     this.worker = new Worker(url);
     this.worker.addEventListener("message", ({ data }: MessageEvent<FromWorker>) => this.#receive(data));
     this.worker.addEventListener("error", (event) => {

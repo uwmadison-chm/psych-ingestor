@@ -9,14 +9,24 @@
 // Not minified: they're small, and people debugging a task should be able to read them.
 
 import { fileURLToPath } from "node:url";
-import { build } from "vite";
+import { build, createLogger } from "vite";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+
+// pig.js finds the worker with `new URL("./pig-worker.js", import.meta.url)`, which is
+// there for the bundlers of the tasks that use it, not for this build. Vite warns that it
+// can't find the file next to the source; that's expected, so don't print it.
+const logger = createLogger("warn");
+const warn = logger.warn;
+logger.warn = (message, options) => {
+  if (!message.includes("doesn't exist at build time")) warn(message, options);
+};
+logger.warnOnce = logger.warn;
 
 const common = {
   root,
   configFile: false,
-  logLevel: "warn",
+  customLogger: logger,
   build: { outDir: "dist", emptyOutDir: false, minify: false, sourcemap: true, target: "es2022" },
 };
 

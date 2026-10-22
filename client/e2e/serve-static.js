@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.STATIC_PORT ?? 8766);
 const roots = {
   "/dist/": fileURLToPath(new URL("../dist/", import.meta.url)),
+  "/bundled/": fileURLToPath(new URL("./bundled/dist/", import.meta.url)),
   "/": fileURLToPath(new URL("./pages/", import.meta.url)),
 };
 const types = { ".html": "text/html", ".js": "text/javascript", ".map": "application/json" };

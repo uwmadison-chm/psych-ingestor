@@ -34,6 +34,18 @@ declarations in `dist/types/`.
 Host them yourself, next to your task, rather than linking to them from somewhere else.
 Browsers only start a worker from the same site as the page.
 
+If your task is built with a bundler such as Vite or webpack, install the client from npm
+instead, with `npm install psych-ingestor-client`, and import it:
+
+```js
+import * as pig from "psych-ingestor-client";
+```
+
+The bundler finds `pig-worker.js` and copies it into your build by itself, so there's
+nothing to set up. If you use Vite's development server, add the client to
+`optimizeDeps.exclude` in your Vite config; Vite's pre-bundling otherwise loses track of
+the worker.
+
 ## Recording a run
 
 ```html
