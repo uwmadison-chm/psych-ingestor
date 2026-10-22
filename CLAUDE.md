@@ -35,6 +35,7 @@ Read what the task at hand calls for rather than all of it.
 | [docs/definitions.md](docs/definitions.md) | Any time you use the words task, session, run, dataset, event, or participant. Pig follows BIDS: a participant comes in for a *session*, does a *task*, and each time they do it is a *run*. "Session" never means the HTTP thing. |
 | [docs/api.md](docs/api.md) | Working on endpoints, request/response shapes, or the client side of a task. |
 | [docs/configuration.md](docs/configuration.md) | Working on task definitions, the config file, storage paths, or the CLI. |
+| [docs/organizing.md](docs/organizing.md) | Working on `pig organize`, `pigsty.toml`, or anything on the secure side. |
 | [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what Pig does and doesn't defend against. |
 | [docs/deployment.md](docs/deployment.md) | Working on running the service — systemd, the health check. |
 | [docs/documentation_style.md](docs/documentation_style.md) | Writing any user-facing prose — docs, error messages, CLI help. Read `README.md` alongside it. |

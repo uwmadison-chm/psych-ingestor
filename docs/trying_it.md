@@ -100,8 +100,9 @@ ls local/data/done/interview/YOUR-RUN-ID/media/00001/     # the parts, if you se
 
 The manifest says what the run is — who, which session, which run number, when — and the
 events file is what your task sent, one line per event, in the order it arrived. A
-readable tree named for participants and sessions is what `pig organize` will build from
-these; it isn't written yet.
+readable tree named for participants and sessions is what `pig organize` builds from
+these: try `pig organize local/data/done local/organized`, and see
+[organizing.md](organizing.md).
 
 ## Things worth trying to break
 
@@ -132,7 +133,7 @@ wrong:
 
 The service is the requests in [api.md](api.md) plus `/health`. Not built: parameter
 signing, participant rosters, `max_runs`, settings returned at run start, copying runs
-offsite, `pig organize`, a JavaScript helper for media uploads, and per-task allowed
+offsite, a JavaScript helper for media uploads, and per-task allowed
 origins (every task currently allows any origin). See
 [configuration.md](configuration.md) for what's marked *built* and what isn't.
 

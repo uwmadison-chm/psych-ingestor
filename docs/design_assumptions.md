@@ -57,7 +57,7 @@ destroyed — and a reason that would survive the next change of layout.
 ## Link parameters will be used in filenames; be careful
 
 Pig stores every run under its run ID, so nothing a participant supplies becomes a path
-on the collecting machine. But `pig organize` will build a readable tree like
+on the collecting machine. But `pig organize` builds a readable tree like
 
 `{task_code}/{participant_id}/{session}_run-0001.jsonl`
 
@@ -148,8 +148,9 @@ harmlessly.)
 sort it, not to drop repeats. What's in `done/` is the append log exactly as the server
 wrote it, which is what makes the hash in the manifest a hash of what happened rather than
 of a tidied-up rendering of it. The file holds at least one copy of every event Pig
-accepted, not exactly one. `pig organize` drops exact repeats where it's rewriting the
-file anyway, on another machine.
+accepted, not exactly one. `pig organize` doesn't drop them either: it copies the file
+byte for byte, so the manifest's hash still checks in the organized tree. Dropping exact
+repeats belongs to whatever reads a task's data.
 
 An earlier version of this document claimed that by sweep time every line sharing an
 event ID is byte-identical, and used that to justify a dedupe at sweep. The claim was
