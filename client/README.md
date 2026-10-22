@@ -35,10 +35,10 @@ Host them yourself, next to your task, rather than linking to them from somewher
 Browsers only start a worker from the same site as the page.
 
 If your task is built with a bundler such as Vite or webpack, install the client from npm
-instead, with `npm install psych-ingestor-client`, and import it:
+instead, with `npm install @uwmadison-chm/pig-client`, and import it:
 
 ```js
-import * as pig from "psych-ingestor-client";
+import * as pig from "@uwmadison-chm/pig-client";
 ```
 
 The bundler finds `pig-worker.js` and copies it into your build by itself, so there's
