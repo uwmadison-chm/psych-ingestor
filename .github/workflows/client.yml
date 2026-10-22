@@ -17,9 +17,9 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-    paths: ["client/**", "src/**", ".github/workflows/client.yml"]
+    paths: ["client/**", "src/**", "pyproject.toml", ".github/workflows/client.yml"]
   pull_request:
-    paths: ["client/**", "src/**", ".github/workflows/client.yml"]
+    paths: ["client/**", "src/**", "pyproject.toml", ".github/workflows/client.yml"]
 
 permissions:
   contents: read
