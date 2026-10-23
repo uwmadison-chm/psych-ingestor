@@ -1,41 +1,78 @@
-"""Build a readable tree from a store of finished run directories.
+"""Build a readable tree from a task's admitted runs.
 
-The store is what the web server's `done/` holds, copied to wherever the data ends up:
-one directory per run, named for its run ID, each with a manifest. That's the record,
-and it's deliberately not readable — `stroop/9f3c1a7e-…/` tells a person nothing. This
-copies each run to a path built from its manifest, like `stroop/10351/baseline/run-0002/`.
+`pigsty admit` keeps each task's runs in `{datastore_base}/runs/`, one directory per run,
+named for its run ID. That's the record, and it's deliberately not readable:
+`runs/9f3c1a7e-…/` tells a person nothing. This copies each run to a path built from its
+`pig-run.json`, like `stroop/baseline/10351_0002/`, under the task's organized root.
 
 Two rules the rest of this rests on. It never reads `pig.toml` or the database: by the
-time it runs, neither may exist on this machine, so everything comes from the manifests.
-And it never changes the store or deletes anything from it. The tree is regenerable; to
+time it runs, neither may exist on this machine, so everything comes from `pig-run.json`.
+And it never changes `runs/` or deletes anything from it. The tree is regenerable; to
 rebuild one, delete it and run this again.
+
+Each task's tree keeps a record of its own, `.placed.jsonl` in its organized root, a
+line for each run placed in it. A task can have tens of thousands of runs, on a network
+share where every file read is a round trip, so a second organize reads that file and
+the listing of `runs/`, and reads the `pig-run.json` of new runs only. With `full`, it
+ignores the record, checks every run against the tree, and writes the record again. See
+issue #42.
 
 It never changes the data either. Events and media parts are copied byte for byte, and
 the only thing renamed is each media item's directory, from Pig's number to the event ID
-the task gave it. See issue #9.
+the task gave it. They aren't checked against hashes: admit did that, and nothing in
+`runs/` is there unless it matched. See issue #9.
 """
 
 from __future__ import annotations
 
-import hashlib
+import fcntl
 import json
+import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO, Literal
 
 from . import storage
+from .admit import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, RUNS_DIRECTORY
 from .config import SAFE_VALUE_EXPLANATION, is_safe_value
-from .sty import BUILT_IN_NAMES, PLACEHOLDER, PatternError, check_pattern
-from .sty import default_pattern as make_default_pattern
+from .sty import BUILT_IN_NAMES, PLACEHOLDER
 
 # What a run is copied into before it's renamed into place, so a tree never holds half
 # a run. Starts with a dot so it can't collide with a path a pattern produces.
 SCRATCH_SUFFIX = ".organizing"
 
+# The tree's record of the runs placed in it, in the task's organized root. Starts with
+# a dot for the same reason.
+RECORD_FILE = ".placed.jsonl"
+
+# Held while an organize works on a task's tree, so two at once, from scheduled jobs
+# that overlap say, can't both copy the same run.
+LOCK_FILE = ".organize.lock"
+
+# How many runs are read and copied at once. On a network share the time goes to
+# waiting for the server, not to work, so a few at once is several times faster. Each
+# run is handled start to finish by one worker, and everything about it is reported
+# and recorded by the main thread, in run ID order.
+WORKERS = 8
+
 
 class RunProblem(Exception):
     """Something about one run that stops it from being placed."""
+
+
+class RecordProblem(Exception):
+    """The tree's record of placed runs can't be read."""
+
+
+@dataclass
+class Recorded:
+    """A run the tree's record says is already placed. Not read from `runs/`."""
+
+    run_id: str
+    # Relative to the organized root.
+    destination: PurePosixPath
 
 
 @dataclass
@@ -44,89 +81,286 @@ class Placement:
 
     run_id: str
     source: Path
-    # Relative to the organized directory.
+    # Relative to the organized root.
     destination: PurePosixPath
-    manifest: dict[str, Any]
+    # `pig-run.json` as it is in `runs/`, copied into the tree as it is.
+    run_file_bytes: bytes
     # Pig's media directory names (`00001`) to the event IDs they become.
     media_names: dict[str, str]
 
 
 @dataclass
-class OrganizeReport:
-    """What one organize did, or would do with `dry_run`.
+class Outcome:
+    """What happened to one run, from the worker that handled it."""
 
-    `errors` are runs that weren't placed, keyed by their directory in the store.
-    `warnings` are runs that were placed but whose files didn't all match the manifest:
-    a file missing, a hash that differs, a file the manifest doesn't list. Either one is
-    something a person needs to look at.
+    status: Literal["placed", "already there", "not placed"]
+    # Why it wasn't placed.
+    problem: str = ""
+
+
+@dataclass
+class OrganizeReport:
+    """What one organize did for one task, or would do with `dry_run`.
+
+    `errors` are runs that weren't placed, keyed by their directory in `runs/`, and
+    anything that stopped the task being organized at all.
     """
 
     placed: list[Placement] = field(default_factory=list)
-    already_there: list[Placement] = field(default_factory=list)
+    # Run IDs. Most come from the record, without their pig-run.json being read.
+    already_there: list[str] = field(default_factory=list)
     errors: dict[str, str] = field(default_factory=dict)
-    warnings: list[str] = field(default_factory=list)
 
 
 def organize(
-    store: Path,
-    output: Path,
-    patterns: dict[str, str],
+    task_code: str,
+    datastore: Path,
+    root: Path,
+    pattern: str,
     dry_run: bool = False,
+    full: bool = False,
 ) -> OrganizeReport:
-    """Place every run in `store` under `output`.
+    """Place every run in `datastore/runs/` under `root`, by `pattern`.
 
-    `patterns` maps a task code to its pattern; a task without one gets the default.
-    Safe to run again over the same tree: a run already in place is left alone.
+    Safe to run again over the same tree: a run already in place is left alone. A run
+    in the tree's record isn't read at all, unless `full`.
     """
+    if dry_run:
+        return _organize(task_code, datastore, root, pattern, dry_run, full)
+    root.mkdir(parents=True, exist_ok=True)
+    with open(root / LOCK_FILE, "a") as lock:
+        # A POSIX lock, rather than flock, because that's the kind an SMB or NFS mount
+        # passes on to the server, where another machine's organize would see it.
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            report = OrganizeReport()
+            report.errors[str(root)] = (
+                "another pigsty organize is working on this tree. Nothing was placed. "
+                "Run this again once it's finished."
+            )
+            return report
+        return _organize(task_code, datastore, root, pattern, dry_run, full)
+
+
+def _organize(
+    task_code: str,
+    datastore: Path,
+    root: Path,
+    pattern: str,
+    dry_run: bool,
+    full: bool,
+) -> OrganizeReport:
     report = OrganizeReport()
-    for placement in _plan(store, patterns, report):
-        destination = output / placement.destination
-        already = _already_placed(destination, placement, report)
-        if already:
-            report.already_there.append(placement)
-            continue
-        if already is None:
-            continue
-        if not dry_run:
-            try:
-                _copy_run(placement, destination, report)
-            except OSError as error:
-                report.errors[str(placement.source)] = f"couldn't copy it: {error}"
-                continue
-        report.placed.append(placement)
+    runs = datastore / RUNS_DIRECTORY
+    try:
+        run_ids = _directories_in(runs)
+    except FileNotFoundError:
+        report.errors[str(runs)] = (
+            "There's no runs directory here. pigsty admit makes it, and puts this "
+            "task's runs in it."
+        )
+        return report
+
+    if full:
+        recorded: dict[str, Recorded] = {}
+    else:
+        try:
+            recorded = read_record(root / RECORD_FILE)
+        except RecordProblem as problem:
+            report.errors[str(root / RECORD_FILE)] = str(problem)
+            return report
+
+    sources = [runs / run_id for run_id in run_ids if run_id not in recorded]
+    planned = _plan(task_code, sources, pattern, recorded, report)
+    with ThreadPoolExecutor(WORKERS) as pool:
+        outcomes = pool.map(
+            lambda placement: _organize_one(placement, root, dry_run), planned
+        )
+        record: BinaryIO | None = None
+        try:
+            for placement, outcome in zip(planned, outcomes, strict=True):
+                if outcome.status == "not placed":
+                    report.errors[str(placement.source)] = outcome.problem
+                    continue
+                if outcome.status == "placed":
+                    report.placed.append(placement)
+                else:
+                    report.already_there.append(placement.run_id)
+                if dry_run:
+                    continue
+                if record is None:
+                    record = _open_record(root, full)
+                _append_record(record, placement)
+        finally:
+            if record is not None:
+                record.close()
+    if full and not dry_run:
+        _replace_record(root, wrote=record is not None)
+    report.already_there.extend(recorded)
     return report
+
+
+def _organize_one(placement: Placement, root: Path, dry_run: bool) -> Outcome:
+    """Place one run. Run by the workers, so it reports nothing itself."""
+    destination = root / placement.destination
+    try:
+        if _already_placed(destination, placement):
+            return Outcome("already there")
+        if not dry_run:
+            _copy_run(placement, root, destination)
+    except RunProblem as problem:
+        return Outcome("not placed", str(problem))
+    except OSError as error:
+        return Outcome("not placed", f"couldn't copy it: {error}")
+    return Outcome("placed")
+
+
+def _directories_in(directory: Path) -> list[str]:
+    """The names of the directories directly inside this one, leaving out dot-names.
+
+    `os.scandir` says whether each entry is a directory without a separate question per
+    entry, which matters on a network share. See issue #42.
+    """
+    with os.scandir(directory) as entries:
+        return sorted(
+            entry.name
+            for entry in entries
+            if not entry.name.startswith(".") and entry.is_dir()
+        )
+
+
+# ---------------------------------------------------------------------- the record
+
+
+def read_record(path: Path) -> dict[str, Recorded]:
+    """The runs a tree's record says are placed, by run ID.
+
+    A tree with no record yet has placed nothing as far as it knows; runs already in it
+    are found by their pig-run.json and recorded. A last line with no newline was being
+    written when an organize stopped, and is left out: its run is found the same way.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as error:
+        raise RecordProblem(_damaged(path, error)) from error
+    recorded = {}
+    # Everything up to the last newline. Whatever follows it is an unfinished line.
+    for number, line in enumerate(text.split("\n")[:-1], start=1):
+        try:
+            entry = json.loads(line)
+            run = Recorded(
+                run_id=str(entry["run_id"]),
+                destination=PurePosixPath(entry["destination"]),
+            )
+        except (ValueError, KeyError, TypeError) as error:
+            raise RecordProblem(_damaged(path, f"line {number}: {error}")) from error
+        recorded[run.run_id] = run
+    return recorded
+
+
+def _damaged(path: Path, why: object) -> str:
+    return (
+        f"can't read {path}, the record of runs placed in this tree ({why}). Nothing "
+        "was placed. To check every run against the tree and write the record again, "
+        "run pigsty organize --full."
+    )
+
+
+def _record_path(root: Path, full: bool) -> Path:
+    """Where the record is, or with `full`, where its new one is written."""
+    return root / (f"{RECORD_FILE}.partial" if full else RECORD_FILE)
+
+
+def _open_record(root: Path, full: bool) -> BinaryIO:
+    """The record, open to add lines to; with `full`, a new one beside it.
+
+    The caller closes it.
+    """
+    path = _record_path(root, full)
+    if full:
+        record = open(path, "wb")  # noqa: SIM115 -- closed by the caller
+        storage.fsync_directory(root)
+        return record
+    record = open(path, "a+b")  # noqa: SIM115 -- closed by the caller
+    storage.fsync_directory(root)
+    # A last line an earlier organize didn't finish is cut off, so this one's first
+    # line starts on a line of its own. Usually only the last byte is read.
+    record.seek(0, os.SEEK_END)
+    if record.tell() > 0:
+        record.seek(-1, os.SEEK_END)
+        if record.read(1) != b"\n":
+            record.seek(0)
+            record.truncate(record.read().rfind(b"\n") + 1)
+    return record
+
+
+def _append_record(record: BinaryIO, placement: Placement) -> None:
+    """Record one run as placed. Only after its directory is in place, so a record
+    never names a run the tree doesn't have.
+
+    Fsynced, so a line, once written, stays. A line lost to a crash before that only
+    means the next organize finds that run by its pig-run.json, and records it then.
+    """
+    line = {
+        "run_id": placement.run_id,
+        "destination": placement.destination.as_posix(),
+    }
+    record.write((json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
+    record.flush()
+    os.fsync(record.fileno())
+
+
+def _replace_record(root: Path, wrote: bool) -> None:
+    """After `full`, put the new record in place of the old one, or with no runs in
+    the tree, remove the old one.
+
+    The new record was written beside the old one and replaces it only now, so an
+    interrupted --full leaves the old record rather than half of a new one.
+    """
+    if wrote:
+        _record_path(root, full=True).replace(_record_path(root, full=False))
+    else:
+        _record_path(root, full=False).unlink(missing_ok=True)
+    storage.fsync_directory(root)
 
 
 # --------------------------------------------------------------------- planning
 
 
 def _plan(
-    store: Path, patterns: dict[str, str], report: OrganizeReport
+    task_code: str,
+    sources: list[Path],
+    pattern: str,
+    recorded: dict[str, Recorded],
+    report: OrganizeReport,
 ) -> list[Placement]:
-    """Where every run in the store goes, with any two that would land together
-    refused rather than placed."""
+    """Where each of these runs goes, with any two that would land together refused
+    rather than placed."""
     planned: list[Placement] = []
-    for source in _run_directories(store, report):
-        try:
-            planned.append(_place(source, patterns))
-        except RunProblem as problem:
-            report.errors[str(source)] = str(problem)
-        except (KeyError, TypeError, ValueError) as error:
-            # A manifest Pig wrote always has these. One that doesn't has been edited.
-            report.errors[str(source)] = (
-                f"manifest.json is missing something Pig always writes, or has an "
-                f"unexpected value in it ({error!r})."
-            )
+    with ThreadPoolExecutor(WORKERS) as pool:
+        places = pool.map(
+            lambda source: _try_place(task_code, source, pattern), sources
+        )
+        for source, place in zip(sources, places, strict=True):
+            if isinstance(place, Placement):
+                planned.append(place)
+            else:
+                report.errors[str(source)] = place
 
     # Two runs in one place is always an error, and neither is placed: skipping the
     # second would make a run silently missing from the tree, and placing whichever
     # came first would make which one depend on directory order. One run inside
     # another's directory counts too. Compared without case, since `Baseline` and
     # `baseline` are one directory on a Mac.
-    by_path: dict[tuple[str, ...], Placement] = {}
-    by_ancestor: dict[tuple[str, ...], Placement] = {}
+    # Runs already placed are in the comparison too, so a new run can't land on one.
+    # Only the new run is refused: the placed one is in the tree, and stays there.
+    by_path: dict[tuple[str, ...], Placement | Recorded] = {}
+    by_ancestor: dict[tuple[str, ...], Placement | Recorded] = {}
     colliding: dict[str, str] = {}
-    for placement in planned:
+    for placement in [*recorded.values(), *planned]:
         key = tuple(part.casefold() for part in placement.destination.parts)
         ancestors = [key[:length] for length in range(1, len(key))]
         others = [by_path.get(key), by_ancestor.get(key)]
@@ -148,7 +382,21 @@ def _plan(
     return kept
 
 
-def _collision(placement: Placement, other: Placement) -> str:
+def _try_place(task_code: str, source: Path, pattern: str) -> Placement | str:
+    """Where one run goes, or why it can't be placed. Run by the workers."""
+    try:
+        return _place(task_code, source, pattern)
+    except RunProblem as problem:
+        return str(problem)
+    except (KeyError, TypeError, ValueError) as error:
+        # A pig-run.json admit wrote always has these. One that doesn't has been edited.
+        return (
+            f"{RUN_FILE} is missing something Pig always writes, or has an unexpected "
+            f"value in it ({error!r})."
+        )
+
+
+def _collision(placement: Placement | Recorded, other: Placement | Recorded) -> str:
     return (
         f"run {placement.run_id} would go to {placement.destination}, which is the "
         f"same place as run {other.run_id} ({other.destination}), or inside it. "
@@ -157,85 +405,65 @@ def _collision(placement: Placement, other: Placement) -> str:
     )
 
 
-def _run_directories(store: Path, report: OrganizeReport) -> list[Path]:
-    """Every `{task_code}/{run_id}/` directory in the store."""
-    if not store.is_dir():
-        report.errors[str(store)] = "There's no directory here to organize."
-        return []
-    found = []
-    for task_directory in sorted(store.iterdir()):
-        if task_directory.name.startswith(".") or not task_directory.is_dir():
-            continue
-        for run_directory in sorted(task_directory.iterdir()):
-            if run_directory.name.startswith(".") or not run_directory.is_dir():
-                continue
-            found.append(run_directory)
-    return found
-
-
-def _place(source: Path, patterns: dict[str, str]) -> Placement:
-    """Read one run's manifest and work out where it goes."""
-    manifest = _read_manifest(source)
-    run_id = manifest["run_id"]
-    task_code = manifest["task_code"]
-    if source.name != run_id or source.parent.name != task_code:
+def _place(task_code: str, source: Path, pattern: str) -> Placement:
+    """Read one run's pig-run.json and work out where it goes."""
+    run_file_bytes = _read_run_file_bytes(source)
+    run = _parse_run_file(run_file_bytes)
+    if run["run_id"] != source.name or run["task_code"] != task_code:
         raise RunProblem(
-            f"the manifest says this is run {run_id} of task {task_code}, but it's "
-            f"stored at {source.parent.name}/{source.name}. One of them has been "
-            "moved or edited."
+            f"{RUN_FILE} says this is run {run['run_id']} of task {run['task_code']}, "
+            f"but it's in task {task_code}'s runs directory as {source.name}. One of "
+            "them has been moved or edited."
         )
-
-    pattern = patterns.get(task_code) or make_default_pattern(
-        task_code, manifest["run_key"]
-    )
-    try:
-        check_pattern(pattern)
-    except PatternError as error:
-        raise RunProblem(str(error)) from None
-
     return Placement(
-        run_id=run_id,
+        run_id=source.name,
         source=source,
-        destination=render(pattern, manifest),
-        manifest=manifest,
-        media_names=_media_names(manifest),
+        destination=render(pattern, run),
+        run_file_bytes=run_file_bytes,
+        media_names=_media_names(run),
     )
 
 
-def _read_manifest(source: Path) -> dict[str, Any]:
-    if not (source / storage.MANIFEST_FILE).exists():
-        raise RunProblem(
-            "there's no manifest.json, so this run isn't finished. The store should "
-            "only hold runs from the web server's done/ directory, never in_progress/."
-        )
+def _read_run_file_bytes(source: Path) -> bytes:
     try:
-        manifest = storage.read_manifest(source)
-    except (OSError, ValueError) as error:
-        raise RunProblem(f"can't read manifest.json: {error}") from error
-    if not isinstance(manifest, dict) or manifest.get("type") != (
-        storage.MANIFEST_TYPE
-    ):
-        raise RunProblem("manifest.json isn't a Pig run manifest.")
-    if manifest.get("manifest_version") != storage.MANIFEST_VERSION:
+        return (source / RUN_FILE).read_bytes()
+    except FileNotFoundError:
         raise RunProblem(
-            f"manifest.json is version {manifest.get('manifest_version')!r}, and this "
-            f"version of Pig reads version {storage.MANIFEST_VERSION}."
+            f"there's no {RUN_FILE}. Everything in runs/ should have been put there by "
+            "pigsty admit, which writes one in every run."
+        ) from None
+    except OSError as error:
+        raise RunProblem(f"can't read {RUN_FILE}: {error}") from error
+
+
+def _parse_run_file(run_file_bytes: bytes) -> dict[str, Any]:
+    try:
+        run = json.loads(run_file_bytes.decode("utf-8"))
+    except ValueError as error:
+        raise RunProblem(f"can't read {RUN_FILE}: {error}") from error
+    if not isinstance(run, dict) or run.get("type") != RUN_FILE_TYPE:
+        raise RunProblem(f"{RUN_FILE} isn't a Pig run file.")
+    if run.get("run_file_version") != RUN_FILE_VERSION:
+        raise RunProblem(
+            f"{RUN_FILE} is version {run.get('run_file_version')!r}, and this version "
+            f"of Pig reads version {RUN_FILE_VERSION}."
         )
-    return manifest
+    return run
 
 
-def render(pattern: str, manifest: dict[str, Any]) -> PurePosixPath:
-    """Fill a pattern from a manifest, or raise RunProblem saying why it can't be.
+def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
+    """Fill a pattern from a run's pig-run.json, or raise RunProblem saying why it
+    can't be.
 
-    Parameters come from the manifest's `parameters` only: those are the ones the task
-    declared, and Pig checked every one against the safe-value rule when the run
-    started. `extra_parameters` were recorded as they arrived and never checked, so
-    they can't become part of a path.
+    Parameters come from `parameters` only: those are the ones the task declared, and
+    Pig checked every one against the safe-value rule when the run started.
+    `extra_parameters` were recorded as they arrived and never checked, so they can't
+    become part of a path.
     """
-    parameters = manifest["parameters"]
+    parameters = run["parameters"]
     values: dict[str, str] = {
-        "task_code": manifest["task_code"],
-        "run_number": f"{manifest['run_number']:04d}",
+        "task_code": run["task_code"],
+        "run_number": f"{run['run_number']:04d}",
     }
 
     def fill(match: Any) -> str:
@@ -244,7 +472,7 @@ def render(pattern: str, manifest: dict[str, Any]) -> PurePosixPath:
             return values[name]
         if name in parameters:
             return str(parameters[name])
-        if name in manifest.get("extra_parameters", {}):
+        if name in run.get("extra_parameters", {}):
             raise RunProblem(
                 f"the pattern uses {{{name}}}, which this task doesn't declare. It "
                 "arrived in the link as an extra parameter, and those are never "
@@ -257,9 +485,9 @@ def render(pattern: str, manifest: dict[str, Any]) -> PurePosixPath:
         )
 
     rendered = PLACEHOLDER.sub(fill, pattern)
-    # Checked again here, whatever was checked at ingest, because a hand-edited
-    # manifest will happen. This also covers the literal parts of the pattern, and
-    # an empty part from `a//b`.
+    # Checked again here, whatever was checked at ingest, because a hand-edited file
+    # will happen. This also covers the literal parts of the pattern, and an empty
+    # part from `a//b`.
     for part in rendered.split("/"):
         if not is_safe_value(part):
             raise RunProblem(
@@ -269,7 +497,7 @@ def render(pattern: str, manifest: dict[str, Any]) -> PurePosixPath:
     return PurePosixPath(rendered)
 
 
-def _media_names(manifest: dict[str, Any]) -> dict[str, str]:
+def _media_names(run: dict[str, Any]) -> dict[str, str]:
     """Pig's media directory names to the event IDs they become in the tree.
 
     Event IDs are whatever the task chose, up to 256 characters of anything, which is
@@ -278,7 +506,7 @@ def _media_names(manifest: dict[str, Any]) -> dict[str, str]:
     """
     names: dict[str, str] = {}
     seen: dict[str, str] = {}
-    for item in manifest.get("media", []):
+    for item in run.get("media", []):
         event_id = str(item["event_id"])
         if not is_safe_value(event_id):
             raise RunProblem(
@@ -299,81 +527,97 @@ def _media_names(manifest: dict[str, Any]) -> dict[str, str]:
 # --------------------------------------------------------------------- copying
 
 
-def _already_placed(
-    destination: Path, placement: Placement, report: OrganizeReport
-) -> bool | None:
-    """Whether this run is already where it belongs: True if so, False if nothing's
-    there, None if something else is (recorded as an error)."""
-    if not destination.exists():
-        return False
-    manifest_path = destination / storage.MANIFEST_FILE
+def _already_placed(destination: Path, placement: Placement) -> bool:
+    """Whether this run is already where it belongs. RunProblem if something else is.
+
+    Reads the run file first and asks whether the destination exists only if that
+    fails, since on a --full organize nearly every run is already there, and every
+    question is a round trip on a network share.
+    """
     try:
-        there = json.loads(manifest_path.read_text(encoding="utf-8"))["run_id"]
+        there = json.loads((destination / RUN_FILE).read_text(encoding="utf-8"))
+        there = there["run_id"]
+    except FileNotFoundError:
+        if not os.path.lexists(destination):
+            return False
+        there = None
     except (OSError, ValueError, KeyError, TypeError):
         there = None
     if there == placement.run_id:
         return True
     described = f"run {there}" if there else "something that isn't a placed run"
-    report.errors[str(placement.source)] = (
+    raise RunProblem(
         f"run {placement.run_id} goes to {placement.destination}, and {described} is "
         "already there. Nothing was changed."
     )
-    return None
 
 
-def _copy_run(placement: Placement, destination: Path, report: OrganizeReport) -> None:
-    """Copy one run's files into place, checking each against the manifest.
+def _copy_run(placement: Placement, root: Path, destination: Path) -> None:
+    """Copy one run's files into place.
 
     Everything goes into a scratch directory beside the destination, which is renamed
-    into place at the end, so a run in the tree is always a whole run.
+    into place at the end, so a run in the tree is always a whole run. Every file and
+    directory is fsynced before the rename, and the directories above it after, so a
+    run the record names is on disk.
     """
     scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
-    if scratch.exists():
-        # Left by an organize that was interrupted. Ours by its name, never the store's.
+    try:
+        # Left by an organize that was interrupted. Ours by its name, never runs/'s.
         shutil.rmtree(scratch)
+    except FileNotFoundError:
+        pass
     scratch.mkdir(parents=True)
+    made = {scratch}
 
-    listed = set()
-    for entry in placement.manifest["files"]:
-        relative = PurePosixPath(entry["path"])
-        listed.add(relative)
-        source = placement.source / relative
-        if not source.is_file():
-            report.warnings.append(
-                f"run {placement.run_id}: {relative} is in the manifest but missing "
-                "from the store."
-            )
+    for relative in _files_in(placement.source):
+        if relative == PurePosixPath(RUN_FILE):
             continue
         target = scratch / _renamed(relative, placement.media_names)
-        size, digest = _copy_and_hash(source, target)
-        if size != entry["bytes"] or digest != entry["sha256"]:
-            report.warnings.append(
-                f"run {placement.run_id}: {relative} doesn't match the manifest "
-                f"({size} bytes, sha256 {digest}; the manifest says {entry['bytes']} "
-                f"bytes, sha256 {entry['sha256']}). It was copied as it is."
-            )
+        _copy(placement.source / relative, target, made)
 
-    for path in sorted(placement.source.rglob("*")):
-        relative = PurePosixPath(path.relative_to(placement.source).as_posix())
-        if not path.is_file() or relative.parts[0] == storage.STATE_DIRECTORY:
-            continue
-        if relative != PurePosixPath(storage.MANIFEST_FILE) and relative not in listed:
-            report.warnings.append(
-                f"run {placement.run_id}: {relative} is in the store but not in the "
-                "manifest. It wasn't copied."
-            )
-
-    # The manifest goes in last, and it's what a later organize looks for to know this
-    # run is already placed.
-    shutil.copyfile(
-        placement.source / storage.MANIFEST_FILE, scratch / storage.MANIFEST_FILE
-    )
+    # pig-run.json goes in last, and it's what a later organize looks for to know this
+    # run is already placed. It's the bytes read while planning, so it isn't read twice.
+    with open(scratch / RUN_FILE, "wb") as run_file:
+        run_file.write(placement.run_file_bytes)
+        run_file.flush()
+        os.fsync(run_file.fileno())
+    # Each directory made, and each between it and the scratch directory, for the
+    # entries in it.
+    to_sync = {scratch}
+    for directory in made:
+        while directory != scratch:
+            to_sync.add(directory)
+            directory = directory.parent
+    for directory in to_sync:
+        storage.fsync_directory(directory)
     scratch.rename(destination)
+    # The rename, and any directory made above the run on the way to it.
+    for directory in destination.parents:
+        storage.fsync_directory(directory)
+        if directory == root:
+            break
+
+
+def _files_in(run_directory: Path) -> list[PurePosixPath]:
+    """Every file in a run directory, relative to it, leaving out `.state/`.
+
+    `os.walk` lists each directory once, rather than asking about every file in it.
+    """
+    found = []
+    for directory, subdirectories, files in os.walk(run_directory):
+        here = Path(directory)
+        if here == run_directory and storage.STATE_DIRECTORY in subdirectories:
+            subdirectories.remove(storage.STATE_DIRECTORY)
+        for name in files:
+            found.append(
+                PurePosixPath((here / name).relative_to(run_directory).as_posix())
+            )
+    return sorted(found)
 
 
 def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixPath:
-    """A file's path in the tree: the same as in the store, except that a media
-    item's directory is named for its event ID."""
+    """A file's path in the tree: the same as in `runs/`, except that a media item's
+    directory is named for its event ID."""
     parts = relative.parts
     is_media = len(parts) >= 3 and parts[0] == storage.MEDIA_DIRECTORY
     if is_media and parts[1] in media_names:
@@ -381,13 +625,13 @@ def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixP
     return relative
 
 
-def _copy_and_hash(source: Path, target: Path) -> tuple[int, str]:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    size = 0
+def _copy(source: Path, target: Path, made: set[Path]) -> None:
+    """Copy one file and fsync it. `made` is the directories this run has already
+    created, so each is created once rather than once per file."""
+    if target.parent not in made:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        made.add(target.parent)
     with open(source, "rb") as reading, open(target, "wb") as writing:
-        while chunk := reading.read(1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-            writing.write(chunk)
-    return size, digest.hexdigest()
+        shutil.copyfileobj(reading, writing, 1024 * 1024)
+        writing.flush()
+        os.fsync(writing.fileno())
