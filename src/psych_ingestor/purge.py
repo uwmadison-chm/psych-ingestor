@@ -18,13 +18,19 @@ have: the web server from `done/`, the secure side from its copy of the bucket.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import db, runs, storage
+from . import admit, db, runs, storage
 
 PURGE_HASH_PREFIX = b"pig-purge\n"
 
@@ -120,3 +126,139 @@ def _ignore_missing(function: Any, path: str, error: BaseException) -> None:
     # Another purge, or a sweep, deleting the same directory at the same time.
     if not isinstance(error, FileNotFoundError):
         raise error
+
+
+# ------------------------------------------------------------- the secure side's
+#
+# `pigsty purge` asks the web server to purge each run this side has admitted. It hashes
+# the copy in `incoming/`, never `runs/`: `incoming/` is a mirror of the bucket, so its
+# bytes are the web server's bytes, and once decryption (#10) happens in admit, the
+# files in `runs/` won't be. A run that's in `incoming/` but not `runs/` isn't admitted,
+# so it isn't purged. One that's in `runs/` but not `incoming/` has already left the
+# bucket, so there's nothing to ask about.
+#
+# A run that's been purged gets `runs/{run_id}/.state/purged`, so the next pass doesn't
+# hash it again while the syncs catch up and drop it from `incoming/`.
+
+# Where the secure side records what it's done to a run. Organize never copies it.
+STATE_DIRECTORY = storage.STATE_DIRECTORY
+PURGED_FILE = "purged"
+
+# The web server hashes its copy of the run before it answers, which for a run with a
+# lot of media takes a while.
+TIMEOUT_SECONDS = 600
+
+# Sends one purge request: the path after Pig's address, and the body. Returns the
+# reply's status code and its body. Given to `purge_runs` so tests can stand in for
+# the web server.
+Sender = Callable[[str, dict[str, Any]], tuple[int, dict[str, Any]]]
+
+
+class Unreachable(Exception):
+    """Pig didn't answer at all. Every other run would go the same way, so stop."""
+
+
+@dataclass
+class PurgeReport:
+    """What one `pigsty purge` did for one task.
+
+    `problems` are runs Pig refused to purge, or that couldn't be asked about, by their
+    directory in `incoming/`. Each one means the run is still on the web server.
+    """
+
+    purged: list[str] = field(default_factory=list)
+    already_purged: int = 0
+    problems: dict[str, str] = field(default_factory=dict)
+
+
+def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
+    """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming/`."""
+    report = PurgeReport()
+    incoming = datastore / admit.INCOMING_DIRECTORY
+    admitted = datastore / admit.RUNS_DIRECTORY
+    if not incoming.is_dir() or not admitted.is_dir():
+        return report
+
+    for run_id in sorted(
+        set(_directories_in(incoming)) & set(_directories_in(admitted))
+    ):
+        state = admitted / run_id / STATE_DIRECTORY
+        if (state / PURGED_FILE).exists():
+            report.already_purged += 1
+            continue
+        try:
+            hashes = purge_hashes(incoming / run_id)
+        except (PurgeProblem, OSError) as problem:
+            report.problems[str(incoming / run_id)] = f"couldn't hash it: {problem}"
+            continue
+        path = f"/task/{task_code}/run/{urllib.parse.quote(run_id, safe='')}/purge"
+        try:
+            status, body = send(path, {"purge_hashes": hashes})
+        except Unreachable as error:
+            report.problems[str(incoming / run_id)] = (
+                f"{error} Nothing more was purged for this task."
+            )
+            return report
+        if status != 200:
+            message = body.get("message") or f"Pig answered {status}."
+            report.problems[str(incoming / run_id)] = f"not purged: {message}"
+            continue
+        _record_purged(state)
+        report.purged.append(run_id)
+    return report
+
+
+def _directories_in(directory: Path) -> list[str]:
+    """The names of the directories directly inside this one, leaving out dot-names."""
+    with os.scandir(directory) as entries:
+        return [
+            entry.name
+            for entry in entries
+            if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
+        ]
+
+
+def _record_purged(state: Path) -> None:
+    """Write `.state/purged`, saying when, and make sure it's on disk."""
+    state.mkdir(exist_ok=True)
+    with open(state / PURGED_FILE, "w", encoding="utf-8") as written:
+        json.dump({"purged_at": db.now().isoformat()}, written)
+        written.write("\n")
+        written.flush()
+        os.fsync(written.fileno())
+    storage.fsync_directory(state)
+    storage.fsync_directory(state.parent)
+
+
+def http_sender(pig_url: str) -> Sender:
+    """A Sender that makes real requests to the Pig at `pig_url`.
+
+    The standard library's `urllib`, so the secure side needs nothing installed for it.
+    """
+
+    def send(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        request = urllib.request.Request(
+            pig_url.rstrip("/") + path,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as reply:
+                return reply.status, _json_or_empty(reply.read())
+        except urllib.error.HTTPError as error:
+            return error.code, _json_or_empty(error.read())
+        except (urllib.error.URLError, TimeoutError) as error:
+            reason = getattr(error, "reason", error)
+            raise Unreachable(f"couldn't reach Pig at {pig_url}: {reason}.") from error
+
+    return send
+
+
+def _json_or_empty(raw: bytes) -> dict[str, Any]:
+    # A reply from the web server in front of Pig, a 502 say, isn't JSON.
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}

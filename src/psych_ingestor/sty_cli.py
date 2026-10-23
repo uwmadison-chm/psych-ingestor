@@ -17,6 +17,7 @@ import cyclopts
 
 from . import admit as admit_module
 from . import organize as organize_module
+from . import purge as purge_module
 from . import sty
 from .config import ConfigurationError
 
@@ -61,6 +62,10 @@ def check(*, config: StyConfigPath | None = None) -> None:
     """
     loaded = _load(config)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
+    if loaded.pig_url:
+        print(f"Purges runs from {loaded.pig_url}.")
+    else:
+        print("No pig_url, so pigsty purge won't run.")
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
         print(f"  datastore: {task.datastore_base}")
@@ -138,6 +143,41 @@ def organize(
         for where, why in report.errors.items():
             print(f"  not placed: {where}: {why}", file=sys.stderr)
         problems = problems or bool(report.errors)
+    if problems:
+        raise SystemExit(1)
+
+
+@app.command
+def purge(*, config: StyConfigPath | None = None) -> None:
+    """Ask the web server to delete each run that's been admitted here.
+
+    For each task in pigsty.toml, looks at the runs that are in both its datastore's
+    runs/ and incoming/ directories. Hashes each one's files in incoming/, which are a
+    copy of the web server's, and sends the hashes to the Pig at pig_url, which deletes
+    its copy only if they all match. A run Pig refuses is reported, and the command
+    exits with an error. Once Pig has deleted a run, the copies to and from the bucket
+    take it out of incoming/.
+    """
+    loaded = _load(config)
+    if not loaded.pig_url:
+        print(
+            "pigsty.toml has no pig_url, so there's nowhere to purge runs from. Add the "
+            'web server\'s address, like pig_url = "https://pig.example.edu".',
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    send = purge_module.http_sender(loaded.pig_url)
+    problems = False
+    for code, task in sorted(loaded.task.items()):
+        report = purge_module.purge_runs(code, task.datastore_base, send)
+        print(
+            f"{code}: purged {len(report.purged)} run(s), "
+            f"{report.already_purged} purged before."
+            + (f" {len(report.problems)} not purged." if report.problems else "")
+        )
+        for where, why in report.problems.items():
+            print(f"  {where}: {why}", file=sys.stderr)
+        problems = problems or bool(report.problems)
     if problems:
         raise SystemExit(1)
 
