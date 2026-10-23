@@ -70,3 +70,16 @@ Two consequences worth stating: the account running Pig needs write access to th
 and nothing beyond it, and link parameters that become path components must be checked
 before they're used, never sanitized into something safe-looking. See
 [design_assumptions.md](design_assumptions.md).
+
+## The secure side doesn't trust the web server
+
+The web server is the machine on the public internet, so it's the one most likely to be broken into. Nothing on the secure side relies on it having behaved. Whatever it wrote, including manifests, parameters, event data and media, is treated as possibly hostile:
+
+- `pigsty admit` checks every file against the run's manifest. It refuses a manifest path that could reach outside the run, and it refuses a run with a symbolic link anywhere in it.
+- `pigsty organize` checks every value it puts in a path, whatever the web server checked when the run started. It refuses symbolic links too.
+
+The web server's checks are still worth having, but they're there for task authors: a value that can't become a path is refused when the run starts, while someone can still fix the task, rather than months later when the data is organized.
+
+Encryption (#10) won't change this. It will show that a run wasn't altered after the web server encrypted it, but not that the web server was honest when it did.
+
+The checks keep hostile data from landing anywhere but its own run directory. They don't make the data safe to open. Media in particular can be built to attack whatever decodes it, so run anything that processes collected data in a container or on an account that can't reach much else.
