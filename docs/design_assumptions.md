@@ -57,7 +57,7 @@ destroyed — and a reason that would survive the next change of layout.
 ## Link parameters will be used in filenames; be careful
 
 Pig stores every run under its run ID, so nothing a participant supplies becomes a path
-on the collecting machine. But `pig organize` builds a readable tree like
+on the collecting machine. But `pigsty organize` builds a readable tree like
 
 `{task_code}/{participant_id}/{session}_run-0001.jsonl`
 
@@ -148,7 +148,7 @@ harmlessly.)
 sort it, not to drop repeats. What's in `done/` is the append log exactly as the server
 wrote it, which is what makes the hash in the manifest a hash of what happened rather than
 of a tidied-up rendering of it. The file holds at least one copy of every event Pig
-accepted, not exactly one. `pig organize` doesn't drop them either: it copies the file
+accepted, not exactly one. `pigsty organize` doesn't drop them either: it copies the file
 byte for byte, so the manifest's hash still checks in the organized tree. Dropping exact
 repeats belongs to whatever reads a task's data.
 
@@ -270,7 +270,7 @@ Inlining is the version that hurts: adding studies later would mean restructurin
 configuration file and every task in it.
 
 Storage needs no rule. Runs are stored under their task code, and a readable layout is
-`pig organize`'s business on another machine, so a project that wants its tasks grouped
+`pigsty organize`'s business on another machine, so a project that wants its tasks grouped
 on disk asks organize for that and Pig doesn't have to know why.
 
 ## Tasks are static clients, hosted anywhere

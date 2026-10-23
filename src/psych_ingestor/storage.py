@@ -220,7 +220,7 @@ def duplicate_event_ids(path: Path) -> list[str]:
     """Event IDs appearing more than once in an events file.
 
     Pig never rewrites `events.jsonl`, so a line the crash window repeated stays
-    repeated, and so does `pig organize`, which copies the file byte for byte. Exact
+    repeated, and so does `pigsty organize`, which copies the file byte for byte. Exact
     repeats are harmless and whatever reads the data drops them; two lines sharing an
     ID but differing in content are the case an analyst needs to know about before they
     start counting. This reports both, because telling them apart is the

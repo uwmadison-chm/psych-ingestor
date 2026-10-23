@@ -1,6 +1,6 @@
 # Organizing finished runs
 
-Pig stores each finished run in a directory named for its run ID: `done/stroop/9f3c1a7e-…/`. That's the record, and it's deliberately not something a person can browse. `pig organize` copies runs into a tree named for what they are:
+Pig stores each finished run in a directory named for its run ID: `done/stroop/9f3c1a7e-…/`. That's the record, and it's deliberately not something a person can browse. `pigsty organize` copies runs into a tree named for what they are:
 
 ```
 organized/stroop/10351/baseline/run-0001/
@@ -17,7 +17,7 @@ Run it on the machine where the data ends up, not the web server. It never reads
 Point it at a directory of finished runs and say where the tree should go:
 
 ```
-pig organize local/data/done organized
+pigsty organize local/data/done organized
 ```
 
 Each task's runs are placed by the default pattern: the task code, then the run-key values in the order the task lists them, then the run number. A task with `run_key = ["participant_id", "session"]` gets `stroop/10351/baseline/run-0001/`.
@@ -30,20 +30,18 @@ Where the data ends up gets its own configuration file, `pigsty.toml`, separate 
 
 ```toml
 # pigsty.toml
-kind = "secure"
-
 store = "/secure/pig/store"          # finished run directories, as copied from done/
-organized = "/secure/pig/organized"  # where pig organize builds the tree
+organized = "/secure/pig/organized"  # where pigsty organize builds the tree
 
 [task.stroop]
 pattern = "lucida/{task_code}/{participant_id}/{session}/run-{run_number}"
 ```
 
-`kind = "secure"` is required. It's how Pig tells the two files apart: the web server's commands refuse a file that says it, and `pig organize` refuses a file that doesn't. `pig check --config pigsty.toml` checks the file. Paths are relative to the file, as they are in `pig.toml`.
+The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`. Paths are relative to the file, as they are in `pig.toml`.
 
 `pigsty.example.toml` in the repository is a starting point: copy it to `local/pigsty.toml`, where its paths point at your local Pig's `done/` directory.
 
-With that in place, `pig organize` needs no arguments. It reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`. A task with no entry uses the default pattern.
+With that in place, `pigsty organize` needs no arguments. It reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`. A task with no entry uses the default pattern.
 
 ## Patterns
 
@@ -62,13 +60,13 @@ A placeholder is a name and nothing else. `{session.upper}`, `{run_number:03}`, 
 
 ## Running it again
 
-Running `pig organize` again over the same tree is safe, and it's how new runs get added. A run that's already in place is left alone; Pig recognizes it by the `manifest.json` it copied there. Nothing in the store is ever changed or deleted, and nothing already in the tree is overwritten.
+Running `pigsty organize` again over the same tree is safe, and it's how new runs get added. A run that's already in place is left alone; Pig recognizes it by the `manifest.json` it copied there. Nothing in the store is ever changed or deleted, and nothing already in the tree is overwritten.
 
-To rebuild a tree from scratch, for a new pattern say, delete it and run `pig organize` again.
+To rebuild a tree from scratch, for a new pattern say, delete it and run `pigsty organize` again.
 
 ## When a run isn't placed
 
-`pig organize` reports each run it couldn't place, carries on with the rest, and exits with an error at the end, so a scheduled job notices. A run isn't placed when:
+`pigsty organize` reports each run it couldn't place, carries on with the rest, and exits with an error at the end, so a scheduled job notices. A run isn't placed when:
 
 - **Two runs would land in the same place.** Neither is placed. This happens when a pattern leaves out something that tells runs apart, or when two values differ only in capitals: `PPT-1003` and `ppt-1003` are two participants to Pig, but one directory on a Mac.
 - **Something else is already at its path** in the tree.
@@ -77,7 +75,7 @@ To rebuild a tree from scratch, for a new pattern say, delete it and run `pig or
 
 ## Checking files against the manifest
 
-Every file is checked against the size and hash in the run's manifest as it's copied. A file that doesn't match, a file the manifest lists that's missing, and a file the manifest doesn't list are each reported as a warning. The run is still placed, with files that don't match copied as they are, and `pig organize` exits with an error so someone looks.
+Every file is checked against the size and hash in the run's manifest as it's copied. A file that doesn't match, a file the manifest lists that's missing, and a file the manifest doesn't list are each reported as a warning. The run is still placed, with files that don't match copied as they are, and `pigsty organize` exits with an error so someone looks.
 
 The one exception is a `.state/` directory inside a run directory. That's where commands on the secure side will record what they've done to a run, such as purging it from the web server. It's never in the manifest, never checked, and never copied.
 

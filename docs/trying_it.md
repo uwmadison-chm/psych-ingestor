@@ -100,8 +100,8 @@ ls local/data/done/interview/YOUR-RUN-ID/media/00001/     # the parts, if you se
 
 The manifest says what the run is — who, which session, which run number, when — and the
 events file is what your task sent, one line per event, in the order it arrived. A
-readable tree named for participants and sessions is what `pig organize` builds from
-these: try `pig organize local/data/done local/organized`, and see
+readable tree named for participants and sessions is what `pigsty organize` builds from
+these: try `pigsty organize local/data/done local/organized`, and see
 [organizing.md](organizing.md).
 
 ## Things worth trying to break
@@ -148,3 +148,12 @@ origins (every task currently allows any origin). See
 | `pig health` | The health report, as JSON. |
 
 Any of them take `--config` if your file isn't `./local/pig.toml`.
+
+The secure side's commands are a separate command, `pigsty`, which reads `pigsty.toml` instead:
+
+| Command | What it does |
+| --- | --- |
+| `pigsty check` | Validate `pigsty.toml` and print what each task will do. |
+| `pigsty organize` | Copy finished runs into a readable tree. See [organizing.md](organizing.md). |
+
+These take `--config` if your file isn't `./local/pigsty.toml`.

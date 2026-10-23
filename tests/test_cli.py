@@ -1,28 +1,26 @@
-"""The command line's own shape, apart from what each command does."""
+"""The command lines' own shape, apart from what each command does."""
 
-from psych_ingestor.cli import app
+from psych_ingestor.cli import app as pig
+from psych_ingestor.sty_cli import app as pigsty
 
 
-def listed_commands(panel: str) -> set[str]:
-    """The command names in one panel of the help: the first word on each line."""
-    words = (line.strip("│ ").split(" ", 1)[0] for line in panel.splitlines())
+def listed_commands(help_text: str) -> set[str]:
+    """The command names in the help: the first word on each line of a panel."""
+    words = (line.strip("│ ").split(" ", 1)[0] for line in help_text.splitlines())
     return {word for word in words if word.isalpha()}
 
 
-def test_help_groups_commands_by_side(capsys):
-    app(["--help"], result_action="return_value")
-    out = capsys.readouterr().out
+def test_pig_has_the_web_sides_commands(capsys):
+    pig(["--help"], result_action="return_value")
+    listed = listed_commands(capsys.readouterr().out)
 
-    web, secure, rest = (
-        out.index("Web side"),
-        out.index("Secure side"),
-        out.index("Commands"),
-    )
-    assert web < secure < rest
-    # check reads either kind of file, so it's listed on both sides.
-    assert {"check", "health", "runs", "serve", "sweep"} <= listed_commands(
-        out[web:secure]
-    )
-    assert "organize" not in listed_commands(out[web:secure])
-    assert {"check", "organize"} <= listed_commands(out[secure:rest])
-    assert "serve" not in listed_commands(out[secure:rest])
+    assert {"check", "health", "runs", "serve", "sweep"} <= listed
+    assert "organize" not in listed
+
+
+def test_pigsty_has_the_secure_sides_commands(capsys):
+    pigsty(["--help"], result_action="return_value")
+    listed = listed_commands(capsys.readouterr().out)
+
+    assert {"check", "organize"} <= listed
+    assert "serve" not in listed
