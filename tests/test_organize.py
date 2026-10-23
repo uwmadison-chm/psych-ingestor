@@ -231,6 +231,30 @@ def test_a_hand_edited_unsafe_value_is_refused(pig: Pig, datastore: Path, tree: 
     assert "'..'" in only_error(report)
 
 
+def test_a_value_with_a_slash_is_refused(pig: Pig, datastore: Path, tree: Path):
+    # Each part of a/b is safe, so only checking the value itself catches this.
+    run_id = admitted_run(pig, datastore)
+    edit_run_file(datastore, run_id, lambda r: r["parameters"].update(session="a/b"))
+
+    report = organize("stroop", datastore, tree, PATTERN)
+
+    assert report.placed == []
+    assert "'a/b'" in only_error(report)
+
+
+def test_a_symlink_in_a_run_is_refused(pig: Pig, datastore: Path, tree: Path):
+    run_id = admitted_run(pig, datastore)
+    secret = datastore / "secret"
+    secret.write_text("private")
+    (datastore / "runs" / run_id / "extra").symlink_to(secret)
+
+    report = organize("stroop", datastore, tree, PATTERN)
+
+    assert "symbolic link" in only_error(report)
+    # Not even a scratch directory.
+    assert [p.name for p in tree.iterdir()] == [LOCK_FILE]
+
+
 def test_a_run_without_pig_run_json_is_refused(pig: Pig, datastore: Path, tree: Path):
     run_id = admitted_run(pig, datastore)
     (datastore / "runs" / run_id / RUN_FILE).unlink()

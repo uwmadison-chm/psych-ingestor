@@ -58,6 +58,8 @@ A run in `runs/` holds its files exactly as the web server stored them, and `pig
 
 Running `pigsty admit` again is safe, and it's how new runs get admitted. A run already in `runs/` is left alone. A run still downloading is left for next time and isn't an error. A run that's all there but doesn't match its manifest is reported, nothing of it is admitted, and `pigsty admit` exits with an error so a scheduled job notices. Nothing in `incoming/` is ever changed: it's a copy of the bucket, and runs leave it when they leave the bucket.
 
+A run with a symbolic link anywhere in it is refused too. Pig never makes one, and one could point anywhere on the secure machine.
+
 Only one `pigsty admit` works on a task at a time.
 
 ## Patterns
@@ -97,7 +99,8 @@ Only one `pigsty organize` works on a task at a time.
 
 - **Two runs would land in the same place.** Neither is placed, unless one is already in the tree, in which case it stays and the new one isn't placed. This happens when a pattern leaves out something that tells runs apart, or when two values differ only in capitals: `PPT-1003` and `ppt-1003` are two participants to Pig, but one directory on a Mac.
 - **Something else is already at its path** in the tree.
-- **The pattern names something the run doesn't have**, or a value isn't safe in a path.
+- **The pattern names something the run doesn't have**, or a value isn't safe in a path. Values are checked again here, whatever the web server checked, because a web server that's been broken into can write anything.
+- **The run has a symbolic link in it.**
 - **The run has no `pig-run.json`.** Everything in `runs/` should have been put there by `pigsty admit`.
 
 ## What organize doesn't do

@@ -471,7 +471,15 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
         if name in BUILT_IN_NAMES:
             return values[name]
         if name in parameters:
-            return str(parameters[name])
+            # Each value on its own, not just the path it makes: a value of `a/b`
+            # would otherwise pass as two safe parts and add a directory.
+            value = str(parameters[name])
+            if not is_safe_value(value):
+                raise RunProblem(
+                    f"{name} is {value!r}, which can't be part of a path: "
+                    f"{SAFE_VALUE_EXPLANATION}."
+                )
+            return value
         if name in run.get("extra_parameters", {}):
             raise RunProblem(
                 f"the pattern uses {{{name}}}, which this task doesn't declare. It "
@@ -486,7 +494,8 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
 
     rendered = PLACEHOLDER.sub(fill, pattern)
     # Checked again here, whatever was checked at ingest, because a hand-edited file
-    # will happen. This also covers the literal parts of the pattern, and an empty
+    # will happen, and because a web server that's been broken into can write
+    # anything. This also covers the literal parts of the pattern, and an empty
     # part from `a//b`.
     for part in rendered.split("/"):
         if not is_safe_value(part):
@@ -560,6 +569,8 @@ def _copy_run(placement: Placement, root: Path, destination: Path) -> None:
     directory is fsynced before the rename, and the directories above it after, so a
     run the record names is on disk.
     """
+    # Before anything is made, so a run with a symbolic link leaves nothing behind.
+    files = _files_in(placement.source)
     scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
     try:
         # Left by an organize that was interrupted. Ours by its name, never runs/'s.
@@ -569,7 +580,7 @@ def _copy_run(placement: Placement, root: Path, destination: Path) -> None:
     scratch.mkdir(parents=True)
     made = {scratch}
 
-    for relative in _files_in(placement.source):
+    for relative in files:
         if relative == PurePosixPath(RUN_FILE):
             continue
         target = scratch / _renamed(relative, placement.media_names)
@@ -599,19 +610,32 @@ def _copy_run(placement: Placement, root: Path, destination: Path) -> None:
 
 
 def _files_in(run_directory: Path) -> list[PurePosixPath]:
-    """Every file in a run directory, relative to it, leaving out `.state/`.
+    """Every file in a run directory, relative to it, leaving out `.state/`, or
+    RunProblem if anything in it is a symbolic link.
 
-    `os.walk` lists each directory once, rather than asking about every file in it.
+    `pigsty admit` refuses symbolic links, so there shouldn't be any, but one could
+    point anywhere on this machine. Listed with `os.scandir`, which says whether each
+    entry is a link, a file, or a directory without a separate question per entry.
     """
     found = []
-    for directory, subdirectories, files in os.walk(run_directory):
-        here = Path(directory)
-        if here == run_directory and storage.STATE_DIRECTORY in subdirectories:
-            subdirectories.remove(storage.STATE_DIRECTORY)
-        for name in files:
-            found.append(
-                PurePosixPath((here / name).relative_to(run_directory).as_posix())
-            )
+    waiting = [run_directory]
+    while waiting:
+        directory = waiting.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                relative = PurePosixPath(path.relative_to(run_directory).as_posix())
+                if relative == PurePosixPath(storage.STATE_DIRECTORY):
+                    continue
+                if entry.is_symlink():
+                    raise RunProblem(
+                        f"{relative} is a symbolic link. Pig never makes one, so the "
+                        "run wasn't placed."
+                    )
+                if entry.is_dir(follow_symlinks=False):
+                    waiting.append(path)
+                else:
+                    found.append(relative)
     return sorted(found)
 
 
