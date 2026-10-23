@@ -91,7 +91,8 @@ whether it takes media, how many runs are in each status, how many are waiting f
 sweep, how many have been `finalizing` too long, and when data last arrived (a media
 part counts). It
 answers `503` rather than `200` when something is wrong, so a monitor can watch the status
-code. `pig health` prints the same report.
+code. `pig health` prints the same report, and exits 1 when `/health` would answer
+`503`.
 
 The rest of this list isn't built yet — duplicate event IDs and case-variant parameters in
 particular, which are the two that need someone to go looking at the data.
