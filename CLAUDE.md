@@ -35,7 +35,7 @@ Read what the task at hand calls for rather than all of it.
 | [docs/definitions.md](docs/definitions.md) | Any time you use the words task, session, run, dataset, event, or participant. Pig follows BIDS: a participant comes in for a *session*, does a *task*, and each time they do it is a *run*. "Session" never means the HTTP thing. |
 | [docs/api.md](docs/api.md) | Working on endpoints, request/response shapes, or the client side of a task. |
 | [docs/configuration.md](docs/configuration.md) | Working on task definitions, the config file, storage paths, or the CLI. |
-| [docs/organizing.md](docs/organizing.md) | Working on `pig organize`, `pigsty.toml`, or anything on the secure side. |
+| [docs/organizing.md](docs/organizing.md) | Working on `pigsty organize`, `pigsty.toml`, or anything on the secure side. |
 | [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what Pig does and doesn't defend against. |
 | [docs/deployment.md](docs/deployment.md) | Working on running the service — systemd, the health check. |
 | [docs/documentation_style.md](docs/documentation_style.md) | Writing any user-facing prose — docs, error messages, CLI help. Read `README.md` alongside it. |
@@ -82,7 +82,7 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   is working on it, `done/{task}/{run_id}/` afterwards, moved by one rename. The manifest
   is written once, by the sweep, and never changed: the database is the record in flight,
   the manifest afterwards. The server never rewrites `events.jsonl`. A readable tree is
-  `pig organize`'s job (#9), on another machine, and organize never reads `pig.toml` or
+  `pigsty organize`'s job (#9), on another machine, and organize never reads `pig.toml` or
   the database. Purge deletes files, never run rows — rows are the run-number counter.
   See issue #3.
 - **Parameter values are kept exactly as they arrive.** No lowercasing anywhere.

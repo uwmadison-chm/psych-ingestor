@@ -1,4 +1,4 @@
-"""`pig organize`: a readable tree built from finished run directories, and the
+"""`pigsty organize`: a readable tree built from finished run directories, and the
 `pigsty.toml` that tells it where things go."""
 
 import json
@@ -9,11 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from psych_ingestor import storage, sweep
-from psych_ingestor.cli import app
 from psych_ingestor.config import ConfigurationError, load_config
 from psych_ingestor.organize import organize
 from psych_ingestor.service import Pig
 from psych_ingestor.sty import PatternError, check_pattern, load_sty_config
+from psych_ingestor.sty_cli import app
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -325,7 +325,6 @@ def test_a_literal_part_must_be_a_safe_value_too(pig: Pig, tmp_path: Path):
 
 
 STY = """
-kind = "secure"
 store = "./store"
 organized = "./organized"
 
@@ -345,14 +344,6 @@ def test_pigsty_paths_are_relative_to_the_file(tmp_path: Path):
     assert loaded.pattern_for("balloons") is None
 
 
-def test_pigsty_without_kind_is_refused(tmp_path: Path):
-    path = tmp_path / "pigsty.toml"
-    path.write_text(STY.replace('kind = "secure"', ""))
-
-    with pytest.raises(ConfigurationError, match='kind = "secure"'):
-        load_sty_config(path)
-
-
 def test_pigsty_with_a_bad_pattern_is_refused(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(STY.replace("/run-{run_number}", ""))
@@ -361,18 +352,17 @@ def test_pigsty_with_a_bad_pattern_is_refused(tmp_path: Path):
         load_sty_config(path)
 
 
-def test_the_web_side_refuses_pigsty(tmp_path: Path):
+def test_pig_says_when_its_handed_pigsty(tmp_path: Path):
     path = tmp_path / "pig.toml"
     path.write_text(STY)
 
-    with pytest.raises(ConfigurationError, match="pigsty.toml"):
+    with pytest.raises(ConfigurationError, match="looks like pigsty.toml"):
         load_config(path)
 
 
-def test_pig_toml_may_say_it_is_the_web_side(config_path: Path):
-    config_path.write_text('kind = "web"\n' + config_path.read_text())
-
-    assert load_config(config_path).kind == "web"
+def test_pigsty_says_when_its_handed_pig_toml(config_path: Path):
+    with pytest.raises(ConfigurationError, match="looks like pig.toml"):
+        load_sty_config(config_path)
 
 
 # ------------------------------------------------------------------- the CLI
@@ -414,13 +404,13 @@ def test_the_cli_exits_nonzero_when_a_run_isnt_placed(pig: Pig, tmp_path: Path):
     assert exited.value.code == 1
 
 
-def test_check_tells_the_two_files_apart(tmp_path: Path, capsys):
+def test_pigsty_checks_pigsty_toml(tmp_path: Path, capsys):
     sty = tmp_path / "pigsty.toml"
     sty.write_text(STY)
 
     app(["check", "--config", str(sty)], result_action="return_value")
 
-    assert "Secure-side configuration looks good" in capsys.readouterr().out
+    assert "Configuration looks good: 1 task(s)" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------- helpers

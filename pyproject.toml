@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 pig = "psych_ingestor.cli:main"
+pigsty = "psych_ingestor.sty_cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.22,<0.12.0"]

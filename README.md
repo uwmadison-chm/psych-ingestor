@@ -87,8 +87,8 @@ them offsite, expiring runs that have been open too long.
 There's also a `check` command for configuration, because a typo in a task definition
 should surface before a participant hits the task, not during.
 
-The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, and `pig health`. See
-`docs/trying_it.md`.
+The commands are `pig check`, `pig serve`, `pig sweep`, `pig runs`, and `pig health`. The
+machine where the data ends up has its own, under `pigsty`. See `docs/trying_it.md`.
 
 ## Documentation
 

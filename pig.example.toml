@@ -4,13 +4,11 @@
 # working copy accumulates — the database, the data — lands under local/ too. That's the
 # one directory version control ignores.
 
-kind = "web"              # optional; says this is the web server's file, not pigsty.toml
-
 data_root = "./data"
 database = "./pig.db"
 
 # Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
-# manifest describing it. A readable layout built from the parameters is `pig organize`'s
+# manifest describing it. A readable layout built from the parameters is `pigsty organize`'s
 # job, later and elsewhere, so nothing here says where data lands.
 
 # A study that sees each participant more than once, so `session` is part of what makes

@@ -77,9 +77,9 @@ data/
 Nothing in the task entry says where its data lands, because nothing about that is a
 choice: it's `done/{task_code}/`, with one directory per run holding `events.jsonl`, a
 `manifest.json` describing the run, and a `media/` directory if the task sent any. A readable layout — one directory per participant,
-files named for session and run number — is built by `pig organize`, from the
+files named for session and run number — is built by `pigsty organize`, from the
 manifests, on whatever machine the data ends up on. See [definitions.md](definitions.md)
-for what a run directory holds and [organizing.md](organizing.md) for `pig organize`.
+for what a run directory holds and [organizing.md](organizing.md) for `pigsty organize`.
 
 Both directories have to be on one filesystem. The sweep moves a finished run from one to
 the other with a rename, which is what guarantees a run is never half-there in `done/`,
@@ -151,7 +151,7 @@ and there's nothing to configure about that. Earlier versions of Pig had a `path
 pattern here; a configuration that still has one is refused with a message saying so.
 
 The readable tree that pattern used to describe — `{participant_id}/{session}_run-0001.jsonl`
-and the like — is `pig organize`'s business, on the machine where the data is analyzed
+and the like — is `pigsty organize`'s business, on the machine where the data is analyzed
 rather than the one collecting it, and its patterns live in that machine's `pigsty.toml`.
 See [organizing.md](organizing.md).
 
@@ -306,10 +306,10 @@ is what keeps a future study layer out of the URL space; see
 ## Safe values
 
 Some values end up as directory and file names: the task code, and the link parameters
-when `pig organize` builds a readable tree from them. Those have to be restricted,
+when `pigsty organize` builds a readable tree from them. Those have to be restricted,
 because a filesystem will accept things that later turn out to be a problem — and the
 check has to happen when the run starts, on the collecting machine, because by the time
-`pig organize` runs there's nobody to refuse the value to.
+`pigsty organize` runs there's nobody to refuse the value to.
 
 A safe value contains only:
 
@@ -359,8 +359,8 @@ instances, and edited by hand — so it's worth knowing about early. A health ch
 reports parameter values differing only in case is planned; see
 [deployment.md](deployment.md).
 
-One consequence for the readable tree `pig organize` builds: two spellings of a value are
-one directory on macOS and two on Linux. `pig organize` refuses to place two runs whose
+One consequence for the readable tree `pigsty organize` builds: two spellings of a value are
+one directory on macOS and two on Linux. `pigsty organize` refuses to place two runs whose
 paths differ only in case; see [organizing.md](organizing.md).
 
 ## Validating configuration

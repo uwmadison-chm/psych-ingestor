@@ -11,14 +11,14 @@ import string
 import threading
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # A safe value: letters, digits, underscore, and a non-leading dash, 1-64 characters.
 # Narrow enough that "." and ".." can't be expressed, so traversal isn't something we
 # have to defend against. Pig itself never puts a parameter value in a path any more —
-# run directories are named for the run ID — but `pig organize` will, on another machine,
+# run directories are named for the run ID — but `pigsty organize` will, on another machine,
 # and checking at run start is what makes that safe. See docs/configuration.md.
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
 
@@ -179,24 +179,9 @@ class Config(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Which side this file is for. Optional here, since every pig.toml written before
-    # pigsty.toml existed lacks it; pigsty.toml has to say `kind = "secure"`.
-    kind: Literal["web"] = "web"
     data_root: Path
     database: Path
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _not_pigsty(cls, raw: Any) -> Any:
-        # Pydantic would refuse this anyway, but with a message about literals.
-        if isinstance(raw, dict) and raw.get("kind") == "secure":
-            raise ValueError(
-                'This is a secure-side configuration (kind = "secure"), which is '
-                "pigsty.toml. The web server's commands read pig.toml. Keep the two "
-                "files apart, and in production on different machines."
-            )
-        return raw
 
     # Two trees under the data root, and a run directory moves from one to the other
     # exactly once, by a rename. Both trees are on one filesystem or that rename isn't
@@ -243,7 +228,14 @@ def load_config(path: Path) -> Config:
     try:
         config = Config.model_validate(raw)
     except Exception as error:
-        raise ConfigurationError(f"{path} has a problem:\n{error}") from error
+        # Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know.
+        hint = ""
+        if isinstance(raw, dict) and {"store", "organized"} & raw.keys():
+            hint = (
+                "\nThis looks like pigsty.toml, the secure side's configuration, which "
+                "pigsty reads. pig reads the web server's pig.toml."
+            )
+        raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
 
     # Paths in the file are relative to the file, so a checkout can move without editing.
     base = path.parent.resolve()

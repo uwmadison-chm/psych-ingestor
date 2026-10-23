@@ -4,7 +4,7 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-For now this holds only what `pig organize` needs: where the store is, where the
+For now this holds only what `pigsty organize` needs: where the store is, where the
 organized tree goes, and each task's pattern. Keys, fetching, and purging come later.
 """
 
@@ -13,18 +13,13 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import SAFE_VALUE_EXPLANATION, ConfigurationError, is_safe_value
 
 DEFAULT_STY_CONFIG = "local/pigsty.toml"
-
-# Each configuration file says which side it's for, so a command handed the wrong one
-# can say so plainly instead of complaining about the keys it doesn't recognize.
-WEB_KIND = "web"
-SECURE_KIND = "secure"
 
 
 # ------------------------------------------------------------------- patterns
@@ -99,7 +94,7 @@ class StyTask(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Where `pig organize` puts this task's runs. Without one, the default pattern.
+    # Where `pigsty organize` puts this task's runs. Without one, the default pattern.
     pattern: str | None = None
 
 
@@ -108,10 +103,9 @@ class StyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["secure"]
     # Finished run directories as they arrived from the web server: the durable copy.
     store: Path
-    # Where `pig organize` builds the readable tree. Regenerable from `store`.
+    # Where `pigsty organize` builds the readable tree. Regenerable from `store`.
     organized: Path
     task: dict[str, StyTask] = Field(default_factory=dict)
 
@@ -136,30 +130,20 @@ class StyConfig(BaseModel):
         return task.pattern if task else None
 
 
-def read_kind(path: Path) -> str | None:
-    """Which side a configuration file says it's for, without checking anything else.
-
-    For `pig check`, which takes either file and has to know which rules to apply.
-    A file with no `kind` is a `pig.toml` written before the key existed.
-    """
-    raw = _read_toml(path)
-    kind = raw.get("kind")
-    return kind if isinstance(kind, str) else None
-
-
 def load_sty_config(path: Path) -> StyConfig:
     """Read and check `pigsty.toml`, or raise ConfigurationError saying why."""
     raw = _read_toml(path)
-    if raw.get("kind") != SECURE_KIND:
-        raise ConfigurationError(
-            f"{path} isn't a secure-side configuration: it doesn't say "
-            f'kind = "{SECURE_KIND}". Commands that run where the data ends up, like '
-            "`pig organize`, read pigsty.toml, never the web server's pig.toml."
-        )
     try:
         config = StyConfig.model_validate(raw)
     except Exception as error:
-        raise ConfigurationError(f"{path} has a problem:\n{error}") from error
+        # Pydantic refuses pig.toml anyway, but by listing keys it doesn't know.
+        hint = ""
+        if {"data_root", "database"} & raw.keys():
+            hint = (
+                "\nThis looks like pig.toml, the web server's configuration, which pig "
+                "reads. pigsty reads the secure side's pigsty.toml."
+            )
+        raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()
