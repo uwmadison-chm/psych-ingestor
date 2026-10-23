@@ -3,6 +3,8 @@
 
 import json
 import shutil
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +14,7 @@ from fastapi.testclient import TestClient
 from psych_ingestor import storage, sweep
 from psych_ingestor.cli import app
 from psych_ingestor.config import ConfigurationError, load_config
-from psych_ingestor.organize import RECORD_FILE, organize
+from psych_ingestor.organize import LOCK_FILE, organize
 from psych_ingestor.service import Pig
 from psych_ingestor.sty import PatternError, check_pattern, load_sty_config
 
@@ -168,7 +170,7 @@ def test_two_runs_in_one_place_are_both_refused(pig: Pig, tmp_path: Path):
     assert report.placed == []
     assert len(report.errors) == 2
     assert all("Neither is placed" in why for why in report.errors.values())
-    assert not (tmp_path / "tree").exists()
+    assert list(files_under(tmp_path / "tree")) == [LOCK_FILE]
 
 
 def test_values_differing_only_in_case_collide(pig: Pig, tmp_path: Path):
@@ -322,6 +324,7 @@ def test_the_manifest_never_lists_state(tmp_path: Path):
 # --------------------------------------------------------------- the record
 
 PLACED = Path("stroop/PPT-1003/Baseline/run-0001")
+RECORD = Path(".placed/stroop.jsonl")
 
 
 def test_each_placed_run_is_recorded(pig: Pig, tmp_path: Path):
@@ -330,10 +333,39 @@ def test_each_placed_run_is_recorded(pig: Pig, tmp_path: Path):
 
     organize(pig.config.done_root, tree, {})
 
-    lines = (tree / RECORD_FILE).read_text().splitlines()
+    lines = (tree / RECORD).read_text().splitlines()
     assert [json.loads(line) for line in lines] == [
-        {"run_id": run_id, "task_code": "stroop", "destination": PLACED.as_posix()}
+        {"run_id": run_id, "destination": PLACED.as_posix()}
     ]
+
+
+def test_each_task_has_its_own_record(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    interview = finished_run(pig, {"participant_id": "10351"}, task="interview")
+    tree = tmp_path / "tree"
+
+    organize(pig.config.done_root, tree, {})
+
+    assert sorted(p.name for p in (tree / ".placed").iterdir()) == [
+        "interview.jsonl",
+        "stroop.jsonl",
+    ]
+    line = json.loads((tree / ".placed" / "interview.jsonl").read_text())
+    assert line == {"run_id": interview, "destination": "interview/10351/run-0001"}
+
+
+def test_full_removes_the_record_of_a_task_no_longer_in_the_tree(
+    pig: Pig, tmp_path: Path
+):
+    finished_run(pig, BASELINE)
+    finished_run(pig, {"participant_id": "10351"}, task="interview")
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    shutil.rmtree(pig.config.done_root / "interview")
+
+    organize(pig.config.done_root, tree, {}, full=True)
+
+    assert [p.name for p in (tree / ".placed").iterdir()] == ["stroop.jsonl"]
 
 
 def test_a_recorded_run_isnt_read_again(pig: Pig, tmp_path: Path):
@@ -353,12 +385,12 @@ def test_a_run_in_the_tree_but_not_the_record_is_recorded(pig: Pig, tmp_path: Pa
     run_id = finished_run(pig, BASELINE)
     tree = tmp_path / "tree"
     organize(pig.config.done_root, tree, {})
-    (tree / RECORD_FILE).unlink()
+    (tree / RECORD).unlink()
 
     report = organize(pig.config.done_root, tree, {})
 
     assert report.already_there == [run_id]
-    assert run_id in (tree / RECORD_FILE).read_text()
+    assert run_id in (tree / RECORD).read_text()
 
 
 def test_a_new_run_cant_land_on_a_recorded_one(pig: Pig, tmp_path: Path):
@@ -379,14 +411,14 @@ def test_an_unfinished_last_line_is_cut_off(pig: Pig, tmp_path: Path):
     finished_run(pig, BASELINE)
     tree = tmp_path / "tree"
     organize(pig.config.done_root, tree, {})
-    with open(tree / RECORD_FILE, "a") as record:
+    with open(tree / RECORD, "a") as record:
         record.write('{"run_id": "half')
     finished_run(pig, {**BASELINE, "session": "Followup"})
 
     report = organize(pig.config.done_root, tree, {})
 
     assert report.errors == {}
-    lines = (tree / RECORD_FILE).read_text().splitlines()
+    lines = (tree / RECORD).read_text().splitlines()
     assert [json.loads(line)["destination"] for line in lines] == [
         PLACED.as_posix(),
         "stroop/PPT-1003/Followup/run-0001",
@@ -397,7 +429,7 @@ def test_a_damaged_record_stops_organize_until_full(pig: Pig, tmp_path: Path):
     finished_run(pig, BASELINE)
     tree = tmp_path / "tree"
     organize(pig.config.done_root, tree, {})
-    (tree / RECORD_FILE).write_text("not json\n")
+    (tree / RECORD).write_text("not json\n")
     finished_run(pig, {**BASELINE, "session": "Followup"})
 
     report = organize(pig.config.done_root, tree, {})
@@ -410,7 +442,7 @@ def test_a_damaged_record_stops_organize_until_full(pig: Pig, tmp_path: Path):
     assert report.errors == {}
     assert len(report.already_there) == 1
     assert len(report.placed) == 1
-    assert len((tree / RECORD_FILE).read_text().splitlines()) == 2
+    assert len((tree / RECORD).read_text().splitlines()) == 2
 
 
 def test_a_run_removed_from_the_tree_comes_back_only_with_full(
@@ -428,17 +460,48 @@ def test_a_run_removed_from_the_tree_comes_back_only_with_full(
     assert (tree / PLACED / "manifest.json").exists()
 
 
+def test_two_organizes_cant_work_on_one_tree_at_once(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    # A POSIX lock is held per process, so the other organize has to be another one.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, sys; lock = open(sys.argv[1], 'a'); "
+                "fcntl.lockf(lock, fcntl.LOCK_EX); print('locked', flush=True); "
+                "sys.stdin.read()"
+            ),
+            str(tree / LOCK_FILE),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline() == "locked\n"
+        report = organize(pig.config.done_root, tree, {})
+    finally:
+        holder.communicate("")
+
+    assert "another pig organize" in only_error(report)
+    assert report.placed == []
+    assert len(organize(pig.config.done_root, tree, {}).placed) == 1
+
+
 def test_a_dry_run_records_nothing(pig: Pig, tmp_path: Path):
     finished_run(pig, BASELINE)
     tree = tmp_path / "tree"
     organize(pig.config.done_root, tree, {})
-    before = (tree / RECORD_FILE).read_bytes()
+    before = (tree / RECORD).read_bytes()
     finished_run(pig, {**BASELINE, "session": "Followup"})
 
     organize(pig.config.done_root, tree, {}, dry_run=True)
     organize(pig.config.done_root, tree, {}, dry_run=True, full=True)
 
-    assert (tree / RECORD_FILE).read_bytes() == before
+    assert (tree / RECORD).read_bytes() == before
 
 
 # ------------------------------------------------------------------- patterns

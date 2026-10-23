@@ -166,7 +166,7 @@ class PartWriter:
         """Put the finished scratch file in the part's real place."""
         self._close()
         self.scratch.replace(self.final)
-        _fsync_directory(self.final.parent)
+        fsync_directory(self.final.parent)
 
     def discard(self) -> None:
         """Throw the scratch file away. Safe to call at any point, more than once."""
@@ -197,7 +197,7 @@ def create_empty_file(path: Path) -> None:
     """An empty file, durably. For a run that never sent an event."""
     with open(path, "x", encoding="utf-8") as handle:
         os.fsync(handle.fileno())
-    _fsync_directory(path.parent)
+    fsync_directory(path.parent)
 
 
 def read_lines(path: Path) -> list[dict[str, Any]]:
@@ -311,7 +311,7 @@ def write_manifest(directory: Path, manifest: dict[str, Any]) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     scratch.replace(final)
-    _fsync_directory(directory)
+    fsync_directory(directory)
 
 
 def read_manifest(directory: Path) -> dict[str, Any]:
@@ -333,11 +333,11 @@ def move_directory(source: Path, destination: Path) -> None:
         raise OSError(f"{destination} already exists; not moving {source} over it")
     destination.parent.mkdir(parents=True, exist_ok=True)
     source.rename(destination)
-    _fsync_directory(destination.parent)
-    _fsync_directory(source.parent)
+    fsync_directory(destination.parent)
+    fsync_directory(source.parent)
 
 
-def _fsync_directory(directory: Path) -> None:
+def fsync_directory(directory: Path) -> None:
     """Make a rename or a new file durable: the directory entry needs its own fsync.
 
     Opened read-only because that's the only way to open a directory, and fsync doesn't

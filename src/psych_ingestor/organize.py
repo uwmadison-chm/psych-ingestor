@@ -10,10 +10,10 @@ time it runs, neither may exist on this machine, so everything comes from the ma
 And it never changes the store or deletes anything from it. The tree is regenerable; to
 rebuild one, delete it and run this again.
 
-The tree keeps one file of its own, `.placed.jsonl`, a line for each run placed in it.
-A store can hold tens of thousands of runs, on a network share where every file read is
-a round trip, so a second organize reads that one file and the store's listing, and
-reads the manifests of new runs only. With `full`, it ignores the record, checks every
+The tree keeps a record of its own, `.placed/{task_code}.jsonl`, a line for each run
+placed in it. A store can hold tens of thousands of runs, on a network share where every
+file read is a round trip, so a second organize reads those files and the store's
+listing, and reads the manifests of new runs only. With `full`, it ignores the record, checks every
 run against the tree, and writes the record again. See issue #42.
 
 It never changes the data either. Events and media parts are copied byte for byte, and
@@ -23,6 +23,7 @@ the task gave it. See issue #9.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -41,8 +42,14 @@ from .sty import default_pattern as make_default_pattern
 # a run. Starts with a dot so it can't collide with a path a pattern produces.
 SCRATCH_SUFFIX = ".organizing"
 
-# The tree's record of the runs placed in it. Starts with a dot for the same reason.
-RECORD_FILE = ".placed.jsonl"
+# The tree's record of the runs placed in it, one file per task: `.placed/stroop.jsonl`.
+# Starts with a dot for the same reason.
+RECORD_DIRECTORY = ".placed"
+RECORD_SUFFIX = ".jsonl"
+
+# Held while an organize works on a tree, so two at once, from scheduled jobs that
+# overlap say, can't both copy the same run.
+LOCK_FILE = ".organize.lock"
 
 # How many runs are read and copied at once. On a network share the time goes to
 # waiting for the server, not to work, so a few at once is several times faster. Each
@@ -124,15 +131,36 @@ def organize(
     Safe to run again over the same tree: a run already in place is left alone. A run
     in the tree's record isn't read at all, unless `full`.
     """
+    if dry_run:
+        return _organize(store, output, patterns, dry_run, full)
+    output.mkdir(parents=True, exist_ok=True)
+    with open(output / LOCK_FILE, "a") as lock:
+        # A POSIX lock, rather than flock, because that's the kind an SMB or NFS mount
+        # passes on to the server, where another machine's organize would see it.
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            report = OrganizeReport()
+            report.errors[str(output)] = (
+                "another pig organize is working on this tree. Nothing was placed. "
+                "Run this again once it's finished."
+            )
+            return report
+        return _organize(store, output, patterns, dry_run, full)
+
+
+def _organize(
+    store: Path, output: Path, patterns: dict[str, str], dry_run: bool, full: bool
+) -> OrganizeReport:
     report = OrganizeReport()
-    record_path = output / RECORD_FILE
+    records = output / RECORD_DIRECTORY
     if full:
         recorded: dict[tuple[str, str], Recorded] = {}
     else:
         try:
-            recorded = read_record(record_path)
+            recorded = read_records(records)
         except RecordProblem as problem:
-            report.errors[str(record_path)] = str(problem)
+            report.errors[str(records)] = str(problem)
             return report
 
     planned = _plan(store, patterns, recorded, report)
@@ -140,9 +168,8 @@ def organize(
         outcomes = pool.map(
             lambda placement: _organize_one(placement, output, dry_run), planned
         )
-        # Opened when there's a first line for it, so an organize that places
-        # nothing leaves no trace.
-        record: BinaryIO | None = None
+        # By task code, each opened when there's a first line for it.
+        open_records: dict[str, BinaryIO] = {}
         try:
             for placement, outcome in zip(planned, outcomes, strict=True):
                 report.warnings.extend(outcome.warnings)
@@ -155,19 +182,15 @@ def organize(
                     report.already_there.append(placement.run_id)
                 if dry_run:
                     continue
-                if record is None:
-                    record = _open_record(record_path, full)
-                _append_record(record, placement)
+                task_code = placement.manifest["task_code"]
+                if task_code not in open_records:
+                    open_records[task_code] = _open_record(records, task_code, full)
+                _append_record(open_records[task_code], placement)
         finally:
-            if record is not None:
+            for record in open_records.values():
                 record.close()
     if full and not dry_run:
-        # The new record was written beside the old one and replaces it now, so an
-        # interrupted --full leaves the old record rather than half a new one.
-        if record is not None:
-            _partial_record(record_path).replace(record_path)
-        else:
-            record_path.unlink(missing_ok=True)
+        _replace_records(records, set(open_records))
     report.already_there.extend(entry.run_id for entry in recorded.values())
     return report
 
@@ -180,7 +203,7 @@ def _organize_one(placement: Placement, output: Path, dry_run: bool) -> Outcome:
         if _already_placed(destination, placement):
             return Outcome("already there", warnings)
         if not dry_run:
-            _copy_run(placement, destination, warnings)
+            _copy_run(placement, output, destination, warnings)
     except RunProblem as problem:
         return Outcome("not placed", warnings, str(problem))
     except OSError as error:
@@ -191,58 +214,68 @@ def _organize_one(placement: Placement, output: Path, dry_run: bool) -> Outcome:
 # ---------------------------------------------------------------------- the record
 
 
-def read_record(path: Path) -> dict[tuple[str, str], Recorded]:
-    """The runs a tree's record says are placed, by task code and run ID.
+def read_records(records: Path) -> dict[tuple[str, str], Recorded]:
+    """The runs a tree's records say are placed, by task code and run ID.
 
-    A tree with no record yet has placed nothing as far as the record knows; runs
-    already in it are found by their manifests and recorded. A last line with no
-    newline was being written when an organize stopped, and is left out: its run is
-    found the same way.
+    A tree with no records yet has placed nothing as far as they know; runs already in
+    it are found by their manifests and recorded. A last line with no newline was being
+    written when an organize stopped, and is left out: its run is found the same way.
     """
     try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except (OSError, UnicodeDecodeError) as error:
-        raise RecordProblem(_damaged(path, error)) from error
-    lines = text.split("\n")
-    # Everything up to the last newline. Whatever follows it is an unfinished line.
+        paths = sorted(records.glob(f"*{RECORD_SUFFIX}"))
+    except OSError as error:
+        raise RecordProblem(_damaged(records, error)) from error
     recorded = {}
-    for number, line in enumerate(lines[:-1], start=1):
+    for path in paths:
+        task_code = path.name.removesuffix(RECORD_SUFFIX)
         try:
-            entry = json.loads(line)
-            run = Recorded(
-                run_id=str(entry["run_id"]),
-                task_code=str(entry["task_code"]),
-                destination=PurePosixPath(entry["destination"]),
-            )
-        except (ValueError, KeyError, TypeError) as error:
-            raise RecordProblem(_damaged(path, f"line {number}: {error}")) from error
-        recorded[(run.task_code, run.run_id)] = run
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise RecordProblem(_damaged(path, error)) from error
+        # Everything up to the last newline. Whatever follows it is an unfinished line.
+        for number, line in enumerate(text.split("\n")[:-1], start=1):
+            try:
+                entry = json.loads(line)
+                run = Recorded(
+                    run_id=str(entry["run_id"]),
+                    task_code=task_code,
+                    destination=PurePosixPath(entry["destination"]),
+                )
+            except (ValueError, KeyError, TypeError) as error:
+                raise RecordProblem(
+                    _damaged(path, f"line {number}: {error}")
+                ) from error
+            recorded[(run.task_code, run.run_id)] = run
     return recorded
 
 
 def _damaged(path: Path, why: object) -> str:
     return (
-        f"can't read {path}, the record of runs placed in this tree ({why}). Nothing "
-        "was placed. To check every run against the tree and write the record again, "
-        "run pig organize --full."
+        f"can't read {path}, part of the record of runs placed in this tree ({why}). "
+        "Nothing was placed. To check every run against the tree and write the record "
+        "again, run pig organize --full."
     )
 
 
-def _partial_record(path: Path) -> Path:
-    return path.with_name(path.name + ".partial")
+def _record_path(records: Path, task_code: str, full: bool) -> Path:
+    """Where one task's record is, or with `full`, where its new one is written."""
+    name = f"{task_code}{RECORD_SUFFIX}"
+    return records / (f"{name}.partial" if full else name)
 
 
-def _open_record(path: Path, full: bool) -> BinaryIO:
-    """The record, open to add lines to; with `full`, a new one beside it.
+def _open_record(records: Path, task_code: str, full: bool) -> BinaryIO:
+    """One task's record, open to add lines to; with `full`, a new one beside it.
 
     The caller closes it.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    records.mkdir(exist_ok=True)
+    path = _record_path(records, task_code, full)
     if full:
-        return open(_partial_record(path), "wb")
+        record = open(path, "wb")  # noqa: SIM115
+        storage.fsync_directory(records)
+        return record
     record = open(path, "a+b")  # noqa: SIM115
+    storage.fsync_directory(records)
     # A last line an earlier organize didn't finish is cut off, so this one's first
     # line starts on a line of its own. Usually only the last byte is read.
     record.seek(0, os.SEEK_END)
@@ -255,19 +288,38 @@ def _open_record(path: Path, full: bool) -> BinaryIO:
 
 
 def _append_record(record: BinaryIO, placement: Placement) -> None:
-    """Record one run as placed. Only after its directory is in place, so the record
+    """Record one run as placed. Only after its directory is in place, so a record
     never names a run the tree doesn't have.
 
-    Not fsynced: a line lost to a crash only means the next organize finds that run by
-    its manifest, and records it then.
+    Fsynced, so a line, once written, stays. A line lost to a crash before that only
+    means the next organize finds that run by its manifest, and records it then.
     """
     line = {
         "run_id": placement.run_id,
-        "task_code": placement.manifest["task_code"],
         "destination": placement.destination.as_posix(),
     }
     record.write((json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
     record.flush()
+    os.fsync(record.fileno())
+
+
+def _replace_records(records: Path, written: set[str]) -> None:
+    """After `full`, put each task's new record in place of its old one, and remove
+    the records of tasks with no runs in the tree.
+
+    The new records were written beside the old ones and replace them only now, so an
+    interrupted --full leaves the old records rather than half of new ones.
+    """
+    if not records.is_dir():
+        return
+    for task_code in written:
+        _record_path(records, task_code, full=True).replace(
+            _record_path(records, task_code, full=False)
+        )
+    for path in records.glob(f"*{RECORD_SUFFIX}"):
+        if path.name.removesuffix(RECORD_SUFFIX) not in written:
+            path.unlink()
+    storage.fsync_directory(records)
 
 
 # --------------------------------------------------------------------- planning
@@ -389,6 +441,12 @@ def _place(source: Path, patterns: dict[str, str]) -> Placement:
             f"the manifest says this is run {run_id} of task {task_code}, but it's "
             f"stored at {source.parent.name}/{source.name}. One of them has been "
             "moved or edited."
+        )
+    # The task code names the task's file in the tree's record.
+    if not is_safe_value(task_code):
+        raise RunProblem(
+            f"task code {task_code!r} isn't one Pig could have used: "
+            f"{SAFE_VALUE_EXPLANATION}."
         )
 
     pattern = patterns.get(task_code) or make_default_pattern(
@@ -538,12 +596,16 @@ def _already_placed(destination: Path, placement: Placement) -> bool:
     )
 
 
-def _copy_run(placement: Placement, destination: Path, warnings: list[str]) -> None:
+def _copy_run(
+    placement: Placement, output: Path, destination: Path, warnings: list[str]
+) -> None:
     """Copy one run's files into place, checking each against the manifest, and adding
     to `warnings` each file that doesn't match.
 
     Everything goes into a scratch directory beside the destination, which is renamed
-    into place at the end, so a run in the tree is always a whole run.
+    into place at the end, so a run in the tree is always a whole run. Every file and
+    directory is fsynced before the rename, and the directories above it after, so a
+    run the record names is on disk.
     """
     scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
     try:
@@ -584,8 +646,25 @@ def _copy_run(placement: Placement, destination: Path, warnings: list[str]) -> N
     # The manifest goes in last, and it's what a later organize looks for to know this
     # run is already placed. It's the bytes read from the store while planning, so the
     # store's copy isn't read twice.
-    (scratch / storage.MANIFEST_FILE).write_bytes(placement.manifest_bytes)
+    with open(scratch / storage.MANIFEST_FILE, "wb") as manifest:
+        manifest.write(placement.manifest_bytes)
+        manifest.flush()
+        os.fsync(manifest.fileno())
+    # Each directory made, and each between it and the scratch directory, for the
+    # entries in it.
+    to_sync = {scratch}
+    for directory in made:
+        while directory != scratch:
+            to_sync.add(directory)
+            directory = directory.parent
+    for directory in to_sync:
+        storage.fsync_directory(directory)
     scratch.rename(destination)
+    # The rename, and any directory made above the run on the way to it.
+    for directory in destination.parents:
+        storage.fsync_directory(directory)
+        if directory == output:
+            break
 
 
 def _files_in(run_directory: Path) -> list[PurePosixPath]:
@@ -640,4 +719,6 @@ def _copy_and_hash(
                 digest.update(chunk)
                 size += len(chunk)
                 writing.write(chunk)
+            writing.flush()
+            os.fsync(writing.fileno())
     return size, digest.hexdigest()
