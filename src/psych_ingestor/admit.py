@@ -223,6 +223,8 @@ def _check_listing(source: Path, manifest: dict[str, Any]) -> None:
     behind.
     """
     listed = {_listed_path(entry["path"]): entry for entry in manifest["files"]}
+    # First, so that nothing below follows a symbolic link anywhere in the run.
+    present = _files_in(source)
     for relative, entry in listed.items():
         try:
             size = (source / relative).stat().st_size
@@ -235,7 +237,7 @@ def _check_listing(source: Path, manifest: dict[str, Any]) -> None:
                 f"{relative} is {size} bytes, and the manifest says "
                 f"{entry['bytes']}. Nothing was admitted."
             )
-    for relative in _files_in(source):
+    for relative in present:
         if relative != PurePosixPath(storage.MANIFEST_FILE) and relative not in listed:
             raise RunProblem(
                 f"{relative} is here but not in the manifest. Nothing was admitted."
@@ -264,15 +266,36 @@ def _listed_path(path: str) -> PurePosixPath:
 
 
 def _files_in(run_directory: Path) -> list[PurePosixPath]:
-    """Every file in a run directory, relative to it. `os.walk` lists each directory
-    once, rather than asking about every file in it."""
+    """Every file in a run directory, relative to it, or RunProblem if anything in it,
+    the directory included, is a symbolic link.
+
+    Pig never writes a symbolic link, and one in a downloaded run could point anywhere
+    on this machine, so admit would copy whatever it pointed at into `runs/`. Listed
+    with `os.scandir`, which says whether each entry is a link, a file, or a directory
+    without a separate question per entry.
+    """
+    if run_directory.is_symlink():
+        raise RunProblem(
+            "it's a symbolic link, not a directory. Pig never makes one, so nothing "
+            "was admitted."
+        )
     found = []
-    for directory, _, files in os.walk(run_directory):
-        here = Path(directory)
-        for name in files:
-            found.append(
-                PurePosixPath((here / name).relative_to(run_directory).as_posix())
-            )
+    waiting = [run_directory]
+    while waiting:
+        directory = waiting.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                relative = PurePosixPath(path.relative_to(run_directory).as_posix())
+                if entry.is_symlink():
+                    raise RunProblem(
+                        f"{relative} is a symbolic link. Pig never makes one, so "
+                        "nothing was admitted."
+                    )
+                if entry.is_dir(follow_symlinks=False):
+                    waiting.append(path)
+                else:
+                    found.append(relative)
     return sorted(found)
 
 

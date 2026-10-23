@@ -196,6 +196,35 @@ def test_a_manifest_path_outside_the_run_isnt_admitted(
     assert not (tmp_path / "escaped").exists()
 
 
+def test_a_symlinked_file_isnt_admitted(pig: Pig, tmp_path: Path):
+    incoming = downloaded_run(pig, tmp_path)
+    secret = tmp_path / "secret"
+    secret.write_bytes((incoming / "events.jsonl").read_bytes())
+    (incoming / "events.jsonl").unlink()
+    (incoming / "events.jsonl").symlink_to(secret)
+
+    assert "symbolic link" in only_problem(admit("stroop", tmp_path))
+    assert list((tmp_path / "runs").iterdir()) == []
+
+
+def test_a_symlinked_directory_isnt_admitted(pig: Pig, tmp_path: Path):
+    incoming = downloaded_run(pig, tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (incoming / "media").symlink_to(elsewhere)
+
+    assert "media is a symbolic link" in only_problem(admit("stroop", tmp_path))
+
+
+def test_a_symlinked_run_isnt_admitted(pig: Pig, tmp_path: Path):
+    incoming = downloaded_run(pig, tmp_path)
+    moved = tmp_path / "moved"
+    incoming.rename(moved)
+    incoming.symlink_to(moved)
+
+    assert "symbolic link" in only_problem(admit("stroop", tmp_path))
+
+
 def test_a_run_in_the_wrong_tasks_incoming_isnt_admitted(pig: Pig, tmp_path: Path):
     downloaded_run(pig, tmp_path)
 
