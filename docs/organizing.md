@@ -43,6 +43,28 @@ The two sides have their own commands as well as their own files. `pig` runs on 
 
 With that in place, `pigsty organize` needs no arguments. It reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`. A task with no entry uses the default pattern.
 
+## Admitting downloaded runs
+
+On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
+
+Each task that's copied this way names a directory of its own in `pigsty.toml`:
+
+```toml
+[task.stroop]
+datastore_base = "/some/mount/pi_username/mystudy/primary_data/pig/stroop"
+```
+
+Inside it:
+
+- `incoming/` is where the copy puts the task's runs, one directory per run ID, as they are in the bucket. Point `rclone sync` at it.
+- `runs/` is where `pigsty admit` puts each run once every file its manifest lists is there, with the right size and hash, and nothing else is.
+
+A run in `runs/` holds its files exactly as the web server stored them, and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming/`, because it describes the files as they traveled.
+
+Running `pigsty admit` again is safe, and it's how new runs get admitted. A run already in `runs/` is left alone. A run still downloading is left for next time and isn't an error. A run that's all there but doesn't match its manifest is reported, nothing of it is admitted, and `pigsty admit` exits with an error so a scheduled job notices. Nothing in `incoming/` is ever changed: it's a copy of the bucket, and runs leave it when they leave the bucket.
+
+Two tasks can't share a `datastore_base`, and only one `pigsty admit` works on a task at a time.
+
 ## Patterns
 
 A pattern is a path inside the organized directory, with placeholders in braces:

@@ -4,8 +4,9 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-For now this holds only what `pigsty organize` needs: where the store is, where the
-organized tree goes, and each task's pattern. Keys, fetching, and purging come later.
+For now this holds what `pigsty admit` and `pigsty organize` need: where each task's
+runs are kept, where the store is, where the organized tree goes, and each task's
+pattern. Keys and purging come later.
 """
 
 from __future__ import annotations
@@ -94,6 +95,10 @@ class StyTask(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Where this task's runs are kept on the secure side: `incoming/`, where the copy
+    # from the bucket puts them, and `runs/`, where `pigsty admit` puts them once they
+    # check out. A task without one isn't admitted.
+    datastore_base: Path | None = None
     # Where `pigsty organize` puts this task's runs. Without one, the default pattern.
     pattern: str | None = None
 
@@ -149,6 +154,20 @@ def load_sty_config(path: Path) -> StyConfig:
     base = path.parent.resolve()
     config.store = (base / config.store).resolve()
     config.organized = (base / config.organized).resolve()
+    by_datastore: dict[Path, str] = {}
+    for code, task in sorted(config.task.items()):
+        if task.datastore_base is None:
+            continue
+        task.datastore_base = (base / task.datastore_base).resolve()
+        # One task's runs per datastore, so admit can tell from where a run is which
+        # task it belongs to, and two tasks' admits never share a lock.
+        if task.datastore_base in by_datastore:
+            raise ConfigurationError(
+                f"{path} has a problem: tasks {by_datastore[task.datastore_base]!r} "
+                f"and {code!r} have the same datastore_base, {task.datastore_base}. "
+                "Each task needs its own."
+            )
+        by_datastore[task.datastore_base] = code
     return config
 
 

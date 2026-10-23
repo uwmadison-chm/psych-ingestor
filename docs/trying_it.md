@@ -154,6 +154,7 @@ The secure side's commands are a separate command, `pigsty`, which reads `pigsty
 | Command | What it does |
 | --- | --- |
 | `pigsty check` | Validate `pigsty.toml` and print what each task will do. |
+| `pigsty admit` | Move downloaded runs into place once they match their manifests. See [organizing.md](organizing.md). |
 | `pigsty organize` | Copy finished runs into a readable tree. See [organizing.md](organizing.md). |
 
 These take `--config` if your file isn't `./local/pigsty.toml`.

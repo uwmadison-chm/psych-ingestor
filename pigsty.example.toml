@@ -19,6 +19,9 @@ organized = "./organized" # where pigsty organize builds the readable tree; safe
 # Groups the task under a project directory.
 [task.stroop]
 pattern = "lucida/{task_code}/{participant_id}/{session}/run-{run_number}"
+# Where runs copied from the bucket arrive (incoming/) and where pigsty admit puts them
+# once they check out (runs/). Only needed for a task that's copied that way.
+datastore_base = "./stroop-data"
 
 # A task with no entry, like balloons and interview from pig.example.toml, uses the
 # default: the task code, its run-key values in order, then the run number. So
