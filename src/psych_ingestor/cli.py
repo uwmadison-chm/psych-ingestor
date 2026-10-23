@@ -30,9 +30,26 @@ from .config import (
 )
 from .runs import API_STATUSES, Phase
 
+# The help lists commands by where they run. The web side's read pig.toml and the
+# database; the secure side's read pigsty.toml and never either. `check` reads both
+# kinds of file, so it's listed in both groups.
+WEB_SIDE = cyclopts.Group(
+    "Web side",
+    help="On the web server. These read pig.toml and the database.",
+    sort_key=1,
+)
+SECURE_SIDE = cyclopts.Group(
+    "Secure side",
+    help="Where the data ends up. These read pigsty.toml, and never pig.toml or the "
+    "database.",
+    sort_key=2,
+)
+
 app = cyclopts.App(
     name="pig",
     help="Psych Ingestor: collect data from online behavioral tasks.",
+    # Only --help and --version are left in the default group. Listed last.
+    group_commands=cyclopts.Group("Commands", sort_key=3),
 )
 
 ConfigPath = Annotated[
@@ -103,7 +120,7 @@ def _load_sty(path: Path | None) -> sty.StyConfig:
         raise SystemExit(1) from error
 
 
-@app.command
+@app.command(group=(WEB_SIDE, SECURE_SIDE))
 def check(*, config: ConfigPath | None = None) -> None:
     """Check a configuration file, and say what each task is set up to do.
 
@@ -160,7 +177,7 @@ def _check_sty(path: Path) -> None:
     )
 
 
-@app.command
+@app.command(group=SECURE_SIDE)
 def organize(
     store: Path | None = None,
     output: Path | None = None,
@@ -249,7 +266,7 @@ def _activated_fd() -> int | None:
     return SD_LISTEN_FDS_START
 
 
-@app.command
+@app.command(group=WEB_SIDE)
 def serve(
     *,
     host: str = "127.0.0.1",
@@ -275,7 +292,7 @@ def serve(
         uvicorn.run("psych_ingestor.app:app", fd=given, factory=True)
 
 
-@app.command
+@app.command(group=WEB_SIDE)
 def sweep(*, config: ConfigPath | None = None) -> None:
     """Finish closed runs and expire runs that have been open too long.
 
@@ -307,7 +324,7 @@ def sweep(*, config: ConfigPath | None = None) -> None:
         raise SystemExit(1)
 
 
-@app.command
+@app.command(group=WEB_SIDE)
 def runs(
     *,
     task: str | None = None,
@@ -356,7 +373,7 @@ def runs(
         )
 
 
-@app.command(name="health")
+@app.command(name="health", group=WEB_SIDE)
 def health_command(*, config: ConfigPath | None = None) -> None:
     """Print the same report as `GET /health`."""
     loaded, connection = _open(config)
