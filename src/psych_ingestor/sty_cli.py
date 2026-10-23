@@ -15,6 +15,7 @@ from typing import Annotated
 
 import cyclopts
 
+from . import admit as admit_module
 from . import organize as organize_module
 from . import sty
 from .config import ConfigurationError
@@ -64,11 +65,45 @@ def check(*, config: StyConfigPath | None = None) -> None:
     print(f"  organized: {loaded.organized}")
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
-        print(f"  pattern: {task.pattern or '(the default)'}")
+        print(f"  datastore: {task.datastore_base or '(none; not admitted)'}")
+        print(f"  pattern:   {task.pattern or '(the default)'}")
     print(
         "\nA task not listed here is organized with the default pattern: its task "
         "code, its run-key values, then its run number."
     )
+
+
+@app.command
+def admit(*, config: StyConfigPath | None = None) -> None:
+    """Check downloaded runs against their manifests, and move the ones that are whole
+    into place.
+
+    For each task with a datastore_base in pigsty.toml, looks at the runs in its
+    incoming/ directory that aren't in runs/ yet. A run whose files all match its
+    manifest is copied into runs/. A run still downloading is left for next time. A run
+    that's all there but doesn't match is reported, and the command exits with an error.
+    Nothing in incoming/ is ever changed.
+    """
+    loaded = _load(config)
+    problems = False
+    for code, task in sorted(loaded.task.items()):
+        if task.datastore_base is None:
+            continue
+        report = admit_module.admit(code, task.datastore_base)
+        counts = [
+            f"admitted {len(report.admitted)} run(s)",
+            f"{report.already_admitted} already admitted",
+        ]
+        if report.arriving:
+            counts.append(f"{len(report.arriving)} still arriving")
+        if report.problems:
+            counts.append(f"{len(report.problems)} not admitted")
+        print(f"{code}: " + ", ".join(counts) + ".")
+        for where, why in report.problems.items():
+            print(f"  not admitted: {where}: {why}", file=sys.stderr)
+        problems = problems or bool(report.problems)
+    if problems:
+        raise SystemExit(1)
 
 
 @app.command
