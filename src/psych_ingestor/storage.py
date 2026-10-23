@@ -112,9 +112,18 @@ def append_lines(path: Path, lines: list[str]) -> None:
     The file's directory has to be there already. A run's directory is made when the run
     starts and moved into `done/` when it's finished, so a missing one means the run has
     moved on, and making a fresh one here would put the lines where nothing will look.
+
+    An append a crash interrupted can leave the file ending partway through a line. The
+    next line would be joined onto it, and a JSON reader would lose both, including one
+    Pig said was stored. So if the file doesn't end with a newline, this writes one
+    first: the cut-short line stays, on its own, and is the only line lost. See #53.
     """
-    with open(path, "ab") as handle:
-        handle.write("".join(line + "\n" for line in lines).encode("utf-8"))
+    # Opened for reading as well, to look at the last byte. Writes still go to the end.
+    with open(path, "a+b") as handle:
+        size = os.fstat(handle.fileno()).st_size
+        cut_short = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
+        text = ("\n" if cut_short else "") + "".join(line + "\n" for line in lines)
+        handle.write(text.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -230,8 +239,9 @@ def create_empty_file(path: Path) -> None:
 
 
 def read_lines(path: Path) -> list[dict[str, Any]]:
-    """Read an events file. A truncated last line is dropped, which is the one thing an
-    interrupted append can leave behind."""
+    """Read an events file. A line that isn't JSON is dropped: it's a line an interrupted
+    append cut short, which is the one thing a crash can leave behind. `append_lines`
+    makes sure the next line starts after it rather than on the end of it."""
     if not path.exists():
         return []
     events = []

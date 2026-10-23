@@ -345,3 +345,24 @@ def test_a_run_whose_events_vanished_is_reported_not_emptied(pig: Pig):
     run = runs.get(pig.connection, run_id)
     assert run is not None
     assert run.phase is runs.Phase.CLOSED
+
+
+def test_a_line_cut_short_by_a_crash_costs_only_itself(pig: Pig):
+    """The next append starts on a line of its own, so the event it writes, which Pig
+    says is stored, stays readable. See #53."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1)})
+    events_file = in_progress(pig, run_id) / "events.jsonl"
+    with open(events_file, "a", encoding="utf-8") as handle:
+        handle.write('{"event_id":"2","da')  # What a crash mid-append leaves.
+
+    result = pig.store_events("stroop", run_id, {"2": event(2), "3": event(3)})
+    assert result.stored == ["1", "2", "3"]
+
+    lines = events_file.read_text().split("\n")
+    assert lines[1] == '{"event_id":"2","da'
+    assert [line["event_id"] for line in storage.read_lines(events_file)] == [
+        "1",
+        "2",
+        "3",
+    ]
