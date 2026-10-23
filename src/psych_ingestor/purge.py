@@ -5,8 +5,8 @@ human-subjects data isn't left sitting on the public-facing machine. `pigsty pur
 for that by sending a hash of every file in its copy of the run, and the web server deletes
 its copy only if every hash matches its own. See issue #2.
 
-The hashes aren't the plain sha256 the manifest lists. Each is the sha256 of `pig-purge`
-and a newline, followed by the file's bytes. The manifest travels with the data and can be
+The hashes aren't the plain sha256 the manifest lists. Each is the sha256 of `pig-purge:`
+followed by the file's bytes. The manifest travels with the data and can be
 copied anywhere, and if purge took the manifest's hashes, anyone holding a manifest could
 purge a run without ever having seen its data. The prefix makes a hash that can only be
 computed from the bytes themselves, so producing one means having the file.
@@ -32,7 +32,9 @@ from typing import Any
 
 from . import admit, db, runs, storage
 
-PURGE_HASH_PREFIX = b"pig-purge\n"
+# Plain text with nothing to escape, so a purge hash can be checked by hand:
+#     { printf 'pig-purge:'; cat events.jsonl; } | sha256sum
+PURGE_HASH_PREFIX = b"pig-purge:"
 
 
 class PurgeProblem(Exception):

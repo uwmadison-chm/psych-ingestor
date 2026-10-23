@@ -584,10 +584,10 @@ Pig's web server is on the public internet, so once a run is safely on the secur
 
 `purge_hashes` has an entry for every file in the run, `manifest.json` included, by its path inside the run directory. Pig computes the same hashes from its own copy, and purges the run only if the two lists match exactly: the same files, with the same hashes, and none missing or extra. A copy that's still downloading doesn't match, so it can't purge anything.
 
-A purge hash isn't the sha256 the manifest lists. It's the sha256 of the text `pig-purge` and a newline, followed by the file's bytes:
+A purge hash isn't the sha256 the manifest lists. It's the sha256 of the text `pig-purge:`, followed by the file's bytes. To check one by hand:
 
 ```
-sha256(b"pig-purge\n" + contents of the file)
+{ printf 'pig-purge:'; cat events.jsonl; } | sha256sum
 ```
 
 That's so a manifest can't be used to purge a run. A manifest lists a sha256 of every file, and it's copied wherever the run goes. If purge took those hashes, anyone holding a manifest could delete a run they'd never seen. Nobody can compute a purge hash without the file's bytes.

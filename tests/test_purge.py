@@ -50,7 +50,7 @@ def test_a_purge_hash_is_the_sha256_of_the_prefix_and_the_bytes(tmp_path: Path):
     path = tmp_path / "events.jsonl"
     path.write_bytes(b'{"event_id":"1"}\n')
 
-    expected = hashlib.sha256(b'pig-purge\n{"event_id":"1"}\n').hexdigest()
+    expected = hashlib.sha256(b'pig-purge:{"event_id":"1"}\n').hexdigest()
     assert purge.purge_hash(path) == expected
     # Not the hash the manifest lists, which is the whole point.
     assert expected != hashlib.sha256(path.read_bytes()).hexdigest()
