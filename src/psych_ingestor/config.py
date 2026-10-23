@@ -184,8 +184,9 @@ class Config(BaseModel):
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
     # Two trees under the data root, and a run directory moves from one to the other
-    # exactly once, by a rename. Both trees are on one filesystem or that rename isn't
-    # atomic; see docs/deployment.md.
+    # exactly once, by a rename. A purged run makes one more rename, out of `done/` and
+    # into `purging/`, where it's deleted. All three are on one filesystem or those
+    # renames aren't atomic; see docs/deployment.md.
 
     @property
     def in_progress_root(self) -> Path:
@@ -194,8 +195,15 @@ class Config(BaseModel):
 
     @property
     def done_root(self) -> Path:
-        """Finished runs, whichever way they closed. Nothing here ever changes again."""
+        """Finished runs, whichever way they closed. Nothing here ever changes again.
+        A run leaves only when it's purged, all at once."""
         return self.data_root / "done"
+
+    @property
+    def purging_root(self) -> Path:
+        """Purged runs on their way to being deleted. Empty except for a moment during a
+        purge, or after one was interrupted, until the next sweep clears it."""
+        return self.data_root / "purging"
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:

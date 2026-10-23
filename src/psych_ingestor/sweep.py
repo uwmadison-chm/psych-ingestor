@@ -1,8 +1,8 @@
 """The work that happens on a schedule rather than on request.
 
-Finishing closed runs and expiring runs that have been open too long. Run from the CLI,
-by a systemd timer in production or by hand on a laptop. Safe to run twice at once, and
-safe to run when there's nothing to do.
+Finishing closed runs, expiring runs that have been open too long, and finishing purges
+that were interrupted. Run from the CLI, by a systemd timer in production or by hand on a
+laptop. Safe to run twice at once, and safe to run when there's nothing to do.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 
-from . import db, media, runs, storage
+from . import db, media, purge, runs, storage
 from .config import Config
 from .runs import Disposition
 
@@ -30,6 +30,7 @@ class SweepReport:
 
     finished: list[str] = field(default_factory=list)
     expired: list[str] = field(default_factory=list)
+    purged: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)
     refused: dict[str, str] = field(default_factory=dict)
 
@@ -38,6 +39,7 @@ def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
     report = SweepReport()
     expire_runs(config, connection, report)
     finish_closed_runs(config, connection, report)
+    finish_purges(config, connection, report)
     return report
 
 
@@ -183,4 +185,28 @@ def expire_runs(
         if runs.mark_closed(connection, run, Disposition.EXPIRED, db.now()):
             report.expired.append(run.run_id)
 
+    return report
+
+
+def finish_purges(
+    config: Config, connection: sqlite3.Connection, report: SweepReport
+) -> SweepReport:
+    """Finish any purge that was interrupted after the run left `done/`.
+
+    A purge moves the run into `purging/` and then deletes it there. If Pig stopped in
+    between, the secure side's next purge request finishes the job, but it may never
+    send one: as far as it knew, the request failed, and the run is already out of the
+    bucket. So the sweep finishes it too. Nothing in `purging/` is ever kept: a run gets
+    there only after its hashes matched.
+    """
+    if not config.purging_root.is_dir():
+        return report
+    for task_directory in sorted(config.purging_root.iterdir()):
+        for directory in sorted(task_directory.iterdir()):
+            try:
+                purge.finish(connection, directory.name, directory)
+            except OSError as error:
+                report.failed[directory.name] = str(error)
+                continue
+            report.purged.append(directory.name)
     return report

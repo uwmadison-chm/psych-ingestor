@@ -86,15 +86,19 @@ class RequestProblem(Exception):
 
 @dataclass(frozen=True, slots=True)
 class Run:
-    """One run as the database knows it: its `runs` row joined to its identifiers."""
+    """One run as the database knows it: its `runs` row joined to its identifiers.
+
+    The identifiers are None once the run has been purged. Purge deletes them along with
+    the run's files, and the row stays behind as the counter. See `forget_identifiers`.
+    """
 
     run_id: str
     task_code: str
     run_key_hash: str
     run_number: int
-    parameters: dict[str, str]
-    extra_parameters: dict[str, Any]
-    run_key_names: list[str]
+    parameters: dict[str, str] | None
+    extra_parameters: dict[str, Any] | None
+    run_key_names: list[str] | None
     phase: Phase
     started_at: datetime
     disposition: Disposition | None = None
@@ -108,9 +112,9 @@ class Run:
             task_code=row["task_code"],
             run_key_hash=row["run_key_hash"],
             run_number=row["run_number"],
-            parameters=json.loads(row["parameters"]),
-            extra_parameters=json.loads(row["extra_parameters"]),
-            run_key_names=json.loads(row["run_key_names"]),
+            parameters=_maybe_json(row["parameters"]),
+            extra_parameters=_maybe_json(row["extra_parameters"]),
+            run_key_names=_maybe_json(row["run_key_names"]),
             phase=Phase(row["phase"]),
             started_at=db.parse_time(row["started_at"]),
             disposition=(
@@ -145,6 +149,10 @@ def _maybe_time(stored: str | None) -> datetime | None:
     return db.parse_time(stored) if stored else None
 
 
+def _maybe_json(stored: str | None) -> Any:
+    return json.loads(stored) if stored is not None else None
+
+
 def hash_run_key(values: list[str]) -> str:
     """The stored form of a run key: a hash of its values, in run-key order.
 
@@ -159,11 +167,12 @@ def hash_run_key(values: list[str]) -> str:
 
 # ------------------------------------------------------------------------ reading runs
 
-# Every read joins the two tables, so a `Run` always has its parameters.
+# Every read joins the two tables, so a `Run` has its parameters if it still has any. A
+# left join, because a purged run has none and is still a run.
 _SELECT = (
     "SELECT runs.*, run_identifiers.parameters, run_identifiers.extra_parameters, "
     "run_identifiers.run_key_names FROM runs "
-    "JOIN run_identifiers ON run_identifiers.run_id = runs.run_id"
+    "LEFT JOIN run_identifiers ON run_identifiers.run_id = runs.run_id"
 )
 
 
@@ -313,6 +322,16 @@ def mark_done(connection: sqlite3.Connection, run: Run, when: datetime) -> bool:
         (Phase.DONE, db.stamp(when), run.run_id, Phase.CLOSED),
     )
     return cursor.rowcount == 1
+
+
+def forget_identifiers(connection: sqlite3.Connection, run_id: str) -> None:
+    """Delete what the run's link said: its parameters, extra parameters, and run-key
+    names. Part of purging a run.
+
+    The `runs` row stays. It's how the next run of the same key gets the next number,
+    and it holds no parameters, only a hash of the run key. See issue #2.
+    """
+    connection.execute("DELETE FROM run_identifiers WHERE run_id = ?", (run_id,))
 
 
 # ------------------------------------------------------------------------- counting
