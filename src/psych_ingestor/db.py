@@ -193,27 +193,33 @@ def connect(path: Path) -> sqlite3.Connection:
     # builds of SQLite do this by default and some don't, so it's said here.
     connection.execute("PRAGMA secure_delete = ON")
 
-    _check_version(connection, path)
-    connection.executescript(SCHEMA)
-    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    # Only a brand-new database gets the schema written. Writing it, even unchanged,
+    # takes the write lock, and the service opens a connection for every request, so
+    # doing it every time made a request that only reads wait behind whatever was
+    # writing. See #59.
+    if _is_brand_new(connection, path):
+        connection.executescript(SCHEMA)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     return connection
 
 
-def _check_version(connection: sqlite3.Connection, path: Path) -> None:
-    """Refuse a database whose tables aren't the ones this Pig expects.
+def _is_brand_new(connection: sqlite3.Connection, path: Path) -> bool:
+    """Whether the database is empty and needs its tables. Refuses one whose tables
+    aren't the ones this Pig expects.
 
     SQLite keeps a small integer in the file header for exactly this. A brand-new file
     reads 0 and has no tables; a file from before the version was recorded reads 0 and
-    does have tables, which is how the two are told apart.
+    does have tables, which is how the two are told apart. Reading it doesn't need the
+    write lock.
     """
     version = connection.execute("PRAGMA user_version").fetchone()[0]
     if version == SCHEMA_VERSION:
-        return
+        return False
     has_tables = connection.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
     ).fetchone()[0]
     if version == 0 and not has_tables:
-        return  # Brand new. The schema is about to be created.
+        return True
     connection.close()
     raise DatabaseProblem(
         f"{path} was made by a different version of Pig (its schema version is "
