@@ -118,9 +118,13 @@ broken finds out.
 
 Two things this depends on:
 
-- **The uniqueness constraint lives in the database**, on `(run_id, event_id)`, not in a
-  check the application does before writing. Two retries of the same request can be in
-  flight at once, and a check-then-write between them writes the line twice.
+- **The check and the write happen under the database's write lock.** Two retries of the
+  same request can be in flight at once, and a check-then-write that another request can
+  get between writes the line twice. Worse, the run can close between the check that it's
+  open and the append, and by then the sweep may have moved it into `done/`, so the task
+  is told about an event the finished run doesn't have (#52). Pig holds the lock from
+  reading the run to recording the receipts, and the uniqueness constraint on
+  `(run_id, event_id)` stays in the database as a backstop.
 - **The hash covers `event_id` and `data`** — everything the task is answerable for and
   nothing Pig added. The size limit a task is held to is measured the same way, for the
   same reason. A client that re-reads the clock when it retries will change its data and
@@ -140,9 +144,7 @@ it in only one direction.
 
 So the crash window leaves duplicate lines, never missing ones. The retry that follows a
 crash finds no database record, writes the line a second time, and the file now has it
-twice. (Two identical requests in flight at once can do the same thing with nobody
-crashing: both pass the check, both append, and the loser's receipt insert fails
-harmlessly.)
+twice.
 
 **And Pig leaves them there.** Nothing on the server rewrites `events.jsonl` — not to
 sort it, not to drop repeats. What's in `done/` is the append log exactly as the server
@@ -170,20 +172,21 @@ not from the database.
 
 ### Media parts go the other way round
 
-A media part is not appended; it's a whole file, written to a scratch name as the bytes
-arrive and renamed into place. A rename replaces whatever had that name, so the events
-rule — check, write, and let the database's unique constraint sort out two writers —
-doesn't carry over: two uploads of the same part number could both pass the check, and
-the loser's bytes would end up on disk under the winner's receipt. So the check, the
-rename and the receipt happen under one database write lock, and nobody else gets in
-between.
+A media part is not appended; it's a whole file, written to a scratch name under
+`uploading/` as the bytes arrive and renamed into place. The bytes arrive before the lock
+is taken, since holding the database's write lock for the length of an upload would hold
+up every other request. The check, the rename and the receipt happen under it, as they do
+for events, and here it matters even more: a rename replaces whatever had that name, so
+two uploads of the same part number that both got past the check would leave the loser's
+bytes on disk under the winner's receipt.
 
 The order inside the lock is still file first, then database. A crash after the rename
 leaves a part on disk with no receipt; the retry writes the same bytes over it and
 records the receipt. Nothing is duplicated, because a rename over a file is not an
 append. A crash *before* the rename leaves a scratch file, which Pig never claimed was
-stored and which the sweep deletes before it writes the manifest, so the manifest never
-vouches for bytes nobody acknowledged.
+stored and which the sweep deletes when it finishes the run. It's outside the run's
+directory, so the manifest never vouches for bytes nobody acknowledged, even when the run
+closes while a part is still arriving.
 
 Starting a media item is an event, so it follows the events rule, with one addition: the
 media ID goes on the event's line, so it has to be handed out before the line is written

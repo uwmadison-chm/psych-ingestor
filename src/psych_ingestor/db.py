@@ -74,9 +74,9 @@ CREATE TABLE IF NOT EXISTS run_identifiers (
 -- One row per event Pig has durably written: proof it's on disk, and the hash that tells
 -- a retry apart from two different events sharing an ID. It holds no event data.
 --
--- The uniqueness constraint lives here rather than in a check the application does
--- before writing: two retries of the same request can be in flight at once, and a
--- check-then-write between them writes the line twice.
+-- The service checks for a receipt and writes the line under the database's write lock,
+-- so two retries of the same request in flight at once can't both write it. The
+-- uniqueness constraint is the backstop if that ever stops being true.
 CREATE TABLE IF NOT EXISTS event_receipts (
     run_id       TEXT NOT NULL,
     event_id     TEXT NOT NULL,

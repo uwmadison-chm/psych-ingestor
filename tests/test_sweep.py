@@ -93,8 +93,8 @@ def test_events_are_left_exactly_as_written(pig: Pig):
     # A line that reached the file but never the database, as a crash would leave it.
     events_file = in_progress(pig, run_id) / "events.jsonl"
     before = events_file.read_text()
-    storage.append_line(
-        events_file, storage.canonical(storage.read_lines(events_file)[0])
+    storage.append_lines(
+        events_file, [storage.canonical(storage.read_lines(events_file)[0])]
     )
     assert len(storage.read_lines(events_file)) == 3
 
@@ -115,9 +115,9 @@ def test_two_lines_that_share_an_id_but_differ_are_both_kept(pig: Pig):
     pig.store_events("stroop", run_id, {"1": event(1)})
 
     events_file = in_progress(pig, run_id) / "events.jsonl"
-    storage.append_line(
+    storage.append_lines(
         events_file,
-        storage.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}}),
+        [storage.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}})],
     )
 
     pig.finalize_run("stroop", run_id)

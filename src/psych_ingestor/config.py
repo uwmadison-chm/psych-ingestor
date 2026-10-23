@@ -185,8 +185,9 @@ class Config(BaseModel):
 
     # Two trees under the data root, and a run directory moves from one to the other
     # exactly once, by a rename. A purged run makes one more rename, out of `done/` and
-    # into `purging/`, where it's deleted. All three are on one filesystem or those
-    # renames aren't atomic; see docs/deployment.md.
+    # into `purging/`, where it's deleted. A media part is written under `uploading/`
+    # and renamed into its run. All four are on one filesystem or those renames aren't
+    # atomic; see docs/deployment.md.
 
     @property
     def in_progress_root(self) -> Path:
@@ -204,6 +205,13 @@ class Config(BaseModel):
         """Purged runs on their way to being deleted. Empty except for a moment during a
         purge, or after one was interrupted, until the next sweep clears it."""
         return self.data_root / "purging"
+
+    @property
+    def uploading_root(self) -> Path:
+        """Media parts while they arrive, before they're renamed into their run. Kept
+        out of the run's directory so the sweep can never mistake one for part of the
+        run. See `storage.PartWriter`."""
+        return self.data_root / "uploading"
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:

@@ -129,6 +129,7 @@ def finish_closed_runs(
             # An upload that was interrupted leaves its scratch file, which Pig never
             # said was stored and the manifest must not vouch for.
             storage.remove_partial_files(source)
+            storage.remove_upload_scratch(config.uploading_root, run.run_id)
             storage.write_manifest(
                 source,
                 storage.manifest_for(
