@@ -436,3 +436,11 @@ def edit_manifest(pig: Pig, run_id: str, change) -> None:
 def only_error(report) -> str:
     assert len(report.errors) == 1, report.errors
     return next(iter(report.errors.values()))
+
+
+def test_the_example_pigsty_loads():
+    example = Path(__file__).parent.parent / "pigsty.example.toml"
+
+    loaded = load_sty_config(example)
+
+    assert loaded.pattern_for("stroop") is not None
