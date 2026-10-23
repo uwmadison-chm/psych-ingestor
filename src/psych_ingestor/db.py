@@ -164,6 +164,17 @@ def write_transaction(connection: sqlite3.Connection) -> Iterator[None]:
     connection.execute("COMMIT")
 
 
+def checkpoint(connection: sqlite3.Connection) -> None:
+    """Copy everything in the write-ahead log into the database file, and empty the log.
+
+    The log keeps old copies of pages until a checkpoint reuses them, so a row that's
+    been deleted can still be read from it for a while. Purge calls this after deleting a
+    run's identifiers. If another connection is reading, SQLite does what it can and the
+    next checkpoint finishes the job; that's not an error.
+    """
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+
 def connect(path: Path) -> sqlite3.Connection:
     """Open the database, creating it if it isn't there yet.
 
@@ -176,6 +187,11 @@ def connect(path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA synchronous = FULL")
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 5000")
+    # Overwrite deleted rows with zeros rather than leaving them in free pages, where
+    # anyone with the file could read them back. What purge deletes from the database is
+    # a participant's identifiers, and deleting them has to mean they're gone. Some
+    # builds of SQLite do this by default and some don't, so it's said here.
+    connection.execute("PRAGMA secure_delete = ON")
 
     _check_version(connection, path)
     connection.executescript(SCHEMA)

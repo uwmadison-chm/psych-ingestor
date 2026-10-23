@@ -71,6 +71,16 @@ and nothing beyond it, and link parameters that become path components must be c
 before they're used, never sanitized into something safe-looking. See
 [design_assumptions.md](design_assumptions.md).
 
+## Purging
+
+Purging deletes a finished run from the web server once the secure side has a copy. There's no key on the request, and that's deliberate. The secure side proves it has the run by sending a hash of every file, computed from the files themselves (see [api.md](api.md#purging-a-finished-run)). Anyone who can do that already has all the data purging would delete, so a secret would protect nothing.
+
+So purge isn't access control. It's a check that keeps a broken pipeline from deleting data: a partial download, a sync pointed at the wrong place. Don't add a key to "harden" it. If you want to limit who can reach it, do that in the web server in front of Pig, by address.
+
+What purge can't check is whether the secure side's copy is durable. The web server can't see the secure side, so the bucket's own retention, versioning say, is the only undo for a purge that shouldn't have happened. Pig can't check that either. See [deployment.md](deployment.md).
+
+A purged run's row stays in Pig's database, as a counter. Purge deletes the run's parameters and extra parameters, and SQLite is set to overwrite deleted rows rather than leave them readable in the file. The row still says that someone did the task, when, and how many runs they'd done, keyed by a hash of the run key. A short participant ID can be recovered from that hash by trying every value, so a purged database still isn't anonymous.
+
 ## The secure side doesn't trust the web server
 
 The web server is the machine on the public internet, so it's the one most likely to be broken into. Nothing on the secure side relies on it having behaved. Whatever it wrote, including manifests, parameters, event data and media, is treated as possibly hostile:

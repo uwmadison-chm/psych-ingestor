@@ -7,6 +7,9 @@
 # Paths are relative to this file. A task not listed here is never admitted or
 # organized: pigsty only works on the tasks it's told about.
 
+# Where Pig's web server is, for pigsty purge.
+pig_url = "http://127.0.0.1:8000"
+
 [task.stroop]
 # Where this task's runs are kept. Runs copied from the bucket arrive in incoming/, and
 # pigsty admit puts them in runs/ once they check out.

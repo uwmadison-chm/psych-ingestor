@@ -123,6 +123,14 @@ def create_app(config_path: Path) -> FastAPI:
             reply = pig.finish_media(task_code, run_id, media_id, declared)
             return JSONResponse(status_code=reply.status_code, content=reply.body)
 
+    @app.post("/task/{task_code}/run/{run_id}/purge")
+    def purge_run(
+        task_code: str, run_id: str, submitted: Annotated[Any, Body()]
+    ) -> JSONResponse:
+        # Asked for by `pigsty purge`, never by a task. See docs/api.md.
+        with _pig(source) as pig:
+            return JSONResponse(content=pig.purge_run(task_code, run_id, submitted))
+
     @app.get("/health")
     def check_health() -> JSONResponse:
         with _pig(source) as pig:

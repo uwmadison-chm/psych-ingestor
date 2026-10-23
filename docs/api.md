@@ -563,3 +563,44 @@ Three things you can rely on that you might expect to be in flux:
   your task's configuration names are used to identify the run.
 - **Pig has no notion of a study.** Tasks are the top level. Your task code is the whole
   address; there's no project or study to nest it under.
+
+## Purging a finished run
+
+**Your task never makes this request.** It's here because it's part of Pig's API, and whoever sets up the secure side needs to know how it works. `pigsty purge` makes it for you.
+
+Pig's web server is on the public internet, so once a run is safely on the secure side, its copy on the web server should go. Purging deletes the run from `done/`, and the copy to the bucket then drops it from there too. See [organizing.md](organizing.md).
+
+### `POST /task/{task_code}/run/{run_id}/purge`
+
+```json
+{
+  "purge_hashes": {
+    "events.jsonl": "3b1f…",
+    "manifest.json": "9c04…",
+    "media/00001/000001.part": "e7a2…"
+  }
+}
+```
+
+`purge_hashes` has an entry for every file in the run, `manifest.json` included, by its path inside the run directory. Pig computes the same hashes from its own copy, and purges the run only if the two lists match exactly: the same files, with the same hashes, and none missing or extra. A copy that's still downloading doesn't match, so it can't purge anything.
+
+A purge hash isn't the sha256 the manifest lists. It's the sha256 of the text `pig-purge:`, followed by the file's bytes. To check one by hand:
+
+```
+{ printf 'pig-purge:'; cat events.jsonl; } | sha256sum
+```
+
+That's so a manifest can't be used to purge a run. A manifest lists a sha256 of every file, and it's copied wherever the run goes. If purge took those hashes, anyone holding a manifest could delete a run they'd never seen. Nobody can compute a purge hash without the file's bytes.
+
+What comes back:
+
+| Status | Means |
+| --- | --- |
+| `200` `{"status": "purged"}` | The run is gone from the web server. Also the answer for a run that was already purged, so a retry isn't an error. |
+| `404` | There's no run with that ID for this task. |
+| `409` | Nothing was purged. Either the run isn't finished yet (it's purged from `done/`, and isn't there until the sweep has finished it), or the hashes don't match. The message says which files differ. |
+| `422` | The request isn't shaped like the example above. |
+
+There's no key or password. Purging needs the run's bytes, and anyone with those already has everything purging would delete, so a secret would protect nothing. Purge isn't a lock against attackers. It's a check that the secure side really has the run before the web server lets go of it. See [security.md](security.md).
+
+A purged run's row stays in Pig's database, without the parameters its link carried. The row is how a participant's next run gets the next run number, so it's never deleted.

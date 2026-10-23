@@ -4,8 +4,9 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-For now this holds what `pigsty admit` and `pigsty organize` need: for each task, where
-its runs are kept and where its readable tree goes. Keys and purging come later.
+For now this holds what `pigsty admit`, `pigsty organize` and `pigsty purge` need: for
+each task, where its runs are kept and where its readable tree goes, and the address of
+the web server to purge runs from. Keys come later.
 """
 
 from __future__ import annotations
@@ -138,10 +139,20 @@ class StyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # The web server's address, like https://pig.example.edu, for `pigsty purge`. Not
+    # needed by anything else.
+    pig_url: str | None = None
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check(self) -> StyConfig:
+        if self.pig_url is not None and not self.pig_url.startswith(
+            ("https://", "http://")
+        ):
+            raise ValueError(
+                f"pig_url {self.pig_url!r} isn't a web address. It's where Pig's web "
+                "server is, like https://pig.example.edu."
+            )
         for code, task in self.task.items():
             if code != code.lower() or not is_safe_value(code):
                 raise ValueError(

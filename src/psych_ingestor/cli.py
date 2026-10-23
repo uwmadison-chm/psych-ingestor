@@ -181,6 +181,8 @@ def sweep(*, config: ConfigPath | None = None) -> None:
         f"Expired {len(report.expired)} run(s)",
         f"finished {len(report.finished)}",
     ]
+    if report.purged:
+        counts.append(f"finished purging {len(report.purged)}")
     if report.refused:
         counts.append(f"refused {len(report.refused)}")
     if report.failed:
@@ -234,9 +236,12 @@ def runs(
     count_width = max((len(str(count)) for count in counts.values()), default=1)
 
     for run in listed:
-        described = " ".join(
-            f"{name}={value}" for name, value in run.parameters.items()
-        )
+        if run.parameters is None:
+            described = "(purged)"
+        else:
+            described = " ".join(
+                f"{name}={value}" for name, value in run.parameters.items()
+            )
         print(
             f"{run.run_id}  {run.task_code:<{task_width}}  run-{run.run_number:04d}  "
             f"{run.api_status:<{status_width}}  {run.phase:<{phase_width}}  "

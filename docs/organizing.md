@@ -1,8 +1,9 @@
 # Organizing finished runs
 
-Pig stores each finished run in a directory named for its run ID: `done/stroop/9f3c1a7e-…/`. That's the record, and it's deliberately not something a person can browse. On the machine where the data ends up, two commands turn those into a tree named for what each run is:
+Pig stores each finished run in a directory named for its run ID: `done/stroop/9f3c1a7e-…/`. That's the record, and it's deliberately not something a person can browse. On the machine where the data ends up, three commands take it from there:
 
 - `pigsty admit` takes runs as they arrive from the web server and moves each one into place once it's whole.
+- `pigsty purge` asks the web server to delete each run that's been admitted, so the data doesn't stay on the public-facing machine.
 - `pigsty organize` copies each admitted run to a path built from its parameters:
 
 ```
@@ -45,6 +46,8 @@ pigsty organize
 
 The tree is in `local/organized/stroop/`. Add `--dry-run` to `pigsty organize` to see where each run would go without copying anything.
 
+With `pig serve` running, `pigsty purge` then deletes those runs from `local/data/done/stroop/`. There's no bucket on a laptop, so nothing takes them out of `incoming/`; delete them by hand.
+
 ## Admitting downloaded runs
 
 On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
@@ -61,6 +64,23 @@ Running `pigsty admit` again is safe, and it's how new runs get admitted. A run 
 A run with a symbolic link anywhere in it is refused too. Pig never makes one, and one could point anywhere on the secure machine.
 
 Only one `pigsty admit` works on a task at a time.
+
+## Purging admitted runs from the web server
+
+Once a run is admitted, the web server doesn't need its copy, and shouldn't keep it: it's the machine on the public internet. `pigsty purge` asks it to delete each one. It needs the web server's address, once, at the top of `pigsty.toml`:
+
+```toml
+# pigsty.toml
+pig_url = "https://pig.example.edu"
+```
+
+For each run that's in both `runs/` and `incoming/`, `pigsty purge` hashes the files in `incoming/` and sends the hashes to Pig, which deletes its copy only if every one matches its own. It hashes `incoming/` because that's a copy of the bucket, so its files are exactly the web server's. A run still downloading doesn't match, and isn't purged. How the hashes work is in [api.md](api.md#purging-a-finished-run).
+
+Then the run leaves on its own. The web server's next copy to the bucket deletes it there, and this side's next copy from the bucket deletes it from `incoming/`. Its copy in `runs/` stays. So a run is in `incoming/` from when it arrives until it's purged and both copies have run, and a run that stays in `incoming/` long after it was admitted means something in that chain isn't working.
+
+Running `pigsty purge` again is safe. A purged run gets a note, `runs/{run_id}/.state/purged`, saying when, and isn't hashed again. Organize doesn't copy `.state/` into the tree. A run Pig refuses to purge is reported with Pig's reason, the rest carry on, and `pigsty purge` exits with an error so a scheduled job notices.
+
+Run it right after `pigsty admit`, from the same scheduled job. Between the two, a run's data is on both machines.
 
 ## Patterns
 

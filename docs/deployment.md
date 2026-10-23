@@ -27,13 +27,19 @@ to see a run reach `complete`.
 
 ## The data root is one filesystem
 
-Under the data root, `in_progress/` and `done/` have to be on the same filesystem. The
+Under the data root, `in_progress/`, `done/` and `purging/` have to be on the same filesystem. The
 sweep finishes a run by writing its manifest in place and then renaming the whole
 directory from one tree to the other, and a rename within one filesystem either happens
 entirely or not at all — so `done/` never holds a half-copied run. Across filesystems
 that isn't a rename, and the guarantee goes with it. Nothing about a normal deployment
 splits the two, but a data root that's a mount point with `in_progress/` symlinked
 elsewhere would, so don't.
+
+Purging a run is a rename too, out of `done/` and into `purging/`, where it's deleted. That way the copy to the bucket never sees half a deleted run.
+
+## The bucket is the undo for a purge
+
+Once the secure side has a run, `pigsty purge` asks Pig to delete it, and the next copy to the bucket deletes it there too. If the secure side's copy turns out to be bad after all, the bucket's retention is the only thing that can bring the run back: versioning, so a deleted object can be restored for a while. Pig can't check that the bucket has it. Set it up before purging anything.
 
 ## Media and the web server in front of Pig
 

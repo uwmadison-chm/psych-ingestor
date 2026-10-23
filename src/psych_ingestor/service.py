@@ -14,10 +14,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import db, media, runs, storage
+from . import db, media, purge, runs, storage
 from .config import SAFE_VALUE_EXPLANATION, Config, TaskDefinition, is_safe_value
 from .media import MediaItem
-from .runs import Disposition, RequestProblem, Run
+from .runs import Disposition, Phase, RequestProblem, Run
 
 MAX_EVENT_ID_LENGTH = 256
 
@@ -638,6 +638,66 @@ class Pig:
         body["errors"] = {key: _problem(message, can_retry)}
         return Reply(status_code, body)
 
+    # -------------------------------------------------------------- purging
+    #
+    # The secure side asks for this once it has a run, so the copy here can go. It sends
+    # a purge hash of every file in its copy, and the run is deleted only if they all
+    # match this one. See purge.py, and docs/api.md for why there's no key.
+
+    def purge_run(self, task_code: str, run_id: str, submitted: Any) -> dict[str, Any]:
+        sent = _as_purge_hashes(submitted)
+        # Not `_run_for_task`: a task taken out of pig.toml still has runs in `done/`,
+        # and they still need purging.
+        run = runs.get(self.connection, run_id)
+        if run is None or run.task_code != task_code:
+            raise RequestProblem(404, "There's no run with that ID for this task.")
+        if run.phase is not Phase.DONE:
+            raise RequestProblem(
+                409,
+                "This run isn't finished yet, so there's nothing to purge. A run can be "
+                "purged once the sweep has finished it and it's in done/.",
+            )
+
+        done = storage.run_directory(self.config.done_root, task_code, run_id)
+        purging = storage.run_directory(self.config.purging_root, task_code, run_id)
+        if not done.exists():
+            if purging.exists() or run.parameters is None:
+                # Purged already, or purging was interrupted after the run left done/.
+                # Either way, the copy that could be uploaded is gone. A retried request
+                # is what this looks like, so it isn't an error.
+                purge.finish(self.connection, run_id, purging)
+                return {"status": "purged"}
+            raise RequestProblem(
+                409,
+                f"Pig's copy of this run isn't in {self.config.done_root}, and Pig didn't "
+                "purge it. Nothing was changed. Someone needs to look at the web server.",
+            )
+
+        try:
+            ours = purge.purge_hashes(done)
+        except purge.PurgeProblem as problem:
+            raise RequestProblem(
+                409, f"Pig can't check its copy of this run: {problem}"
+            ) from None
+        found = purge.differences(sent, ours)
+        if found:
+            raise RequestProblem(
+                409,
+                "Your copy of this run doesn't match Pig's, so nothing was purged. "
+                + " ".join(found),
+            )
+
+        # Out of done/ in one rename, so the copy to the bucket sees the whole run or
+        # none of it, never half a deleted one.
+        try:
+            storage.move_directory(done, purging)
+        except OSError:
+            if done.exists():
+                raise
+            # Another purge of the same run moved it first. Finishing is safe to repeat.
+        purge.finish(self.connection, run_id, purging)
+        return {"status": "purged"}
+
     # --------------------------------------------------------------- lookups
 
     def _run_for_task(self, task_code: str, run_id: str) -> Run:
@@ -735,6 +795,25 @@ def _as_declared_parts(submitted: Any) -> int:
             422, f"'parts' has to be a whole number, 1 or more. {expected}"
         )
     return parts
+
+
+def _as_purge_hashes(submitted: Any) -> dict[str, str]:
+    """The `purge_hashes` of a purge request, or a 422 saying what's wrong with it."""
+    hashes = submitted.get("purge_hashes") if isinstance(submitted, dict) else None
+    if (
+        not isinstance(hashes, dict)
+        or not hashes
+        or not all(
+            isinstance(path, str) and isinstance(value, str)
+            for path, value in hashes.items()
+        )
+    ):
+        raise RequestProblem(
+            422,
+            'A purge request is {"purge_hashes": {path: hash, ...}}, with the purge '
+            "hash of every file in the run. See docs/api.md.",
+        )
+    return hashes
 
 
 def _as_event_dict(submitted: Any) -> dict[str, Any]:
