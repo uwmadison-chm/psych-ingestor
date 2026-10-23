@@ -179,6 +179,8 @@ needs to find your run — the two numbers are for humans.
 task again with the same link always gives you a new run with a new number, so a
 participant who reloads partway through never overwrites their earlier data.
 
+You can use it to change what the participant sees: a run number above 1 means they've started this task with this link before, so you might say "Welcome back" or skip the long instructions. It counts every start, though, not every finished run. A participant who closed the tab a minute into run 1 gets run 2 when they come back, so a run number above 1 doesn't mean they finished an earlier run.
+
 ## Sending events
 
 ### `POST /task/{task_code}/run/{run_id}`
