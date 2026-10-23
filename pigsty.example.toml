@@ -1,0 +1,27 @@
+# An example secure-side configuration. Copy it to local/pigsty.toml and edit.
+#
+# pig.toml is for the web server; this file is for the machine where the data ends up,
+# and no command reads both. In production, keep them on different machines. See
+# docs/organizing.md.
+#
+# Paths are relative to this file. With the file at local/pigsty.toml, `store` below is
+# the web side's own done/ directory, so on a laptop `pig organize` works on whatever
+# your local Pig has collected. On a real secure server, `store` is wherever the finished
+# runs are copied to.
+
+kind = "secure"           # required; it's how Pig tells this file from pig.toml
+
+store = "./data/done"     # finished run directories, one per run, each with a manifest
+organized = "./organized" # where pig organize builds the readable tree; safe to delete
+
+# Each task can say where its runs go. A pattern is a path with placeholders in braces:
+# {task_code}, {run_number}, and any parameter the task declares in pig.toml. Every
+# pattern has to include {run_number}.
+
+# Groups the task under a project directory.
+[task.stroop]
+pattern = "lucida/{task_code}/{participant_id}/{session}/run-{run_number}"
+
+# A task with no entry, like balloons and interview from pig.example.toml, uses the
+# default: the task code, its run-key values in order, then the run number. So
+# balloons runs land at balloons/10351/run-0001/.

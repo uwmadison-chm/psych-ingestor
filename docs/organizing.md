@@ -41,6 +41,8 @@ pattern = "lucida/{task_code}/{participant_id}/{session}/run-{run_number}"
 
 `kind = "secure"` is required. It's how Pig tells the two files apart: the web server's commands refuse a file that says it, and `pig organize` refuses a file that doesn't. `pig check --config pigsty.toml` checks the file. Paths are relative to the file, as they are in `pig.toml`.
 
+`pigsty.example.toml` in the repository is a starting point: copy it to `local/pigsty.toml`, where its paths point at your local Pig's `done/` directory.
+
 With that in place, `pig organize` needs no arguments. It reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`. A task with no entry uses the default pattern.
 
 ## Patterns

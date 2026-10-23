@@ -4,6 +4,8 @@
 # working copy accumulates — the database, the data — lands under local/ too. That's the
 # one directory version control ignores.
 
+kind = "web"              # optional; says this is the web server's file, not pigsty.toml
+
 data_root = "./data"
 database = "./pig.db"
 
