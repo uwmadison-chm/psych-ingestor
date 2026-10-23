@@ -2,6 +2,7 @@
 `pigsty.toml` that tells it where things go."""
 
 import json
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from psych_ingestor import storage, sweep
 from psych_ingestor.cli import app
 from psych_ingestor.config import ConfigurationError, load_config
-from psych_ingestor.organize import organize
+from psych_ingestor.organize import RECORD_FILE, organize
 from psych_ingestor.service import Pig
 from psych_ingestor.sty import PatternError, check_pattern, load_sty_config
 
@@ -316,6 +317,128 @@ def test_the_manifest_never_lists_state(tmp_path: Path):
     (tmp_path / "events.jsonl").write_text("")
 
     assert [f["path"] for f in storage.describe_files(tmp_path)] == ["events.jsonl"]
+
+
+# --------------------------------------------------------------- the record
+
+PLACED = Path("stroop/PPT-1003/Baseline/run-0001")
+
+
+def test_each_placed_run_is_recorded(pig: Pig, tmp_path: Path):
+    run_id = finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+
+    organize(pig.config.done_root, tree, {})
+
+    lines = (tree / RECORD_FILE).read_text().splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {"run_id": run_id, "task_code": "stroop", "destination": PLACED.as_posix()}
+    ]
+
+
+def test_a_recorded_run_isnt_read_again(pig: Pig, tmp_path: Path):
+    run_id = finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    # Without the record, this run would now be refused for having no manifest.
+    (pig.config.done_root / "stroop" / run_id / "manifest.json").unlink()
+
+    report = organize(pig.config.done_root, tree, {})
+
+    assert report.errors == {}
+    assert report.already_there == [run_id]
+
+
+def test_a_run_in_the_tree_but_not_the_record_is_recorded(pig: Pig, tmp_path: Path):
+    run_id = finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    (tree / RECORD_FILE).unlink()
+
+    report = organize(pig.config.done_root, tree, {})
+
+    assert report.already_there == [run_id]
+    assert run_id in (tree / RECORD_FILE).read_text()
+
+
+def test_a_new_run_cant_land_on_a_recorded_one(pig: Pig, tmp_path: Path):
+    first = finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    pattern = "{task_code}/{participant_id}/run-{run_number}"
+    organize(pig.config.done_root, tree, {"stroop": pattern})
+    finished_run(pig, {**BASELINE, "session": "Followup"})
+
+    report = organize(pig.config.done_root, tree, {"stroop": pattern})
+
+    assert "Neither is placed" in only_error(report)
+    placed = tree / "stroop" / "PPT-1003" / "run-0001"
+    assert storage.read_manifest(placed)["run_id"] == first
+
+
+def test_an_unfinished_last_line_is_cut_off(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    with open(tree / RECORD_FILE, "a") as record:
+        record.write('{"run_id": "half')
+    finished_run(pig, {**BASELINE, "session": "Followup"})
+
+    report = organize(pig.config.done_root, tree, {})
+
+    assert report.errors == {}
+    lines = (tree / RECORD_FILE).read_text().splitlines()
+    assert [json.loads(line)["destination"] for line in lines] == [
+        PLACED.as_posix(),
+        "stroop/PPT-1003/Followup/run-0001",
+    ]
+
+
+def test_a_damaged_record_stops_organize_until_full(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    (tree / RECORD_FILE).write_text("not json\n")
+    finished_run(pig, {**BASELINE, "session": "Followup"})
+
+    report = organize(pig.config.done_root, tree, {})
+
+    assert "--full" in only_error(report)
+    assert report.placed == []
+
+    report = organize(pig.config.done_root, tree, {}, full=True)
+
+    assert report.errors == {}
+    assert len(report.already_there) == 1
+    assert len(report.placed) == 1
+    assert len((tree / RECORD_FILE).read_text().splitlines()) == 2
+
+
+def test_a_run_removed_from_the_tree_comes_back_only_with_full(
+    pig: Pig, tmp_path: Path
+):
+    finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    shutil.rmtree(tree / PLACED)
+
+    assert organize(pig.config.done_root, tree, {}).placed == []
+    assert not (tree / PLACED).exists()
+
+    assert len(organize(pig.config.done_root, tree, {}, full=True).placed) == 1
+    assert (tree / PLACED / "manifest.json").exists()
+
+
+def test_a_dry_run_records_nothing(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    tree = tmp_path / "tree"
+    organize(pig.config.done_root, tree, {})
+    before = (tree / RECORD_FILE).read_bytes()
+    finished_run(pig, {**BASELINE, "session": "Followup"})
+
+    organize(pig.config.done_root, tree, {}, dry_run=True)
+    organize(pig.config.done_root, tree, {}, dry_run=True, full=True)
+
+    assert (tree / RECORD_FILE).read_bytes() == before
 
 
 # ------------------------------------------------------------------- patterns

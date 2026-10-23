@@ -185,6 +185,7 @@ def organize(
     *,
     config: StyConfigPath | None = None,
     dry_run: bool = False,
+    full: bool = False,
 ) -> None:
     """Copy finished runs into a readable tree, named for their parameters.
 
@@ -194,6 +195,10 @@ def organize(
 
     Safe to run again: a run already in the tree is left alone. Nothing in the store is
     ever changed. With --dry-run, prints where each run would go and copies nothing.
+
+    The tree keeps a record of the runs placed in it, so a second organize reads only
+    new runs. With --full, every run is checked against the tree, and the record is
+    written again.
     """
     if (store is None) != (output is None):
         print("Give both a store and an output directory, or neither.", file=sys.stderr)
@@ -217,7 +222,9 @@ def organize(
             if task.pattern is not None
         }
 
-    report = organize_module.organize(store, output, patterns, dry_run=dry_run)
+    report = organize_module.organize(
+        store, output, patterns, dry_run=dry_run, full=full
+    )
 
     verb = "Would place" if dry_run else "Placed"
     counts = [

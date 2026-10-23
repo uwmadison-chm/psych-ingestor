@@ -62,9 +62,13 @@ A placeholder is a name and nothing else. `{session.upper}`, `{run_number:03}`, 
 
 ## Running it again
 
-Running `pig organize` again over the same tree is safe, and it's how new runs get added. A run that's already in place is left alone; Pig recognizes it by the `manifest.json` it copied there. Nothing in the store is ever changed or deleted, and nothing already in the tree is overwritten.
+Running `pig organize` again over the same tree is safe, and it's how new runs get added. A run that's already in place is left alone. Nothing in the store is ever changed or deleted, and nothing already in the tree is overwritten.
 
-To rebuild a tree from scratch, for a new pattern say, delete it and run `pig organize` again.
+The tree keeps a list of the runs placed in it, in `.placed.jsonl` at its top. A second `pig organize` reads that list and the names of the runs in the store, and opens only the runs it hasn't placed yet. A store can hold tens of thousands of runs on a network share, where opening each one takes a while, so this is what keeps a scheduled organize quick.
+
+The list is only ever added to as runs are placed, so it's trusted as it stands. A run deleted from the tree by hand isn't put back, and a run moved or edited there isn't noticed. `pig organize --full` checks every run in the store against the tree, as if the list weren't there: it places any run that's missing, and writes the list again from what it finds. It's also what to run if `pig organize` says the list can't be read.
+
+To rebuild a tree from scratch, for a new pattern say, delete it and run `pig organize` again. The list goes with it.
 
 ## When a run isn't placed
 
