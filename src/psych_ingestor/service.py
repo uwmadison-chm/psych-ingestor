@@ -107,8 +107,8 @@ class Pig:
         # a row with no directory is a run the sweep will have to report. The directory
         # exists from the start so that "is it there" has one meaning by sweep time,
         # whether or not the run ever sent an event.
-        storage.run_directory(self.config.in_progress_root, task.code, run_id).mkdir(
-            parents=True, exist_ok=True
+        storage.make_directories(
+            storage.run_directory(self.config.in_progress_root, task.code, run_id)
         )
 
         run_number = runs.insert(
@@ -367,9 +367,7 @@ class Pig:
                     "as many as media IDs go.",
                 )
             line = storage.event_line(event_id, data, stored_at, media_id)
-            storage.media_directory(run_dir, media_id).mkdir(
-                parents=True, exist_ok=True
-            )
+            storage.make_directories(storage.media_directory(run_dir, media_id))
             storage.append_lines(events_file, [storage.canonical(line)])
             media.insert(self.connection, run_id, media_id, event_id)
             if not runs.record_receipt(

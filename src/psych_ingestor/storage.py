@@ -126,6 +126,10 @@ def append_lines(path: Path, lines: list[str]) -> None:
         handle.write(text.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
+    if size == 0:
+        # The first lines, so most likely a new file. Its name needs fsyncing too, or a
+        # crash can take the file, and the events Pig just said were stored, with it.
+        fsync_directory(path.parent)
 
 
 class PartTooLarge(Exception):
@@ -229,6 +233,22 @@ def remove_upload_scratch(uploading_root: Path, run_id: str) -> None:
     """
     for path in uploading_root.glob(f"{run_id}.*{PARTIAL_SUFFIX}"):
         path.unlink(missing_ok=True)
+
+
+def make_directories(directory: Path) -> None:
+    """Make a directory, and any missing above it, so that they survive a crash.
+
+    A new directory is only an entry in its parent until the parent is fsynced, so each
+    one made here has its parent fsynced. Without that, a run directory Pig has already
+    written events into could be gone after a power cut, events and all. See #54.
+    """
+    missing = []
+    while not directory.exists():
+        missing.append(directory)
+        directory = directory.parent
+    for made in reversed(missing):
+        made.mkdir(exist_ok=True)
+        fsync_directory(made.parent)
 
 
 def create_empty_file(path: Path) -> None:
@@ -370,7 +390,7 @@ def move_directory(source: Path, destination: Path) -> None:
     """
     if destination.exists():
         raise OSError(f"{destination} already exists; not moving {source} over it")
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    make_directories(destination.parent)
     source.rename(destination)
     fsync_directory(destination.parent)
     fsync_directory(source.parent)
