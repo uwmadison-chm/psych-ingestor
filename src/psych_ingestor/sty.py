@@ -4,9 +4,8 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-For now this holds what `pigsty admit` and `pigsty organize` need: where each task's
-runs are kept, where the store is, where the organized tree goes, and each task's
-pattern. Keys and purging come later.
+For now this holds what `pigsty admit` and `pigsty organize` need: for each task, where
+its runs are kept and where its readable tree goes. Keys and purging come later.
 """
 
 from __future__ import annotations
@@ -25,9 +24,13 @@ DEFAULT_STY_CONFIG = "local/pigsty.toml"
 
 # ------------------------------------------------------------------- patterns
 #
-# A pattern is a path with `{name}` placeholders:
+# A task's `organized` is a path with `{name}` placeholders:
 #
-#     lucida/{task_code}/{participant_id}/{session}/run-{run_number}
+#     /secure/mystudy/intermediate_data/pig/stroop/{session}/{participant_id}_{run_number}
+#
+# Everything before the first placeholder's directory is the task's organized root, a
+# directory that's there whatever run is being placed. The rest is its pattern, which
+# each run fills in.
 #
 # Deliberately not Python's `str.format`, which would let a pattern reach into objects
 # (`{x.__class__}`) and accept format specs nobody needs. A placeholder is a name in
@@ -79,12 +82,30 @@ def check_pattern(pattern: str) -> None:
         )
 
 
-def default_pattern(task_code: str, run_key: list[str]) -> str:
-    """The task code, the run-key values in the order the task declared them, then
-    the run number: the smallest tree in which no two runs can land in one place."""
-    return "/".join(["{task_code}", *(f"{{{name}}}" for name in run_key)]) + (
-        "/run-{run_number}"
-    )
+def split_organized(organized: str) -> tuple[str, str]:
+    """A task's `organized` split into its root and its pattern, or PatternError.
+
+    The root is everything up to the last `/` before the first placeholder, so
+    `/secure/stroop/{session}/run-{run_number}` is the root `/secure/stroop` and the
+    pattern `{session}/run-{run_number}`.
+    """
+    first = organized.find("{")
+    slash = organized.rfind("/", 0, first) if first != -1 else -1
+    if slash <= 0:
+        raise PatternError(
+            f"{organized!r} needs a directory before its first placeholder, like "
+            "/secure/mystudy/stroop/{participant_id}/run-{run_number}. That directory "
+            "is where this task's tree goes, and where pigsty keeps its record of what "
+            "it has placed there."
+        )
+    root, pattern = organized[:slash], organized[slash + 1 :]
+    if "}" in root:
+        raise PatternError(
+            f"{organized!r} has a brace that isn't part of a placeholder. Placeholders "
+            "look like {participant_id}; braces can't appear anywhere else."
+        )
+    check_pattern(pattern)
+    return root, pattern
 
 
 # --------------------------------------------------------------- the file
@@ -97,10 +118,19 @@ class StyTask(BaseModel):
 
     # Where this task's runs are kept on the secure side: `incoming/`, where the copy
     # from the bucket puts them, and `runs/`, where `pigsty admit` puts them once they
-    # check out. A task without one isn't admitted.
-    datastore_base: Path | None = None
-    # Where `pigsty organize` puts this task's runs. Without one, the default pattern.
-    pattern: str | None = None
+    # check out.
+    datastore_base: Path
+    # Where `pigsty organize` puts each of this task's runs: a fixed directory, then a
+    # pattern. See `split_organized`.
+    organized: str
+
+    @property
+    def organized_root(self) -> Path:
+        return Path(split_organized(self.organized)[0])
+
+    @property
+    def pattern(self) -> str:
+        return split_organized(self.organized)[1]
 
 
 class StyConfig(BaseModel):
@@ -108,10 +138,6 @@ class StyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Finished run directories as they arrived from the web server: the durable copy.
-    store: Path
-    # Where `pigsty organize` builds the readable tree. Regenerable from `store`.
-    organized: Path
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -122,17 +148,11 @@ class StyConfig(BaseModel):
                     f"task code {code!r} isn't one Pig could have used. Task codes are "
                     f"lowercase {SAFE_VALUE_EXPLANATION}."
                 )
-            if task.pattern is not None:
-                try:
-                    check_pattern(task.pattern)
-                except PatternError as error:
-                    raise ValueError(f"task {code!r}: {error}") from None
+            try:
+                split_organized(task.organized)
+            except PatternError as error:
+                raise ValueError(f"task {code!r}: {error}") from None
         return self
-
-    def pattern_for(self, task_code: str) -> str | None:
-        """This task's pattern, or None if it uses the default."""
-        task = self.task.get(task_code)
-        return task.pattern if task else None
 
 
 def load_sty_config(path: Path) -> StyConfig:
@@ -152,22 +172,31 @@ def load_sty_config(path: Path) -> StyConfig:
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()
-    config.store = (base / config.store).resolve()
-    config.organized = (base / config.organized).resolve()
-    by_datastore: dict[Path, str] = {}
-    for code, task in sorted(config.task.items()):
-        if task.datastore_base is None:
-            continue
+    for task in config.task.values():
         task.datastore_base = (base / task.datastore_base).resolve()
-        # One task's runs per datastore, so admit can tell from where a run is which
-        # task it belongs to, and two tasks' admits never share a lock.
-        if task.datastore_base in by_datastore:
-            raise ConfigurationError(
-                f"{path} has a problem: tasks {by_datastore[task.datastore_base]!r} "
-                f"and {code!r} have the same datastore_base, {task.datastore_base}. "
-                "Each task needs its own."
-            )
-        by_datastore[task.datastore_base] = code
+        root, pattern = split_organized(task.organized)
+        task.organized = f"{(base / root).resolve()}/{pattern}"
+
+    # One task per datastore, so admit can tell from where a run is which task it
+    # belongs to. And one task per organized root, with no root inside another, so each
+    # task's tree, and pigsty's record of it, is that task's alone.
+    codes = sorted(config.task)
+    for number, code in enumerate(codes):
+        for other in codes[number + 1 :]:
+            mine, theirs = config.task[code], config.task[other]
+            if mine.datastore_base == theirs.datastore_base:
+                raise ConfigurationError(
+                    f"{path} has a problem: tasks {code!r} and {other!r} have the same "
+                    f"datastore_base, {mine.datastore_base}. Each task needs its own."
+                )
+            roots = sorted([mine.organized_root, theirs.organized_root])
+            if roots[0] == roots[1] or roots[0] in roots[1].parents:
+                raise ConfigurationError(
+                    f"{path} has a problem: tasks {code!r} and {other!r} are organized "
+                    f"into {mine.organized_root} and {theirs.organized_root}. Each task "
+                    "needs a directory of its own, not inside another task's, before "
+                    "its first placeholder."
+                )
     return config
 
 

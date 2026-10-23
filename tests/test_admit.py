@@ -278,9 +278,7 @@ def test_datastore_base_is_relative_to_the_file(tmp_path: Path):
 
 def test_two_tasks_cant_share_a_datastore(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text(
-        sty_toml("./shared") + '\n[task.balloons]\ndatastore_base = "./shared"\n'
-    )
+    path.write_text(sty_toml("./shared") + "\n" + sty_toml("./shared", task="balloons"))
 
     with pytest.raises(ConfigurationError, match="same datastore_base"):
         load_sty_config(path)
@@ -315,10 +313,10 @@ def test_the_cli_exits_nonzero_when_a_run_isnt_admitted(pig: Pig, tmp_path: Path
 # ------------------------------------------------------------------ helpers
 
 
-def sty_toml(datastore: str) -> str:
+def sty_toml(datastore: str, task: str = "stroop") -> str:
     return (
-        'store = "./store"\norganized = "./organized"\n\n'
-        f'[task.stroop]\ndatastore_base = "{datastore}"\n'
+        f'[task.{task}]\ndatastore_base = "{datastore}"\n'
+        f'organized = "./organized/{task}/{{participant_id}}/{{run_number}}"\n'
     )
 
 

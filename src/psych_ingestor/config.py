@@ -230,7 +230,11 @@ def load_config(path: Path) -> Config:
     except Exception as error:
         # Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know.
         hint = ""
-        if isinstance(raw, dict) and {"store", "organized"} & raw.keys():
+        tasks = raw.get("task") if isinstance(raw, dict) else None
+        if isinstance(tasks, dict) and any(
+            isinstance(task, dict) and {"datastore_base", "organized"} & task.keys()
+            for task in tasks.values()
+        ):
             hint = (
                 "\nThis looks like pigsty.toml, the secure side's configuration, which "
                 "pigsty reads. pig reads the web server's pig.toml."

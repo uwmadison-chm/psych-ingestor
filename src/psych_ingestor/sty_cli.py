@@ -61,16 +61,11 @@ def check(*, config: StyConfigPath | None = None) -> None:
     """
     loaded = _load(config)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
-    print(f"  store:     {loaded.store}")
-    print(f"  organized: {loaded.organized}")
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
-        print(f"  datastore: {task.datastore_base or '(none; not admitted)'}")
-        print(f"  pattern:   {task.pattern or '(the default)'}")
-    print(
-        "\nA task not listed here is organized with the default pattern: its task "
-        "code, its run-key values, then its run number."
-    )
+        print(f"  datastore: {task.datastore_base}")
+        print(f"  organized: {task.organized_root}")
+        print(f"  pattern:   {task.pattern}")
 
 
 @app.command
@@ -78,8 +73,8 @@ def admit(*, config: StyConfigPath | None = None) -> None:
     """Check downloaded runs against their manifests, and move the ones that are whole
     into place.
 
-    For each task with a datastore_base in pigsty.toml, looks at the runs in its
-    incoming/ directory that aren't in runs/ yet. A run whose files all match its
+    For each task in pigsty.toml, looks at the runs in its datastore's incoming/
+    directory that aren't in runs/ yet. A run whose files all match its
     manifest is copied into runs/. A run still downloading is left for next time. A run
     that's all there but doesn't match is reported, and the command exits with an error.
     Nothing in incoming/ is ever changed.
@@ -87,8 +82,6 @@ def admit(*, config: StyConfigPath | None = None) -> None:
     loaded = _load(config)
     problems = False
     for code, task in sorted(loaded.task.items()):
-        if task.datastore_base is None:
-            continue
         report = admit_module.admit(code, task.datastore_base)
         counts = [
             f"admitted {len(report.admitted)} run(s)",
@@ -108,67 +101,44 @@ def admit(*, config: StyConfigPath | None = None) -> None:
 
 @app.command
 def organize(
-    store: Path | None = None,
-    output: Path | None = None,
-    /,
     *,
     config: StyConfigPath | None = None,
     dry_run: bool = False,
+    full: bool = False,
 ) -> None:
-    """Copy finished runs into a readable tree, named for their parameters.
+    """Copy each task's admitted runs into a readable tree, named for their parameters.
 
-    pigsty.toml says where the runs are, where the tree goes, and what each task's paths
-    look like. To organize a copied store without one, give the store and the output
-    directory instead, and every task gets the default pattern.
+    For each task in pigsty.toml, places every run in its datastore's runs/ directory
+    at the path its organized setting describes.
 
-    Safe to run again: a run already in the tree is left alone. Nothing in the store is
-    ever changed. With --dry-run, prints where each run would go and copies nothing.
+    Safe to run again: a run already in the tree is left alone, and isn't even read,
+    because each tree keeps a record of the runs placed in it. Nothing in runs/ is ever
+    changed. With --dry-run, prints where each run would go and copies nothing. With
+    --full, checks every run against the tree rather than trusting the record, and
+    writes the record again.
     """
-    if (store is None) != (output is None):
-        print("Give both a store and an output directory, or neither.", file=sys.stderr)
-        raise SystemExit(1)
-    if store is not None and output is not None:
-        if config is not None:
-            print(
-                "Give either a configuration file or a store and output directory, "
-                "not both. To try out a pattern, put it in a small pigsty.toml along "
-                "with the store and output directory.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        patterns: dict[str, str] = {}
-    else:
-        loaded = _load(config)
-        store, output = loaded.store, loaded.organized
-        patterns = {
-            code: task.pattern
-            for code, task in loaded.task.items()
-            if task.pattern is not None
-        }
-
-    report = organize_module.organize(store, output, patterns, dry_run=dry_run)
-
-    verb = "Would place" if dry_run else "Placed"
-    counts = [
-        f"{verb} {len(report.placed)} run(s)",
-        f"{len(report.already_there)} already there",
-    ]
-    if report.errors:
-        counts.append(f"{len(report.errors)} not placed")
-    if report.warnings:
-        counts.append(f"{len(report.warnings)} warning(s)")
-    print(", ".join(counts) + ".")
-    if dry_run:
-        for placement in sorted(report.placed, key=lambda p: p.destination):
-            print(f"  {placement.destination}  {placement.run_id}")
-
-    for where, why in report.errors.items():
-        print(f"  not placed: {where}: {why}", file=sys.stderr)
-    for warning in report.warnings:
-        print(f"  warning: {warning}", file=sys.stderr)
-    # A warning is a file that doesn't match its manifest, which someone has to look
-    # at even though the run was placed, so it fails a scheduled job too.
-    if report.errors or report.warnings:
+    loaded = _load(config)
+    problems = False
+    verb = "would place" if dry_run else "placed"
+    for code, task in sorted(loaded.task.items()):
+        root = task.organized_root
+        report = organize_module.organize(
+            code, task.datastore_base, root, task.pattern, dry_run=dry_run, full=full
+        )
+        counts = [
+            f"{verb} {len(report.placed)} run(s)",
+            f"{len(report.already_there)} already there",
+        ]
+        if report.errors:
+            counts.append(f"{len(report.errors)} not placed")
+        print(f"{code}: " + ", ".join(counts) + ".")
+        if dry_run:
+            for placement in sorted(report.placed, key=lambda p: p.destination):
+                print(f"  {root / placement.destination}  {placement.run_id}")
+        for where, why in report.errors.items():
+            print(f"  not placed: {where}: {why}", file=sys.stderr)
+        problems = problems or bool(report.errors)
+    if problems:
         raise SystemExit(1)
 
 

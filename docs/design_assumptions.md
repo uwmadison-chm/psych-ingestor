@@ -148,9 +148,9 @@ harmlessly.)
 sort it, not to drop repeats. What's in `done/` is the append log exactly as the server
 wrote it, which is what makes the hash in the manifest a hash of what happened rather than
 of a tidied-up rendering of it. The file holds at least one copy of every event Pig
-accepted, not exactly one. `pigsty organize` doesn't drop them either: it copies the file
-byte for byte, so the manifest's hash still checks in the organized tree. Dropping exact
-repeats belongs to whatever reads a task's data.
+accepted, not exactly one. `pigsty admit` and `pigsty organize` don't drop them either:
+they copy the file byte for byte, so what's in the organized tree is what the server
+wrote. Dropping exact repeats belongs to whatever reads a task's data.
 
 An earlier version of this document claimed that by sweep time every line sharing an
 event ID is byte-identical, and used that to justify a dedupe at sweep. The claim was
