@@ -101,7 +101,9 @@ before it.
 
 **`run.sent()`** waits until everything for this run has reached the server. Use it before
 telling the participant they can close the tab. Offline, it waits until the device is back
-online.
+online. If the server refuses the run itself (the task was closed while the device was
+offline, say), nothing for it can ever be sent, so `sent()` rejects with the same
+`PigError` the run's `error` event carries. The data stays on the device.
 
 You don't number your events. The client gives each one an event ID, counting from 1.
 

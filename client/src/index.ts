@@ -312,7 +312,8 @@ export class Run extends EventTarget {
 
   /**
    * Resolves once everything queued for this run has reached the server. Waits as long
-   * as that takes, including while offline.
+   * as that takes, including while offline. Rejects if the server refused the run, since
+   * then nothing queued for it will ever be sent.
    */
   async sent(): Promise<void> {
     await this.#connection.call("sent", this.id);
