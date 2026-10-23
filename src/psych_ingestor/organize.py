@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -47,6 +48,8 @@ class Placement:
     # Relative to the organized directory.
     destination: PurePosixPath
     manifest: dict[str, Any]
+    # The manifest file as it is in the store, copied into the tree as it is.
+    manifest_bytes: bytes
     # Pig's media directory names (`00001`) to the event IDs they become.
     media_names: dict[str, str]
 
@@ -158,24 +161,37 @@ def _collision(placement: Placement, other: Placement) -> str:
 
 
 def _run_directories(store: Path, report: OrganizeReport) -> list[Path]:
-    """Every `{task_code}/{run_id}/` directory in the store."""
+    """Every `{task_code}/{run_id}/` directory in the store.
+
+    Listed with `os.scandir`, which says whether each entry is a directory without
+    asking the filesystem about each one separately. On a network share, every
+    separate question is a round trip, and the store may hold tens of thousands of
+    runs. See issue #42.
+    """
     if not store.is_dir():
         report.errors[str(store)] = "There's no directory here to organize."
         return []
     found = []
-    for task_directory in sorted(store.iterdir()):
-        if task_directory.name.startswith(".") or not task_directory.is_dir():
-            continue
-        for run_directory in sorted(task_directory.iterdir()):
-            if run_directory.name.startswith(".") or not run_directory.is_dir():
-                continue
-            found.append(run_directory)
+    for task_directory in _directories_in(store):
+        found.extend(_directories_in(task_directory))
     return found
+
+
+def _directories_in(directory: Path) -> list[Path]:
+    """The directories directly inside this one, by name, leaving out dot-names."""
+    with os.scandir(directory) as entries:
+        names = [
+            entry.name
+            for entry in entries
+            if not entry.name.startswith(".") and entry.is_dir()
+        ]
+    return [directory / name for name in sorted(names)]
 
 
 def _place(source: Path, patterns: dict[str, str]) -> Placement:
     """Read one run's manifest and work out where it goes."""
-    manifest = _read_manifest(source)
+    manifest_bytes = _read_manifest_bytes(source)
+    manifest = _parse_manifest(manifest_bytes)
     run_id = manifest["run_id"]
     task_code = manifest["task_code"]
     if source.name != run_id or source.parent.name != task_code:
@@ -198,19 +214,27 @@ def _place(source: Path, patterns: dict[str, str]) -> Placement:
         source=source,
         destination=render(pattern, manifest),
         manifest=manifest,
+        manifest_bytes=manifest_bytes,
         media_names=_media_names(manifest),
     )
 
 
-def _read_manifest(source: Path) -> dict[str, Any]:
-    if not (source / storage.MANIFEST_FILE).exists():
+def _read_manifest_bytes(source: Path) -> bytes:
+    try:
+        return (source / storage.MANIFEST_FILE).read_bytes()
+    except FileNotFoundError:
         raise RunProblem(
             "there's no manifest.json, so this run isn't finished. The store should "
             "only hold runs from the web server's done/ directory, never in_progress/."
-        )
+        ) from None
+    except OSError as error:
+        raise RunProblem(f"can't read manifest.json: {error}") from error
+
+
+def _parse_manifest(manifest_bytes: bytes) -> dict[str, Any]:
     try:
-        manifest = storage.read_manifest(source)
-    except (OSError, ValueError) as error:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except ValueError as error:
         raise RunProblem(f"can't read manifest.json: {error}") from error
     if not isinstance(manifest, dict) or manifest.get("type") != (
         storage.MANIFEST_TYPE
@@ -303,12 +327,19 @@ def _already_placed(
     destination: Path, placement: Placement, report: OrganizeReport
 ) -> bool | None:
     """Whether this run is already where it belongs: True if so, False if nothing's
-    there, None if something else is (recorded as an error)."""
-    if not destination.exists():
-        return False
+    there, None if something else is (recorded as an error).
+
+    Reads the manifest first and asks whether the destination exists only if that
+    fails, since on a second organize nearly every run is already there, and every
+    question is a round trip on a network share.
+    """
     manifest_path = destination / storage.MANIFEST_FILE
     try:
         there = json.loads(manifest_path.read_text(encoding="utf-8"))["run_id"]
+    except FileNotFoundError:
+        if not os.path.lexists(destination):
+            return False
+        there = None
     except (OSError, ValueError, KeyError, TypeError):
         there = None
     if there == placement.run_id:
@@ -328,24 +359,27 @@ def _copy_run(placement: Placement, destination: Path, report: OrganizeReport) -
     into place at the end, so a run in the tree is always a whole run.
     """
     scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
-    if scratch.exists():
+    try:
         # Left by an organize that was interrupted. Ours by its name, never the store's.
         shutil.rmtree(scratch)
+    except FileNotFoundError:
+        pass
     scratch.mkdir(parents=True)
+    made = {scratch}
 
     listed = set()
     for entry in placement.manifest["files"]:
         relative = PurePosixPath(entry["path"])
         listed.add(relative)
-        source = placement.source / relative
-        if not source.is_file():
+        target = scratch / _renamed(relative, placement.media_names)
+        copied = _copy_and_hash(placement.source / relative, target, made)
+        if copied is None:
             report.warnings.append(
                 f"run {placement.run_id}: {relative} is in the manifest but missing "
                 "from the store."
             )
             continue
-        target = scratch / _renamed(relative, placement.media_names)
-        size, digest = _copy_and_hash(source, target)
+        size, digest = copied
         if size != entry["bytes"] or digest != entry["sha256"]:
             report.warnings.append(
                 f"run {placement.run_id}: {relative} doesn't match the manifest "
@@ -353,10 +387,7 @@ def _copy_run(placement: Placement, destination: Path, report: OrganizeReport) -
                 f"bytes, sha256 {entry['sha256']}). It was copied as it is."
             )
 
-    for path in sorted(placement.source.rglob("*")):
-        relative = PurePosixPath(path.relative_to(placement.source).as_posix())
-        if not path.is_file() or relative.parts[0] == storage.STATE_DIRECTORY:
-            continue
+    for relative in _files_in(placement.source):
         if relative != PurePosixPath(storage.MANIFEST_FILE) and relative not in listed:
             report.warnings.append(
                 f"run {placement.run_id}: {relative} is in the store but not in the "
@@ -364,11 +395,27 @@ def _copy_run(placement: Placement, destination: Path, report: OrganizeReport) -
             )
 
     # The manifest goes in last, and it's what a later organize looks for to know this
-    # run is already placed.
-    shutil.copyfile(
-        placement.source / storage.MANIFEST_FILE, scratch / storage.MANIFEST_FILE
-    )
+    # run is already placed. It's the bytes read from the store while planning, so the
+    # store's copy isn't read twice.
+    (scratch / storage.MANIFEST_FILE).write_bytes(placement.manifest_bytes)
     scratch.rename(destination)
+
+
+def _files_in(run_directory: Path) -> list[PurePosixPath]:
+    """Every file in a run directory, relative to it, leaving out `.state/`.
+
+    `os.walk` lists each directory once, rather than asking about every file in it.
+    """
+    found = []
+    for directory, subdirectories, files in os.walk(run_directory):
+        here = Path(directory)
+        if here == run_directory and storage.STATE_DIRECTORY in subdirectories:
+            subdirectories.remove(storage.STATE_DIRECTORY)
+        for name in files:
+            found.append(
+                PurePosixPath((here / name).relative_to(run_directory).as_posix())
+            )
+    return sorted(found)
 
 
 def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixPath:
@@ -381,13 +428,29 @@ def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixP
     return relative
 
 
-def _copy_and_hash(source: Path, target: Path) -> tuple[int, str]:
-    target.parent.mkdir(parents=True, exist_ok=True)
+def _copy_and_hash(
+    source: Path, target: Path, made: set[Path]
+) -> tuple[int, str] | None:
+    """Copy one file, returning its size and hash, or None if the source isn't there.
+
+    `made` is the directories this run has already created, so each is created once
+    rather than once per file.
+    """
+    # Opened outside `with` so that only a missing source means "missing", never a
+    # problem writing the target.
+    try:
+        reading = open(source, "rb")  # noqa: SIM115
+    except (FileNotFoundError, IsADirectoryError):
+        return None
     digest = hashlib.sha256()
     size = 0
-    with open(source, "rb") as reading, open(target, "wb") as writing:
-        while chunk := reading.read(1024 * 1024):
-            digest.update(chunk)
-            size += len(chunk)
-            writing.write(chunk)
+    with reading:
+        if target.parent not in made:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            made.add(target.parent)
+        with open(target, "wb") as writing:
+            while chunk := reading.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+                writing.write(chunk)
     return size, digest.hexdigest()

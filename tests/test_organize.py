@@ -254,6 +254,34 @@ def test_a_file_that_doesnt_match_its_manifest_is_copied_with_a_warning(
     assert "doesn't match the manifest" in report.warnings[0]
 
 
+def test_a_file_missing_from_the_store_is_warned_about(pig: Pig, tmp_path: Path):
+    run_id = finished_run(pig, BASELINE)
+    (pig.config.done_root / "stroop" / run_id / "events.jsonl").unlink()
+
+    report = organize(pig.config.done_root, tmp_path / "tree", {})
+
+    assert len(report.placed) == 1
+    assert len(report.warnings) == 1
+    assert "missing from the store" in report.warnings[0]
+    placed = tmp_path / "tree" / "stroop" / "PPT-1003" / "Baseline" / "run-0001"
+    assert list(files_under(placed)) == ["manifest.json"]
+
+
+def test_an_interrupted_organize_is_cleaned_up(pig: Pig, tmp_path: Path):
+    finished_run(pig, BASELINE)
+    leftover = tmp_path / "tree" / "stroop" / "PPT-1003" / "Baseline"
+    leftover = leftover / ".run-0001.organizing"
+    leftover.mkdir(parents=True)
+    (leftover / "events.jsonl").write_text("half")
+
+    report = organize(pig.config.done_root, tmp_path / "tree", {})
+
+    assert report.errors == {}
+    assert not leftover.exists()
+    placed = leftover.with_name("run-0001")
+    assert sorted(files_under(placed)) == ["events.jsonl", "manifest.json"]
+
+
 def test_files_the_manifest_doesnt_list_are_warned_about_and_not_copied(
     pig: Pig, tmp_path: Path
 ):
