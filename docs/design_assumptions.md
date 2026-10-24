@@ -284,6 +284,12 @@ anything depending on same-origin cookies is out, and Pig's cross-origin headers
 permissive by default or ordinary tasks break. That's a deliberate position, not laziness —
 see [security.md](security.md). Some tasks may be standalone apps rather than web pages.
 
+## An encrypted task's queue is write-only
+
+A task that encrypts does so when it records each event, and the ciphertext is the event from then on: it's what's stored on the device, what's sent, and what's sent again on a retry. Encrypting again on retry would give different bytes for the same event, which Pig reads as two different events with one ID. And plaintext that's never written to the device can't be read off a lost one.
+
+The consequence is that a task can't read its own events back, from the client's queue or from Pig. A running score, an adaptive staircase, anything computed from earlier trials has to be kept by the task itself. See issue #10.
+
 ## Traffic is light; data is large but human-manageable
 
 A few participants at a time, peaking at a few requests per second. Hundreds or thousands

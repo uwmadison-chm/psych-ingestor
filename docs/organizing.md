@@ -57,7 +57,7 @@ Inside each task's `datastore_base`:
 - `incoming/` is where the copy puts the task's runs, one directory per run ID, as they are in the bucket. Point `rclone sync` at it.
 - `runs/` is where `pigsty admit` puts each run once every file its manifest lists is there, with the right size and hash, and nothing else is.
 
-A run in `runs/` holds its files exactly as the web server stored them, and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming/`, because it describes the files as they traveled.
+A run in `runs/` holds its files exactly as the web server stored them, decrypted if the task encrypts (see [Encrypted runs](#encrypted-runs)), and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming/`, because it describes the files as they traveled.
 
 Running `pigsty admit` again is safe, and it's how new runs get admitted. A run already in `runs/` is left alone. A run still downloading is left for next time and isn't an error. A run that's all there but doesn't match its manifest is reported, nothing of it is admitted, and `pigsty admit` exits with an error so a scheduled job notices. Nothing in `incoming/` is ever changed: it's a copy of the bucket, and runs leave it when they leave the bucket.
 
@@ -81,6 +81,53 @@ Then the run leaves on its own. The web server's next copy to the bucket deletes
 Running `pigsty purge` again is safe. A purged run gets a note, `runs/{run_id}/.state/purged`, saying when, and isn't hashed again. Organize doesn't copy `.state/` into the tree. A run Pig refuses to purge is reported with Pig's reason, the rest carry on, and `pigsty purge` exits with an error so a scheduled job notices.
 
 Run it right after `pigsty admit`, from the same scheduled job. Between the two, a run's data is on both machines.
+
+## Encrypted runs
+
+A task with `encrypt_to` in `pig.toml` encrypts everything in the participant's browser, and `pigsty admit` decrypts it on the way into `runs/`. So `runs/`, the organized tree, and anything that reads them see the data as the task recorded it, and nothing after admit needs to know about encryption.
+
+The private keys that decrypt runs live in one directory, named at the top of `pigsty.toml`:
+
+```toml
+# pigsty.toml
+private_keys_dir = "/etc/pigsty/private_keys"
+```
+
+Each key is a file in it, and its name is its path without `.key`: `lucida/2026a.key` is the key `lucida/2026a`. You don't need to write these files by hand. To set up a key:
+
+```
+pigsty keys new lucida/2026a
+pigsty keys export > public_keys.txt
+```
+
+The first makes `lucida/2026a.key`, readable only by you. The second writes every key's public half to `public_keys.txt`. Copy that file to the web server, point `public_keys_file` in `pig.toml` at it, and set `encrypt_to = "lucida/2026a"` for each task that should use the key. See [configuration.md](configuration.md#encryption). A public key isn't secret; the private key never leaves this machine, except to be backed up.
+
+Back the key file up somewhere an administrator can reach, like a shared 1Password vault. Anything encrypted to it that hasn't been admitted yet can't be read without it. [security.md](security.md#keeping-the-private-key) says more.
+
+`pigsty check` refuses a key file anyone but its owner can read. With `pig_url` set, it also asks the web server which public key each task encrypts to, and warns if no private key here matches. A task encrypting to a key nobody has would collect data no one can ever read, so run `pigsty check` after changing keys on either side.
+
+To change keys, make a new one, export again, copy the file over, and change `encrypt_to`. Leave the old key file where it is. `pigsty admit` tries every key in the directory, so runs encrypted to the old key, from a browser that saved its settings a while ago, still decrypt.
+
+### When a run won't decrypt
+
+A run that no key in `private_keys_dir` opens isn't admitted. It's reported, and `pigsty admit` exits with an error, like a run that doesn't match its manifest. Because it's not in `runs/`, `pigsty purge` leaves the web server's copy alone, so nothing is lost while someone works out which key it needs.
+
+### Keeping the ciphertext
+
+`pigsty admit --copy-ciphertext-to /secure/pig/ciphertext` also keeps each encrypted run as it arrived, with its manifest, in `/secure/pig/ciphertext/{task_code}/{run_id}/`. That copy is the one the manifest's hashes describe, so it's what to keep if you want to be able to show later that a run wasn't changed after it left the web server. It's small: events and media parts are hardly bigger encrypted.
+
+### Decrypting by hand
+
+The key files are ordinary age key files, so the stock [`age`](https://age-encryption.org) command reads them, and you never need Pig to get data back. In a run as it came from the web server, each event's `data` is base64 of an age file, and each media part is an age file:
+
+```
+jq -r .data events.jsonl | while read -r data; do
+  echo "$data" | base64 -d | age -d -i lucida/2026a.key; echo
+done
+age -d -i lucida/2026a.key media/00001/000001.part > 000001.webm-part
+```
+
+That's also the yearly check that the backed-up key works: decrypt one real run with the backup, on a machine that isn't the secure server.
 
 ## Patterns
 

@@ -11,10 +11,20 @@ hash, and nothing else is. Admitting copies it into a scratch directory beside `
 and renames that into place, the way `pig sweep` moves a run into `done/`. So a run in
 `runs/` is always whole, and every later step can trust that it is.
 
-What lands in `runs/{run_id}/` is the run's files, byte for byte, and `pig-run.json`: what
-the run is (task, run number, parameters, media), taken from the manifest without the
-file hashes. The manifest itself stays in `incoming/`. It describes the files as they
-traveled, and once decryption (#10) happens here, those aren't the files in `runs/`.
+What lands in `runs/{run_id}/` is the run's files and `pig-run.json`: what the run is
+(task, run number, parameters, media), taken from the manifest without the file hashes.
+The manifest itself stays in `incoming/`. It describes the files as they traveled.
+
+A run that isn't encrypted is copied byte for byte. An encrypted one (its manifest names
+the public key in `encrypted_to`) is decrypted on its way in, so `runs/`, and everything
+after it, only ever holds plaintext: each event's `data` in `events.jsonl` becomes what
+the task recorded, and each media part becomes its bytes. A run that no private key
+opens isn't admitted. Purge only touches admitted runs, so the web server keeps its copy
+until someone sorts it out. See issue #10.
+
+The ciphertext is only what the manifest's hashes describe, so with
+`copy_ciphertext_to`, admit also keeps a copy of it there, with the manifest, as
+`{copy_ciphertext_to}/{run_id}/`.
 
 Nothing in `incoming/` is changed or deleted. It's a mirror of the bucket, and it empties
 itself as runs are purged from the web server and drop out of the bucket.
@@ -22,6 +32,7 @@ itself as runs are purged from the web server and drop out of the bucket.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import hashlib
 import json
@@ -33,6 +44,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from . import storage
+from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
 
 INCOMING_DIRECTORY = "incoming"
 RUNS_DIRECTORY = "runs"
@@ -61,6 +73,11 @@ RUN_FIELDS = (
 # What a run is copied into before it's renamed into `runs/`. Starts with a dot, so a
 # listing of `runs/` never mistakes it for an admitted run.
 SCRATCH_SUFFIX = ".admitting"
+# Where an encrypted run's checked ciphertext is copied, before it's decrypted.
+CIPHERTEXT_SUFFIX = ".ciphertext"
+
+# Manifests admit reads. Version 2 is from before encryption, and its runs never are.
+MANIFEST_VERSIONS = (2, storage.MANIFEST_VERSION)
 
 # Held while an admit works on a task's datastore, so two at once can't both admit the
 # same run.
@@ -103,8 +120,17 @@ class Outcome:
     why: str = ""
 
 
-def admit(task_code: str, datastore: Path) -> AdmitReport:
-    """Admit every run in `datastore/incoming/` that isn't in `datastore/runs/` yet."""
+def admit(
+    task_code: str,
+    datastore: Path,
+    private_keys: list[PrivateKey] | None = None,
+    copy_ciphertext_to: Path | None = None,
+) -> AdmitReport:
+    """Admit every run in `datastore/incoming/` that isn't in `datastore/runs/` yet.
+
+    `private_keys` are the keys an encrypted run is decrypted with. With
+    `copy_ciphertext_to`, each encrypted run's ciphertext is kept there too.
+    """
     report = AdmitReport()
     incoming = datastore / INCOMING_DIRECTORY
     runs = datastore / RUNS_DIRECTORY
@@ -138,7 +164,14 @@ def admit(task_code: str, datastore: Path) -> AdmitReport:
 
         with ThreadPoolExecutor(WORKERS) as pool:
             outcomes = pool.map(
-                lambda run_id: _admit_one(task_code, incoming / run_id, runs), new
+                lambda run_id: _admit_one(
+                    task_code,
+                    incoming / run_id,
+                    runs,
+                    private_keys or [],
+                    copy_ciphertext_to,
+                ),
+                new,
             )
             for run_id, outcome in zip(new, outcomes, strict=True):
                 if outcome.status == "admitted":
@@ -164,12 +197,23 @@ def _directories_in(directory: Path) -> list[str]:
         )
 
 
-def _admit_one(task_code: str, source: Path, runs: Path) -> Outcome:
+def _admit_one(
+    task_code: str,
+    source: Path,
+    runs: Path,
+    private_keys: list[PrivateKey],
+    copy_ciphertext_to: Path | None,
+) -> Outcome:
     """Check one run and move it into `runs/`. Run by the workers."""
     try:
         manifest = _read_manifest(task_code, source)
         _check_listing(source, manifest)
-        _copy_into_place(source, runs / source.name, manifest)
+        if manifest.get("encrypted_to") is None:
+            _copy_into_place(source, runs / source.name, manifest)
+        else:
+            _decrypt_into_place(
+                source, runs / source.name, manifest, private_keys, copy_ciphertext_to
+            )
     except StillArriving as arriving:
         return Outcome("arriving", str(arriving))
     except RunProblem as problem:
@@ -201,10 +245,11 @@ def _read_manifest(task_code: str, source: Path) -> dict[str, Any]:
         storage.MANIFEST_TYPE
     ):
         raise RunProblem("manifest.json isn't a Pig run manifest.")
-    if manifest.get("manifest_version") != storage.MANIFEST_VERSION:
+    if manifest.get("manifest_version") not in MANIFEST_VERSIONS:
         raise RunProblem(
             f"manifest.json is version {manifest.get('manifest_version')!r}, and this "
-            f"version of Pig reads version {storage.MANIFEST_VERSION}."
+            f"version of Pig reads versions {MANIFEST_VERSIONS[0]} to "
+            f"{MANIFEST_VERSIONS[-1]}."
         )
     if manifest["run_id"] != source.name or manifest["task_code"] != task_code:
         raise RunProblem(
@@ -306,55 +351,218 @@ def _copy_into_place(source: Path, destination: Path, manifest: dict[str, Any]) 
     Every file and directory is fsynced before the rename, and `runs/` after, so a run
     in `runs/` is on disk.
     """
-    scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
+    scratch = _fresh_scratch(destination, SCRATCH_SUFFIX)
+    try:
+        made = _copy_checked(source, scratch, manifest)
+        _write_run_file(scratch, manifest, decrypted_with=[])
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    _rename_into_place(scratch, destination, made)
+
+
+def _decrypt_into_place(
+    source: Path,
+    destination: Path,
+    manifest: dict[str, Any],
+    private_keys: list[PrivateKey],
+    copy_ciphertext_to: Path | None,
+) -> None:
+    """Admit an encrypted run: copy its ciphertext aside, checking each hash, then
+    decrypt that copy into a scratch directory and rename it into place.
+
+    Decrypting from the checked copy, rather than from `incoming/`, means what's
+    decrypted is exactly what was checked, even if the copy from the bucket changes a
+    file in between. With `copy_ciphertext_to`, the checked copy is kept there, with the
+    manifest; otherwise it's deleted once the run is admitted.
+    """
+    if not private_keys:
+        raise RunProblem(
+            f"it's encrypted, to {manifest['encrypted_to']}, and pigsty.toml has no "
+            "private_keys_dir to decrypt it with. Nothing was admitted."
+        )
+    kept = copy_ciphertext_to / destination.name if copy_ciphertext_to else None
+    if kept is not None:
+        kept.parent.mkdir(parents=True, exist_ok=True)
+    ciphertext = _fresh_scratch(kept or destination, CIPHERTEXT_SUFFIX)
+    scratch = None
+    try:
+        ciphertext_made = _copy_checked(source, ciphertext, manifest)
+        scratch = _fresh_scratch(destination, SCRATCH_SUFFIX)
+        made = {scratch}
+        keyring = Keyring(private_keys)
+        for entry in manifest["files"]:
+            relative = _listed_path(entry["path"])
+            _make_parent(scratch / relative, made)
+            _decrypt_file(ciphertext / relative, scratch / relative, relative, keyring)
+        _write_run_file(scratch, manifest, decrypted_with=sorted(keyring.used))
+
+        if kept is not None:
+            shutil.copyfile(
+                source / storage.MANIFEST_FILE, ciphertext / storage.MANIFEST_FILE
+            )
+            _fsync_file(ciphertext / storage.MANIFEST_FILE)
+            if kept.exists():
+                # Kept by an admit that was interrupted before the run itself was
+                # renamed into place. The same run ID is the same ciphertext.
+                shutil.rmtree(ciphertext)
+            else:
+                _rename_into_place(ciphertext, kept, ciphertext_made)
+    except BaseException:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
+        shutil.rmtree(ciphertext, ignore_errors=True)
+        raise
+    _rename_into_place(scratch, destination, made)
+    shutil.rmtree(ciphertext, ignore_errors=True)
+
+
+def _decrypt_file(
+    source: Path, target: Path, relative: PurePosixPath, keyring: Keyring
+) -> None:
+    """Decrypt one of a run's files: `events.jsonl` an event at a time, a media part
+    whole. The plaintext is fsynced before this returns."""
+    if relative == PurePosixPath(storage.EVENTS_FILE):
+        with (
+            open(source, encoding="utf-8") as reading,
+            open(target, "w", encoding="utf-8") as writing,
+        ):
+            writing.writelines(_decrypt_line(line, keyring) for line in reading)
+            writing.flush()
+            os.fsync(writing.fileno())
+        return
+    if relative.parts[0] == storage.MEDIA_DIRECTORY and relative.suffix == (
+        storage.PART_SUFFIX
+    ):
+        try:
+            plaintext = keyring.decrypt(source.read_bytes())
+        except CantDecrypt:
+            raise RunProblem(
+                f"no private key in private_keys_dir opens {relative}, or it's been "
+                "damaged. Nothing was admitted, so the web server's copy stays put."
+            ) from None
+        with open(target, "wb") as writing:
+            writing.write(plaintext)
+            writing.flush()
+            os.fsync(writing.fileno())
+        return
+    raise RunProblem(
+        f"{relative} isn't a file Pig writes, so there's no telling how to decrypt it. "
+        "Nothing was admitted."
+    )
+
+
+def _decrypt_line(line: str, keyring: Keyring) -> str:
+    """One line of `events.jsonl`, with its `data` decrypted.
+
+    A line that isn't JSON is one an interrupted append cut short (see
+    `storage.read_lines`). It's kept as it is, the way an unencrypted run keeps it,
+    and whatever reads the file skips it.
+    """
+    try:
+        stored = json.loads(line)
+    except json.JSONDecodeError:
+        return line if line.endswith("\n") else line + "\n"
+    event_id = stored.get("event_id")
+    if not is_encrypted_text(stored.get("data")):
+        raise RunProblem(
+            f"event {event_id!r} isn't encrypted, and the run is. Pig refuses those, so "
+            "this file has been changed since. Nothing was admitted."
+        )
+    try:
+        plaintext = keyring.decrypt(base64.b64decode(stored["data"]))
+    except CantDecrypt:
+        raise RunProblem(
+            f"no private key in private_keys_dir opens event {event_id!r}, or it's "
+            "been damaged. Nothing was admitted, so the web server's copy stays put."
+        ) from None
+    try:
+        data = json.loads(plaintext.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RunProblem(
+            f"event {event_id!r} decrypts to something that isn't JSON. The browser "
+            "encrypted something other than the event. Nothing was admitted."
+        ) from None
+    return storage.canonical({**stored, "data": data}) + "\n"
+
+
+def _fresh_scratch(destination: Path, suffix: str) -> Path:
+    """An empty scratch directory beside `destination`, named for it."""
+    scratch = destination.with_name(f".{destination.name}{suffix}")
     try:
         # Left by an admit that was interrupted. Ours by its name, never incoming's.
         shutil.rmtree(scratch)
     except FileNotFoundError:
         pass
     scratch.mkdir()
+    return scratch
+
+
+def _copy_checked(source: Path, scratch: Path, manifest: dict[str, Any]) -> set[Path]:
+    """Copy every file the manifest lists into `scratch`, checking each hash as it's
+    copied. Returns the directories made, for `_rename_into_place` to fsync."""
     made = {scratch}
-    try:
-        for entry in manifest["files"]:
-            relative = _listed_path(entry["path"])
-            digest = _copy_and_hash(source / relative, scratch / relative, made)
-            if digest != entry["sha256"]:
-                raise RunProblem(
-                    f"{relative} doesn't match the manifest (sha256 {digest}; the "
-                    f"manifest says {entry['sha256']}). It's the right size, so this "
-                    "isn't a download in progress. Nothing was admitted."
-                )
+    for entry in manifest["files"]:
+        relative = _listed_path(entry["path"])
+        digest = _copy_and_hash(source / relative, scratch / relative, made)
+        if digest != entry["sha256"]:
+            raise RunProblem(
+                f"{relative} doesn't match the manifest (sha256 {digest}; the "
+                f"manifest says {entry['sha256']}). It's the right size, so this "
+                "isn't a download in progress. Nothing was admitted."
+            )
+    return made
 
-        described = {
-            "type": RUN_FILE_TYPE,
-            "run_file_version": RUN_FILE_VERSION,
-            **{name: manifest[name] for name in RUN_FIELDS},
-        }
-        with open(scratch / RUN_FILE, "w", encoding="utf-8") as written:
-            json.dump(described, written, indent=2, ensure_ascii=False)
-            written.write("\n")
-            written.flush()
-            os.fsync(written.fileno())
-    except BaseException:
-        shutil.rmtree(scratch, ignore_errors=True)
-        raise
 
+def _write_run_file(
+    scratch: Path, manifest: dict[str, Any], decrypted_with: list[str]
+) -> None:
+    described = {
+        "type": RUN_FILE_TYPE,
+        "run_file_version": RUN_FILE_VERSION,
+        **{name: manifest[name] for name in RUN_FIELDS},
+        # Which public key the task encrypted to, and which private keys opened it.
+        # Normally one and the same key; they differ only if the browser had an old copy
+        # of the task's settings. Null and empty for a run that isn't encrypted.
+        "encrypted_to": manifest.get("encrypted_to"),
+        "decrypted_with": decrypted_with,
+    }
+    with open(scratch / RUN_FILE, "w", encoding="utf-8") as written:
+        json.dump(described, written, indent=2, ensure_ascii=False)
+        written.write("\n")
+        written.flush()
+        os.fsync(written.fileno())
+
+
+def _rename_into_place(scratch: Path, destination: Path, made: set[Path]) -> None:
+    """Fsync every directory made, rename the scratch directory to its final name, and
+    fsync the directory it's in, so what's there is on disk."""
     for directory in made:
         storage.fsync_directory(directory)
     scratch.rename(destination)
     storage.fsync_directory(destination.parent)
 
 
-def _copy_and_hash(source: Path, target: Path, made: set[Path]) -> str:
-    """Copy one file and return its sha256. `made` is the directories already created,
-    so each is created once rather than once per file."""
+def _fsync_file(path: Path) -> None:
+    with open(path, "rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _make_parent(target: Path, made: set[Path]) -> None:
+    """Make a file's directory if it isn't made yet, and remember each directory between
+    it and the scratch directory, for `_rename_into_place` to fsync."""
     if target.parent not in made:
         target.parent.mkdir(parents=True, exist_ok=True)
-        # Each directory between this one and the scratch directory, for its entries.
         directory = target.parent
         while directory not in made:
             made.add(directory)
             directory = directory.parent
+
+
+def _copy_and_hash(source: Path, target: Path, made: set[Path]) -> str:
+    """Copy one file and return its sha256. `made` is the directories already created,
+    so each is created once rather than once per file."""
+    _make_parent(target, made)
     digest = hashlib.sha256()
     with open(source, "rb") as reading, open(target, "wb") as writing:
         while chunk := reading.read(1024 * 1024):

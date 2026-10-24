@@ -103,6 +103,8 @@ def check(*, config: ConfigPath | None = None) -> None:
             print(
                 f"  media:       yes, parts up to {describe_size(task.max_part_size)}"
             )
+        if task.encrypt_to:
+            print(f"  encrypts to: {task.encrypt_to}")
     largest = max(
         (task.max_part_size for task in loaded.task.values() if task.media), default=0
     )

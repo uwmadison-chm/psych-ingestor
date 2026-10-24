@@ -58,7 +58,7 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
 
     manifest = storage.read_manifest(done(pig, run_id))
     assert manifest["type"] == "pig_run_manifest"
-    assert manifest["manifest_version"] == 2
+    assert manifest["manifest_version"] == 3
     assert manifest["run_id"] == run_id
     assert manifest["task_code"] == "stroop"
     assert manifest["run_number"] == 1

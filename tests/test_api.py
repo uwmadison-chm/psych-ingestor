@@ -62,6 +62,7 @@ def test_reading_a_tasks_settings(client: TestClient):
         "expires_after_sec": 86400,
         "max_event_size_bytes": 1048576,
         "media": None,
+        "encryption": None,
     }
 
 

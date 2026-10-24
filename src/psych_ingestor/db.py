@@ -17,7 +17,7 @@ from pathlib import Path
 # Bumped whenever the tables below change shape. There's no migration: a database from a
 # different version is refused with a message saying so, which beats a confusing "no such
 # column" from the first query that touches it.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at       TEXT NOT NULL,
     closed_at        TEXT,
     done_at          TEXT,
+
+    -- The name of the public key the task encrypted to when this run started, or null
+    -- if it didn't encrypt. Fixed at start, so a run is encrypted or not all the way
+    -- through, whatever happens to the task's definition while it's open.
+    encrypted_to     TEXT,
 
     UNIQUE (task_code, run_key_hash, run_number),
 
