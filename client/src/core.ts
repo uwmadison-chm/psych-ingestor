@@ -19,6 +19,7 @@
 // client picks up orphans and sends what they have left, and, if the task asked for it,
 // finalizes the ones that were abandoned. See `sweep()`.
 
+import { encryptBytes, encryptedData, plaintextThatFits } from "./encrypt.ts";
 import type { Http, Outcome } from "./http.ts";
 import { PigError, wallTime } from "./shared.ts";
 import type { Store } from "./store.ts";
@@ -198,7 +199,8 @@ export class Core {
       media: {},
     });
     await this.#hold(id);
-    await this.store.queue(id, () => [{ kind: "start" }, firstEvent(clientInfo, stamp, null)]);
+    const first = await firstEvent(settings, clientInfo, stamp, null);
+    await this.store.queue(id, () => [{ kind: "start" }, first]);
     this.log("info", `Started collecting data for task ${task}, run ${id}.`);
 
     // Try to start the server run now, so a refusal reaches the task.
@@ -256,7 +258,7 @@ export class Core {
   add(id: string, data: unknown, stamp: Stamp): Promise<string> {
     return this.#inOrder(id, async () => {
       const run = await this.#openRun(id);
-      const json = this.#eventJson(run, data, stamp);
+      const json = await this.#eventJson(run, data, stamp);
       const [op] = await this.store.queue(id, (r) => [
         { kind: "event", event_id: takeEventId(r), json, bytes: byteLength(json) },
       ]);
@@ -320,7 +322,8 @@ export class Core {
       }
       // Calls for this run are handled one at a time, so this is the ID it will get.
       const eventId = String(run.next_event_id);
-      const json = JSON.stringify({ event_id: eventId, data: { ...this.#checkedData(data), _client: stamp } });
+      const recorded = await sealed(run.settings, { ...this.#checkedData(data), _client: stamp });
+      const json = JSON.stringify({ event_id: eventId, data: recorded });
       const size = byteLength(json);
       const limit = run.settings.max_event_size_bytes;
       if (limit && size > limit) {
@@ -357,12 +360,13 @@ export class Core {
         throw new PigError("bad-media", "Media has to be added as a Blob, like the ones MediaRecorder hands you.");
       }
       if (blob.size === 0) return []; // MediaRecorder can hand you empty ones.
-      const partSize = run.settings.media!.max_part_size_bytes;
+      const slices = await mediaParts(run.settings, blob);
+      // Encrypted, if it's to be, before the queue's transaction: IndexedDB ends a
+      // transaction that waits on anything else.
       const ops = await this.store.queue(id, (r) => {
         const item = r.media[eventId];
         const parts: NewOp[] = [];
-        for (let offset = 0; offset < blob.size; offset += partSize) {
-          const slice = blob.slice(offset, offset + partSize, blob.type);
+        for (const slice of slices) {
           parts.push({ kind: "media-part", event_id: eventId, part: item.next_part, blob: slice, bytes: slice.size });
           item.next_part += 1;
         }
@@ -783,7 +787,7 @@ export class Core {
       const stamp: Stamp = { wall_time: wallTime(), performance_now: null };
       await this.store.prepend(run.id, [
         { kind: "start" },
-        firstEvent(run.client_info, stamp, run.server_run_id),
+        await firstEvent(run.settings, run.client_info, stamp, run.server_run_id),
         ...restarts,
       ]);
       await this.store.updateRun(run.id, (r) => {
@@ -968,8 +972,9 @@ export class Core {
   }
 
   /** The JSON an event is stored as, after checking it's one the server will take. */
-  #eventJson(run: RunRecord, data: unknown, stamp: Stamp): string {
-    const json = JSON.stringify({ data: { ...this.#checkedData(data), _client: stamp } });
+  async #eventJson(run: RunRecord, data: unknown, stamp: Stamp): Promise<string> {
+    const recorded = await sealed(run.settings, { ...this.#checkedData(data), _client: stamp });
+    const json = JSON.stringify({ data: recorded });
     const size = byteLength(json);
     const limit = run.settings.max_event_size_bytes;
     if (limit && size > limit) {
@@ -1095,11 +1100,46 @@ class Sender {
 // ------------------------------------------------------------------ helpers
 
 /** The op for a run's first event: who the client is, and which run this one continues. */
-function firstEvent(clientInfo: ClientInfo, stamp: Stamp, continues: string | null): NewOp {
+async function firstEvent(
+  settings: TaskSettings,
+  clientInfo: ClientInfo,
+  stamp: Stamp,
+  continues: string | null,
+): Promise<NewOp> {
   const _client: Record<string, unknown> = { ...stamp, ...clientInfo, version: CLIENT_VERSION, event: "run_start" };
   if (continues) _client.continues_run = continues;
-  const json = JSON.stringify({ data: { _client } });
+  const json = JSON.stringify({ data: await sealed(settings, { _client }) });
   return { kind: "event", event_id: "0", json, bytes: byteLength(json) };
+}
+
+/** An event's `data` as it's sent: as it is, or encrypted if the task encrypts. */
+async function sealed(settings: TaskSettings, data: Record<string, unknown>): Promise<unknown> {
+  const publicKey = settings.encryption?.public_key;
+  return publicKey ? encryptedData(publicKey, data) : data;
+}
+
+/**
+ * A media blob cut into the parts it's sent as. Each fits the task's largest part, and
+ * for a task that encrypts, each is encrypted, and it's the ciphertext that fits.
+ */
+async function mediaParts(settings: TaskSettings, blob: Blob): Promise<Blob[]> {
+  const limit = settings.media!.max_part_size_bytes;
+  const publicKey = settings.encryption?.public_key;
+  const size = publicKey ? plaintextThatFits(limit) : limit;
+  if (size <= 0) {
+    throw new PigError("bad-media", `This task's largest part, ${limit} bytes, is too small to hold anything encrypted.`);
+  }
+  const parts: Blob[] = [];
+  for (let offset = 0; offset < blob.size; offset += size) {
+    const slice = blob.slice(offset, offset + size, blob.type);
+    if (!publicKey) {
+      parts.push(slice);
+      continue;
+    }
+    const ciphertext = await encryptBytes(publicKey, new Uint8Array(await slice.arrayBuffer()));
+    parts.push(new Blob([ciphertext as BlobPart], { type: "application/octet-stream" }));
+  }
+  return parts;
 }
 
 /** Take the run's next event ID. Called inside Store.queue's transaction. */
