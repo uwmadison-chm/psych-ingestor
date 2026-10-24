@@ -296,3 +296,91 @@ def test_opening_an_existing_database_doesnt_wait_for_the_write_lock(tmp_path):
     finally:
         writer.execute("ROLLBACK")
         writer.close()
+
+
+# ------------------------------------------------------------ migrations
+#
+# An old database is made by taking a new one apart, which gives exactly the shape the
+# old version had, since every migration so far only adds.
+
+
+def _shape(path):
+    """Every table and index, with its columns, indexes, and foreign keys."""
+    connection = sqlite3.connect(path)
+    shape = {}
+    names = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type IN ('table', 'index') ORDER BY name"
+    )
+    for (name,) in names.fetchall():
+        shape[name] = [
+            [tuple(row) for row in connection.execute(f"PRAGMA {pragma}({name})")]
+            for pragma in ("table_info", "index_list", "foreign_key_list")
+        ]
+    connection.close()
+    return shape
+
+
+def _old_database(path, version):
+    connection = db.connect(path)
+    if version < 3:
+        connection.execute("ALTER TABLE runs DROP COLUMN encrypted_to")
+    if version < 2:
+        connection.execute("DROP TABLE media_parts")
+        connection.execute("DROP TABLE media")
+    connection.execute(f"PRAGMA user_version = {version}")
+    connection.close()
+
+
+def test_every_older_version_has_a_migration():
+    assert sorted(db.MIGRATIONS) == list(range(1, db.SCHEMA_VERSION))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_a_migrated_database_is_the_same_as_a_new_one(tmp_path, version):
+    _old_database(tmp_path / "old.db", version)
+    db.connect(tmp_path / "new.db").close()
+
+    assert db.migrate(tmp_path / "old.db") == version
+    assert _shape(tmp_path / "old.db") == _shape(tmp_path / "new.db")
+    db.connect(tmp_path / "old.db").close()
+
+
+def test_an_older_database_is_refused_until_migrated(tmp_path):
+    path = tmp_path / "pig.db"
+    _old_database(path, 2)
+    with pytest.raises(db.DatabaseProblem) as raised:
+        db.connect(path)
+    assert "pig migrate" in str(raised.value)
+
+
+def test_migrating_keeps_the_runs_already_there(tmp_path):
+    path = tmp_path / "pig.db"
+    _old_database(path, 2)
+    old = sqlite3.connect(path)
+    old.execute(
+        "INSERT INTO runs (run_id, task_code, run_key_hash, run_number, phase, "
+        "started_at) VALUES ('r1', 'stroop', 'h', 1, 'collecting', '2026-10-24T00:00:00+00:00')"
+    )
+    old.commit()
+    old.close()
+
+    db.migrate(path)
+    row = db.connect(path).execute("SELECT * FROM runs").fetchone()
+    assert row["run_id"] == "r1"
+    assert row["encrypted_to"] is None
+
+
+def test_migrating_an_up_to_date_database_changes_nothing(tmp_path):
+    db.connect(tmp_path / "pig.db").close()
+    assert db.migrate(tmp_path / "pig.db") == db.SCHEMA_VERSION
+
+
+def test_a_database_from_a_newer_pig_isnt_migrated(tmp_path):
+    path = tmp_path / "pig.db"
+    _old_database(path, db.SCHEMA_VERSION)
+    sqlite3.connect(path).execute(f"PRAGMA user_version = {db.SCHEMA_VERSION + 1}")
+    with pytest.raises(db.DatabaseProblem):
+        db.migrate(path)
+    with pytest.raises(db.DatabaseProblem) as raised:
+        db.connect(path)
+    assert "no migration" in str(raised.value)

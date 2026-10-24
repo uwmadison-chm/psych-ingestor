@@ -251,6 +251,28 @@ def runs(
         )
 
 
+@app.command
+def migrate(*, config: ConfigPath | None = None) -> None:
+    """Bring a database made by an older version of Pig up to date.
+
+    Stop pig serve first. Pig refuses to use a database from an older version until
+    this has run, so nothing is changed without someone deciding to.
+    """
+    loaded = _load(config)
+    try:
+        before = db.migrate(loaded.database)
+    except db.DatabaseProblem as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+    if before == db.SCHEMA_VERSION:
+        print(f"{loaded.database} is already at schema version {before}.")
+    else:
+        print(
+            f"Migrated {loaded.database} from schema version {before} "
+            f"to {db.SCHEMA_VERSION}."
+        )
+
+
 @app.command(name="health")
 def health_command(*, config: ConfigPath | None = None) -> None:
     """Print the same report as `GET /health`, and exit 1 when it would answer 503."""
