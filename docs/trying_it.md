@@ -145,7 +145,7 @@ origins (every task currently allows any origin). See
 | `pig serve` | Run the web service. |
 | `pig sweep` | Finish closed runs; expire runs that have been open too long. |
 | `pig runs` | List runs. `--task` and `--status` narrow it. |
-| `pig health` | The health report, as JSON. |
+| `pig health` | The health report, as JSON. Exits 1 if something's wrong. |
 
 Any of them take `--config` if your file isn't `./local/pig.toml`.
 

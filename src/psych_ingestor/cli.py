@@ -251,9 +251,13 @@ def runs(
 
 @app.command(name="health")
 def health_command(*, config: ConfigPath | None = None) -> None:
-    """Print the same report as `GET /health`."""
+    """Print the same report as `GET /health`, and exit 1 when it would answer 503."""
     loaded, connection = _open(config)
-    print(json.dumps(health.report(loaded, connection), indent=2))
+    report = health.report(loaded, connection)
+    print(json.dumps(report, indent=2))
+    # The same answer /health gives with its status code, for a scheduled job to notice.
+    if not report["ok"]:
+        raise SystemExit(1)
 
 
 def main() -> None:

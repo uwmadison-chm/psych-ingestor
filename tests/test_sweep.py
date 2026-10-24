@@ -93,8 +93,8 @@ def test_events_are_left_exactly_as_written(pig: Pig):
     # A line that reached the file but never the database, as a crash would leave it.
     events_file = in_progress(pig, run_id) / "events.jsonl"
     before = events_file.read_text()
-    storage.append_line(
-        events_file, storage.canonical(storage.read_lines(events_file)[0])
+    storage.append_lines(
+        events_file, [storage.canonical(storage.read_lines(events_file)[0])]
     )
     assert len(storage.read_lines(events_file)) == 3
 
@@ -115,9 +115,9 @@ def test_two_lines_that_share_an_id_but_differ_are_both_kept(pig: Pig):
     pig.store_events("stroop", run_id, {"1": event(1)})
 
     events_file = in_progress(pig, run_id) / "events.jsonl"
-    storage.append_line(
+    storage.append_lines(
         events_file,
-        storage.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}}),
+        [storage.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}})],
     )
 
     pig.finalize_run("stroop", run_id)
@@ -345,3 +345,24 @@ def test_a_run_whose_events_vanished_is_reported_not_emptied(pig: Pig):
     run = runs.get(pig.connection, run_id)
     assert run is not None
     assert run.phase is runs.Phase.CLOSED
+
+
+def test_a_line_cut_short_by_a_crash_costs_only_itself(pig: Pig):
+    """The next append starts on a line of its own, so the event it writes, which Pig
+    says is stored, stays readable. See #53."""
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1)})
+    events_file = in_progress(pig, run_id) / "events.jsonl"
+    with open(events_file, "a", encoding="utf-8") as handle:
+        handle.write('{"event_id":"2","da')  # What a crash mid-append leaves.
+
+    result = pig.store_events("stroop", run_id, {"2": event(2), "3": event(3)})
+    assert result.stored == ["1", "2", "3"]
+
+    lines = events_file.read_text().split("\n")
+    assert lines[1] == '{"event_id":"2","da'
+    assert [line["event_id"] for line in storage.read_lines(events_file)] == [
+        "1",
+        "2",
+        "3",
+    ]

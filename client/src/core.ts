@@ -24,8 +24,9 @@ import { PigError, wallTime } from "./shared.ts";
 import type { Store } from "./store.ts";
 import type {
   ClientInfo,
-  LogLevel,
   EventOp,
+  Failure,
+  LogLevel,
   MediaFinishOp,
   MediaStartOp,
   NewOp,
@@ -99,8 +100,8 @@ export class Core {
   orphans = new Set<string>();
   /** Each run's calls, so they're handled one at a time: run ID → the latest one. */
   chains = new Map<string, Promise<unknown>>();
-  /** Callers waiting for a run's queue to empty: run ID → [resolve] */
-  sentWaiters = new Map<string, (() => void)[]>();
+  /** Callers waiting for a run's queue to empty: run ID → their promises' settlers */
+  sentWaiters = new Map<string, { resolve: () => void; reject: (error: PigError) => void }[]>();
   timers: ReturnType<typeof setInterval>[] = [];
   closed = false;
 
@@ -282,18 +283,22 @@ export class Core {
 
   /**
    * Resolves once nothing is queued for this run, including anything added before this
-   * was called. Never rejects; it just waits.
+   * was called. Waits as long as that takes, offline included. Rejects only if the
+   * server refused the run itself, since then nothing queued will ever be sent; the
+   * error is the one the run's `error` event carries, and the data stays on the device.
    */
   async sent(id: string): Promise<void> {
-    const done = new Promise<void>((resolve) => {
+    const done = new Promise<void>((resolve, reject) => {
       const waiting = this.sentWaiters.get(id) ?? [];
-      waiting.push(resolve);
+      waiting.push({ resolve, reject });
       this.sentWaiters.set(id, waiting);
     });
     // In line behind earlier calls, so an add() the task didn't await is counted. And
     // checked after registering, so an emptying that happens in between isn't missed.
     await this.#inOrder(id, async () => {
-      if ((await this.store.ops(id, 1)).length === 0) this.#settleSent(id);
+      const failed = (await this.store.run(id))?.failed;
+      if (failed) this.#failSent(id, failed);
+      else if ((await this.store.ops(id, 1)).length === 0) this.#settleSent(id);
     });
     await done;
   }
@@ -503,7 +508,9 @@ export class Core {
 
   /** There's new work for this run's sender. Doesn't cut short a wait after a failure. */
   #wake(id: string): void {
-    this.senders.get(id)?.newWork();
+    const sender = this.senders.get(id);
+    if (sender) sender.newWork();
+    else this.#ensureSender(id); // A refused run's sender has stopped. A new one keeps this aside too.
   }
 
   /**
@@ -518,8 +525,16 @@ export class Core {
     while (!this.closed) {
       const run = await this.store.run(id);
       if (run === undefined) return;
-      const ops = await this.store.ops(id, this.options.maxBatchEvents);
+      if (run.failed) {
+        // The server refused this run, so nothing queued for it can go anywhere. Its
+        // data is kept aside with everything else the server won't take, where
+        // pending() counts it and discardFailed() can throw it away.
+        await this.#keepRunAside(run, run.failed.message);
+        this.#failSent(id, run.failed);
+        return;
+      }
 
+      const ops = await this.store.ops(id, this.options.maxBatchEvents);
       if (ops.length === 0) {
         this.#settleSent(id);
         if (run.closed) {
@@ -532,12 +547,6 @@ export class Core {
         if (orphan) return;
         await sender.idle(); // until there's something new to send
         continue;
-      }
-
-      if (run.failed) {
-        // The server refused to start this run, so nothing queued for it can go
-        // anywhere. Its data stays on the device; see pending() and discardFailed().
-        return;
       }
 
       const head = ops[0];
@@ -573,7 +582,7 @@ export class Core {
         this.log("debug", `Run ${id}: trying again in ${Math.round(wait)} ms.`);
         await sender.wait(wait);
       } else if (outcome === "refused") {
-        return;
+        continue; // The run is marked failed now; the top of the loop deals with it.
       } else {
         failures = 0;
         await this.#progress(run);
@@ -739,14 +748,17 @@ export class Core {
   /**
    * The server run closed under us. If it expired, start a new server run and send the
    * rest there, with a first event naming the run it continues. If it was finalized,
-   * nothing more belongs in it: throw away what's left.
+   * nothing more belongs in it: keep what's left aside, in `failed`, like anything else
+   * the server won't take. If the reply doesn't say which, treat the run as refused and
+   * leave its queue alone. Either way nothing is thrown away: a 409 is a reason to stop
+   * sending, never to delete a participant's data. See #60.
    *
    * A media item caught partway is started again in the new server run, and its
    * remaining parts go there with the numbers they already had. If some of its parts
    * reached the old server run, the item is split between the two: it can't be
    * finished in either, and joining it means taking the parts from both.
    */
-  async #serverRunClosed(run: RunRecord, reply: Outcome): Promise<"done"> {
+  async #serverRunClosed(run: RunRecord, reply: Outcome): Promise<"done" | "refused"> {
     const status = reply.body?.status;
     if (status === "expired") {
       this.log("info", `Server run ${run.server_run_id} expired; starting a new one for run ${run.id}.`);
@@ -788,12 +800,13 @@ export class Core {
       return "done";
     }
 
-    const rest = (await this.store.ops(run.id)).filter((op) => op.kind !== "start");
-    const events = rest.filter((op) => op.kind === "event" || op.kind === "media-start").length;
-    const parts = rest.filter((op) => op.kind === "media-part").length;
+    if (status !== "finalizing" && status !== "complete") {
+      // A 409 that isn't Pig saying how the run closed: from a proxy, say.
+      return this.#runRefused(run, reply as Outcome & { ok: false });
+    }
+
+    const { events, parts } = await this.#keepRunAside(run, "The server had already finalized this run.");
     const what = parts > 0 ? `${events} events and ${parts} media parts` : `${events} events`;
-    this.log("warn", `Server run ${run.server_run_id} was already finalized; discarding ${what}.`);
-    await this.store.deleteOps(rest.map((op) => op.seq));
     await this.store.updateRun(run.id, (r) => {
       r.closed = true;
       r.finalize_queued = true;
@@ -802,11 +815,28 @@ export class Core {
       this.notify({
         type: "error",
         run: run.id,
-        code: "discarded",
-        message: `The server had already finalized this run, so ${what} were thrown away.`,
+        code: "run-finalized",
+        message: `The server had already finalized this run, so ${what} weren't sent. They're kept on this device; see pending() and discardFailed().`,
       });
     }
     return "done";
+  }
+
+  /**
+   * Move everything queued for a run into `failed`, for a run nothing more can be sent
+   * for. Starting and finalizing the run carry no data, so those are just dropped.
+   */
+  async #keepRunAside(run: RunRecord, reason: string): Promise<{ events: number; parts: number }> {
+    const ops = await this.store.ops(run.id);
+    const data = ops.filter((op) => op.kind !== "start" && op.kind !== "finalize");
+    const events = data.filter((op) => op.kind === "event" || op.kind === "media-start").length;
+    const parts = data.filter((op) => op.kind === "media-part").length;
+    if (data.length > 0) {
+      this.log("warn", `Run ${run.id}: keeping ${events} events and ${parts} media parts aside, unsent. ${reason}`);
+    }
+    await this.store.failOps(data.map((op) => ({ seq: op.seq, reason })));
+    await this.store.deleteOps(ops.filter((op) => op.kind === "start" || op.kind === "finalize").map((op) => op.seq));
+    return { events, parts };
   }
 
   /** The server doesn't know this run, or refused a request about it outright. */
@@ -833,7 +863,15 @@ export class Core {
     const waiting = this.sentWaiters.get(id);
     if (!waiting) return;
     this.sentWaiters.delete(id);
-    for (const resolve of waiting) resolve();
+    for (const { resolve } of waiting) resolve();
+  }
+
+  /** The run can't be sent, ever: tell everyone waiting in sent(), rather than leave them waiting. */
+  #failSent(id: string, failure: Failure): void {
+    const waiting = this.sentWaiters.get(id);
+    if (!waiting) return;
+    this.sentWaiters.delete(id);
+    for (const { reject } of waiting) reject(new PigError(failure.code, failure.message));
   }
 
   // -------------------------------------------------------------- settings

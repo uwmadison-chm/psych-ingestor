@@ -101,17 +101,35 @@ def content_hash(text: str) -> str:
 # -------------------------------------------------------------------- writing
 
 
-def append_line(path: Path, line: str) -> None:
-    """Append one line and don't return until it's really on disk.
+def append_lines(path: Path, lines: list[str]) -> None:
+    """Append lines to an existing file, and don't return until they're really on disk.
 
     "If the server says an event is stored, it's on disk" is the whole reason for the
-    fsync. It costs a few milliseconds per request, which we have.
+    fsync. It costs a few milliseconds per request, which we have. One write and one
+    fsync for a whole batch, so the caller holds the database's write lock for one disk
+    flush, not one per event.
+
+    The file's directory has to be there already. A run's directory is made when the run
+    starts and moved into `done/` when it's finished, so a missing one means the run has
+    moved on, and making a fresh one here would put the lines where nothing will look.
+
+    An append a crash interrupted can leave the file ending partway through a line. The
+    next line would be joined onto it, and a JSON reader would lose both, including one
+    Pig said was stored. So if the file doesn't end with a newline, this writes one
+    first: the cut-short line stays, on its own, and is the only line lost. See #53.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
+    # Opened for reading as well, to look at the last byte. Writes still go to the end.
+    with open(path, "a+b") as handle:
+        size = os.fstat(handle.fileno()).st_size
+        cut_short = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
+        text = ("\n" if cut_short else "") + "".join(line + "\n" for line in lines)
+        handle.write(text.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
+    if size == 0:
+        # The first lines, so most likely a new file. Its name needs fsyncing too, or a
+        # crash can take the file, and the events Pig just said were stored, with it.
+        fsync_directory(path.parent)
 
 
 class PartTooLarge(Exception):
@@ -121,8 +139,7 @@ class PartTooLarge(Exception):
 class PartWriter:
     """Write one media part to disk as it arrives, without holding it in memory.
 
-    Bytes go straight from each chunk to a scratch file next to where the part will
-    live, hashed and counted on the way through, and the size limit is enforced as they
+    Bytes go straight from each chunk to a scratch file, hashed and counted on the way through, and the size limit is enforced as they
     arrive rather than trusted from a header. When the whole body is in, `finish`
     fsyncs it and hands back the size and hash; whoever called us then decides whether
     to `keep` it (rename into place) or `discard` it (a retry Pig already has, or a
@@ -130,16 +147,17 @@ class PartWriter:
     until `keep`, so a crash mid-write leaves a scratch file and never a part that
     looks whole and isn't.
 
-    The scratch name carries a random suffix so two uploads of the same part at once
-    don't write over each other's scratch file.
+    The scratch file is outside the run directory, under `uploading/`, named for the run
+    (see `scratch_path`). A run can close and be finished by the sweep while a part is
+    still arriving, and a scratch file inside the run's directory could then be hashed
+    into its manifest, or carried into `done/`, half written. See #52.
     """
 
-    def __init__(self, final: Path, limit: int):
+    def __init__(self, final: Path, scratch: Path, limit: int):
         self.final = final
         self.limit = limit
-        self.scratch = final.with_name(
-            f"{final.name}.{secrets.token_hex(4)}{PARTIAL_SUFFIX}"
-        )
+        self.scratch = scratch
+        scratch.parent.mkdir(parents=True, exist_ok=True)
         self.size = 0
         self._hash = hashlib.sha256()
         # Held open across several calls, so a context manager can't scope it.
@@ -182,15 +200,55 @@ class PartWriter:
             self._open = False
 
 
+def scratch_path(uploading_root: Path, run_id: str, media_id: int, part: int) -> Path:
+    """Where a part is written while it arrives, like
+    `uploading/{run_id}.00001.000003.{random}.partial`.
+
+    Named for the run, so the sweep can find a finished run's scratch files and delete
+    them. The random part keeps two uploads of the same part at once from writing over
+    each other.
+    """
+    return uploading_root / (
+        f"{run_id}.{media_id:05d}.{part:06d}.{secrets.token_hex(4)}{PARTIAL_SUFFIX}"
+    )
+
+
 def remove_partial_files(directory: Path) -> None:
-    """Delete scratch files an interrupted upload left in a run directory.
+    """Delete scratch files an interrupted write left in a run directory.
 
     Pig never said any of these were stored, and the manifest is about to hash every
     file in the directory, so leaving one would make a copy elsewhere responsible for
-    bytes nobody acknowledged.
+    bytes nobody acknowledged. (Parts are written under `uploading/` now, but a run
+    started by an older Pig may still have one here.)
     """
     for path in directory.rglob(f"*{PARTIAL_SUFFIX}"):
         path.unlink()
+
+
+def remove_upload_scratch(uploading_root: Path, run_id: str) -> None:
+    """Delete a run's scratch parts from `uploading/`, once the run is closed.
+
+    An upload still going for this run will find its scratch file gone and its run
+    closed, and refuse the part, which is what it would have done anyway.
+    """
+    for path in uploading_root.glob(f"{run_id}.*{PARTIAL_SUFFIX}"):
+        path.unlink(missing_ok=True)
+
+
+def make_directories(directory: Path) -> None:
+    """Make a directory, and any missing above it, so that they survive a crash.
+
+    A new directory is only an entry in its parent until the parent is fsynced, so each
+    one made here has its parent fsynced. Without that, a run directory Pig has already
+    written events into could be gone after a power cut, events and all. See #54.
+    """
+    missing = []
+    while not directory.exists():
+        missing.append(directory)
+        directory = directory.parent
+    for made in reversed(missing):
+        made.mkdir(exist_ok=True)
+        fsync_directory(made.parent)
 
 
 def create_empty_file(path: Path) -> None:
@@ -201,8 +259,9 @@ def create_empty_file(path: Path) -> None:
 
 
 def read_lines(path: Path) -> list[dict[str, Any]]:
-    """Read an events file. A truncated last line is dropped, which is the one thing an
-    interrupted append can leave behind."""
+    """Read an events file. A line that isn't JSON is dropped: it's a line an interrupted
+    append cut short, which is the one thing a crash can leave behind. `append_lines`
+    makes sure the next line starts after it rather than on the end of it."""
     if not path.exists():
         return []
     events = []
@@ -331,7 +390,7 @@ def move_directory(source: Path, destination: Path) -> None:
     """
     if destination.exists():
         raise OSError(f"{destination} already exists; not moving {source} over it")
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    make_directories(destination.parent)
     source.rename(destination)
     fsync_directory(destination.parent)
     fsync_directory(source.parent)

@@ -27,7 +27,7 @@ to see a run reach `complete`.
 
 ## The data root is one filesystem
 
-Under the data root, `in_progress/`, `done/` and `purging/` have to be on the same filesystem. The
+Under the data root, `in_progress/`, `done/`, `purging/` and `uploading/` have to be on the same filesystem. The
 sweep finishes a run by writing its manifest in place and then renaming the whole
 directory from one tree to the other, and a rename within one filesystem either happens
 entirely or not at all — so `done/` never holds a half-copied run. Across filesystems
@@ -35,7 +35,7 @@ that isn't a rename, and the guarantee goes with it. Nothing about a normal depl
 splits the two, but a data root that's a mount point with `in_progress/` symlinked
 elsewhere would, so don't.
 
-Purging a run is a rename too, out of `done/` and into `purging/`, where it's deleted. That way the copy to the bucket never sees half a deleted run.
+Purging a run is a rename too, out of `done/` and into `purging/`, where it's deleted. That way the copy to the bucket never sees half a deleted run. And a media part is written under `uploading/` as it arrives, then renamed into its run, so a run never holds half a part.
 
 ## The bucket is the undo for a purge
 
@@ -91,7 +91,8 @@ whether it takes media, how many runs are in each status, how many are waiting f
 sweep, how many have been `finalizing` too long, and when data last arrived (a media
 part counts). It
 answers `503` rather than `200` when something is wrong, so a monitor can watch the status
-code. `pig health` prints the same report.
+code. `pig health` prints the same report, and exits 1 when `/health` would answer
+`503`.
 
 The rest of this list isn't built yet — duplicate event IDs and case-variant parameters in
 particular, which are the two that need someone to go looking at the data.

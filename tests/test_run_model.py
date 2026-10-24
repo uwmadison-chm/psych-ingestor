@@ -281,3 +281,18 @@ def test_a_fresh_database_records_its_version(tmp_path):
     assert connection.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     # And opening it again is fine.
     db.connect(tmp_path / "pig.db").close()
+
+
+def test_opening_an_existing_database_doesnt_wait_for_the_write_lock(tmp_path):
+    """The service opens a connection for every request, so opening has to be a read.
+    Otherwise a GET waits behind whatever is writing. See #59."""
+    path = tmp_path / "pig.db"
+    writer = db.connect(path)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        reader = db.connect(path)
+        reader.execute("SELECT COUNT(*) FROM runs").fetchone()
+        reader.close()
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()

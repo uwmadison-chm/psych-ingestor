@@ -401,8 +401,8 @@ def record_receipt(
 ) -> bool:
     """Write down that this event is stored.
 
-    False means another request recorded the same event ID between our check and this
-    write, which is the caller's cue to look at what it recorded.
+    False means there's already a receipt for this event ID. Callers check for one and
+    write this under the same write lock, so that shouldn't happen; see `service.py`.
     """
     try:
         connection.execute(

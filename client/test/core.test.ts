@@ -258,7 +258,7 @@ describe("closed server runs", () => {
     await eventually(async () => (await store.run(run.id)) === undefined, { what: "the run to be forgotten" });
   });
 
-  test("events for a run someone else finalized are discarded, and that's reported", async () => {
+  test("events for a run someone else finalized are kept aside, and that's reported", async () => {
     const pig = new FakePig();
     const { core, notes } = await setUp({ pig });
     const run = await startRun(core);
@@ -267,7 +267,59 @@ describe("closed server runs", () => {
     await core.add(run.id, { trial: 1 }, STAMP);
     await core.sent(run.id);
     assert.equal(pig.runs.size, 1);
-    assert.ok(notes.some((n) => n.type === "error" && n.code === "discarded"));
+    assert.ok(notes.some((n) => n.type === "error" && n.code === "run-finalized"));
+    assert.equal((await core.pending({ run: run.id })).failed, 1);
+  });
+
+  test("a 409 that doesn't say how the run closed keeps the run's data aside", async () => {
+    const pig = new FakePig();
+    const { core, notes } = await setUp({ pig });
+    const run = await startRun(core);
+    await core.sent(run.id);
+    // Not Pig's answer: a proxy's, with no status in it.
+    pig.upcoming.push({ status: 409, body: {} });
+    await core.add(run.id, { trial: 1 }, STAMP);
+    await assert.rejects(core.sent(run.id), { code: "refused" });
+    assert.deepEqual(await core.pending({ run: run.id }), { events: 0, bytes: 0, failed: 1, runs: 0 });
+    assert.ok(notes.some((n) => n.type === "error" && n.code === "refused"));
+  });
+
+  test("sent() rejects, rather than waiting forever, when the server refuses the run", async () => {
+    const pig = new FakePig();
+    const { core } = await setUp({ pig });
+    await startRun(core); // So the device knows the task's settings.
+    pig.offline = true;
+    const run = await startRun(core);
+    await core.add(run.id, { trial: 1 }, STAMP);
+    // The task closed while the device was offline.
+    pig.tasks.stroop.open = false;
+    pig.offline = false;
+    core.nudge();
+    await assert.rejects(core.sent(run.id), { code: "task-closed" });
+    // And asking again says the same, at once.
+    await assert.rejects(core.sent(run.id), { code: "task-closed" });
+    // The client's first event and the task's, both kept aside.
+    assert.deepEqual(await core.pending({ run: run.id }), { events: 0, bytes: 0, failed: 2, runs: 0 });
+  });
+
+  test("a refused run's data, even what's added afterwards, can be discarded", async () => {
+    const pig = new FakePig();
+    const { core } = await setUp({ pig });
+    await startRun(core);
+    pig.offline = true;
+    const run = await startRun(core);
+    await core.add(run.id, { trial: 1 }, STAMP);
+    pig.tasks.stroop.open = false;
+    pig.offline = false;
+    core.nudge();
+    await assert.rejects(core.sent(run.id), { code: "task-closed" });
+
+    await core.add(run.id, { trial: 2 }, STAMP);
+    await eventually(async () => (await core.pending({ run: run.id })).failed === 3);
+    assert.equal((await core.pending({ run: run.id })).events, 0);
+
+    await core.discardFailed();
+    assert.deepEqual(await core.pending({ run: run.id }), { events: 0, bytes: 0, failed: 0, runs: 0 });
   });
 });
 
