@@ -7,6 +7,7 @@ dependencies = [
     "cyclopts>=3.0",
     "fastapi>=0.115",
     "pydantic>=2.9",
+    "pyrage>=1.2",
     "uvicorn>=0.32",
 ]
 
@@ -26,3 +27,7 @@ dev = [
     "rust-just>=1.57.0",
     "ty>=0.0.63",
 ]
+
+[tool.ty.environment]
+# Stubs for pyrage, which ships none.
+extra-paths = ["typings"]

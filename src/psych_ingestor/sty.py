@@ -4,9 +4,11 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-For now this holds what `pigsty admit`, `pigsty organize` and `pigsty purge` need: for
-each task, where its runs are kept and where its readable tree goes, and the address of
-the web server to purge runs from. Keys come later.
+This holds what `pigsty admit`, `pigsty organize`, `pigsty purge` and `pigsty keys`
+need: for each task, where its runs are kept and where its readable tree goes; the
+address of the web server to purge runs from; and the directory of private keys that
+encrypted runs are decrypted with. The keys themselves are never in this file, so it can
+be kept in version control like `pig.toml`.
 """
 
 from __future__ import annotations
@@ -142,6 +144,9 @@ class StyConfig(BaseModel):
     # The web server's address, like https://pig.example.edu, for `pigsty purge`. Not
     # needed by anything else.
     pig_url: str | None = None
+    # The private keys encrypted runs are decrypted with, one `.key` file each. See
+    # `keys.py`. Not needed until a task encrypts.
+    private_keys_dir: Path | None = None
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -183,6 +188,8 @@ def load_sty_config(path: Path) -> StyConfig:
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()
+    if config.private_keys_dir is not None:
+        config.private_keys_dir = (base / config.private_keys_dir).resolve()
     for task in config.task.values():
         task.datastore_base = (base / task.datastore_base).resolve()
         root, pattern = split_organized(task.organized)

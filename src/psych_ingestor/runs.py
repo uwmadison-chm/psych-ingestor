@@ -104,6 +104,8 @@ class Run:
     disposition: Disposition | None = None
     closed_at: datetime | None = None
     done_at: datetime | None = None
+    # The public key's name, if the run is encrypted. See `db.SCHEMA`.
+    encrypted_to: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Run:
@@ -122,6 +124,7 @@ class Run:
             ),
             closed_at=_maybe_time(row["closed_at"]),
             done_at=_maybe_time(row["done_at"]),
+            encrypted_to=row["encrypted_to"],
         )
 
     @property
@@ -228,6 +231,7 @@ def insert(
     parameters: dict[str, str],
     extra_parameters: dict[str, Any],
     started_at: datetime,
+    encrypted_to: str | None = None,
 ) -> int:
     """Give the run the next number for its key, and write it down.
 
@@ -256,7 +260,7 @@ def insert(
                 )
             connection.execute(
                 "INSERT INTO runs (run_id, task_code, run_key_hash, run_number, phase, "
-                "started_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "started_at, encrypted_to) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     task_code,
@@ -264,6 +268,7 @@ def insert(
                     run_number,
                     Phase.COLLECTING,
                     db.stamp(started_at),
+                    encrypted_to,
                 ),
             )
             connection.execute(

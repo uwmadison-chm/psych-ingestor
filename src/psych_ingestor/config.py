@@ -122,9 +122,15 @@ class TaskDefinition(BaseModel):
     # The most one media part may be. The web server in front of Pig has to allow request
     # bodies at least this big, or parts are refused before Pig sees them.
     max_part_size: int = Field(default=8 * 1024 * 1024)
+    # The name of the public key, from `public_keys_file`, that this task's events and
+    # media are encrypted to in the participant's browser. None means the task doesn't
+    # encrypt. See docs/configuration.md and issue #10.
+    encrypt_to: str | None = None
 
-    # Filled in by load_config, since a task doesn't know its own code.
+    # Filled in by load_config, since a task doesn't know its own code, or what its key
+    # name stands for.
     code: str = ""
+    public_key: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -181,6 +187,9 @@ class Config(BaseModel):
 
     data_root: Path
     database: Path
+    # The public keys tasks can encrypt to, as `pigsty keys export` writes them on the
+    # secure side. Only needed if a task sets `encrypt_to`.
+    public_keys_file: Path | None = None
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
     # Two trees under the data root, and a run directory moves from one to the other
@@ -261,7 +270,40 @@ def load_config(path: Path) -> Config:
     base = path.parent.resolve()
     config.data_root = (base / config.data_root).resolve()
     config.database = (base / config.database).resolve()
+    _resolve_public_keys(path, config)
     return config
+
+
+def _resolve_public_keys(path: Path, config: Config) -> None:
+    """Read the public keys file, and give each task that encrypts its public key."""
+    # Imported here, because keys.py uses this module's safe-value rule.
+    from .keys import read_public_keys
+
+    encrypting = sorted(code for code, task in config.task.items() if task.encrypt_to)
+    if config.public_keys_file is None:
+        if encrypting:
+            raise ConfigurationError(
+                f"{path} has a problem: {', '.join(encrypting)} set encrypt_to, but "
+                "there's no public_keys_file to find the key in. Make one on the secure "
+                "side with pigsty keys export, copy it here, and point public_keys_file "
+                "at it."
+            )
+        return
+    config.public_keys_file = (
+        path.parent.resolve() / config.public_keys_file
+    ).resolve()
+    public_keys = read_public_keys(config.public_keys_file)
+    for code in encrypting:
+        task = config.task[code]
+        if task.encrypt_to not in public_keys:
+            known = ", ".join(sorted(public_keys)) or "none"
+            raise ConfigurationError(
+                f"{path} has a problem: task {code!r} encrypts to {task.encrypt_to!r}, "
+                f"and {config.public_keys_file} has no key by that name. It has: "
+                f"{known}. If the key is new, export the public keys again on the "
+                "secure side and copy the file here."
+            )
+        task.public_key = public_keys[task.encrypt_to]
 
 
 class ConfigSource:
@@ -283,7 +325,7 @@ class ConfigSource:
         self.path = path
         self._lock = threading.Lock()
         self._config: Config | None = None
-        self._fingerprint: tuple[int, int, int] | None = None
+        self._fingerprint: tuple[tuple[int, int, int] | None, ...] | None = None
         self.problem: str | None = None
 
     def current(self) -> Config:
@@ -300,23 +342,36 @@ class ConfigSource:
                 raise ConfigurationError(self.problem or f"Can't read {self.path}.")
             return self._config
 
-    def _read_fingerprint(self) -> tuple[int, int, int] | None:
-        """Enough of the file's identity to notice an edit: when, how big, which file."""
+    def _read_fingerprint(self) -> tuple[tuple[int, int, int] | None, ...] | None:
+        """Enough of the file's identity to notice an edit: when, how big, which file.
+        And the same for the public keys file it names, so copying a new one over takes
+        effect the way editing pig.toml does."""
         try:
             stat = self.path.stat()
         except OSError as error:
             # The file went away. Keep serving what we have and say so.
             self.problem = f"Can't read {self.path}: {error}"
             return None
-        return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        keys = None
+        if self._config is not None and self._config.public_keys_file is not None:
+            try:
+                keys_stat = self._config.public_keys_file.stat()
+                keys = (keys_stat.st_mtime_ns, keys_stat.st_size, keys_stat.st_ino)
+            except OSError:
+                # Reloading will say what's wrong with it.
+                pass
+        return ((stat.st_mtime_ns, stat.st_size, stat.st_ino), keys)
 
-    def _reload(self, fingerprint: tuple[int, int, int]) -> None:
+    def _reload(self, fingerprint: tuple[tuple[int, int, int] | None, ...]) -> None:
         try:
             self._config = load_config(self.path)
         except ConfigurationError as error:
             self.problem = str(error)
             return
         # Only remember the fingerprint of a file that actually loaded, so a broken one
-        # is retried on the next request rather than being treated as read.
+        # is retried on the next request rather than being treated as read. When this
+        # load named a public keys file the last one didn't, the fingerprint didn't
+        # cover it, so the next request loads once more. That's cheaper than the
+        # alternative, which can miss an edit made while this one was loading.
         self._fingerprint = fingerprint
         self.problem = None
