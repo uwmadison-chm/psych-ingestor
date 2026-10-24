@@ -254,6 +254,28 @@ The web server in front of Pig has to allow request bodies at least `max_part_si
 large, or it refuses parts before Pig sees them. `pig check` prints the number to
 allow. See [deployment.md](deployment.md).
 
+### Encryption
+
+`encrypt_to` makes a task encrypt everything it records in the participant's browser, so the web server only ever holds data it can't read. Its value is the name of a public key:
+
+```toml
+# local/pig.toml
+public_keys_file = "public_keys.txt"
+
+[task.stroop]
+parameters = ["participant_id", "session"]
+run_key = ["participant_id", "session"]
+encrypt_to = "lucida/2026a"
+```
+
+`public_keys_file` is a list of public keys by name. You don't write it: it's made on the secure side, where the matching private keys are, by `pigsty keys export`, and you copy it here whole. See [organizing.md](organizing.md#encrypted-runs). A task without `encrypt_to` doesn't encrypt.
+
+`pig check` refuses an `encrypt_to` that names a key the file doesn't have. Copying a new `public_keys_file` over the old one takes effect without a restart, the same as editing `pig.toml`.
+
+Whether a run is encrypted is settled when it starts. Turning encryption on or off changes new runs only; a run already going stays as it began. An encrypted run refuses events and media parts that aren't encrypted. That mostly happens when a participant's browser saved this task's settings before encryption was turned on and is offline, and it's why the change is best made between waves of participants. See [api.md](api.md#encrypted-tasks).
+
+What encryption protects, and what it doesn't, is in [security.md](security.md#end-to-end-encryption).
+
 ### Open or closed
 
 Whether the task currently accepts new data. Closing a task is how data collection ends

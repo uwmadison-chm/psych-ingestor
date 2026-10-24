@@ -117,7 +117,8 @@ it may send media. The JavaScript client uses it so it can start a run while off
   "parameters": ["participant_id", "session"],
   "expires_after_sec": 86400,
   "max_event_size_bytes": 1048576,
-  "media": null
+  "media": null,
+  "encryption": null
 }
 ```
 
@@ -128,6 +129,7 @@ it may send media. The JavaScript client uses it so it can start a run while off
 | `expires_after_sec` | How long a run may stay open, in seconds, counted from when it started. See [When a run expires](#when-a-run-expires). |
 | `max_event_size_bytes` | The biggest event Pig will store, in bytes, measured as JSON. |
 | `media` | `null` if this task can't send audio, video, and other files. If it can, the settings for them (below). |
+| `encryption` | `null` if this task doesn't encrypt. If it does, `{"public_key": "age1…"}`, the key to encrypt to. See [Encrypted tasks](#encrypted-tasks). |
 
 A task that takes media gets its media settings instead of `null`:
 
@@ -524,12 +526,47 @@ have to.
 
 **Pig never joins the parts back together.** They stay as parts, each hashed in the
 run's manifest, and whoever works with the data later joins them: for the WebM and
-fragmented MP4 that browsers record, that's concatenating the files in order. Pig
+fragmented MP4 that browsers record, that's concatenating the files in order. For an
+[encrypted task](#encrypted-tasks), each part is decrypted first, and then they're
+concatenated; `pigsty admit` does the decrypting. Pig
 doesn't join them because joining means deciding what to do about a gap, and a file
 that looks whole and isn't is exactly the kind of quiet mistake Pig exists to avoid.
 
 Pig doesn't look at the bytes at all. No list of allowed types, no checking that parts
 belong together, no file extension chosen for you. What you send is what's stored.
+
+## Encrypted tasks
+
+*Only for tasks whose configuration sets `encrypt_to`. The [JavaScript client](../client/README.md) does all of this for you.*
+
+An encrypted task encrypts everything it records before it sends it, so Pig stores it without being able to read it. Only the secure side, where the data ends up, has the key that opens it. `GET /task/{task_code}` gives the key to encrypt to:
+
+```json
+"encryption": { "public_key": "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p" }
+```
+
+The encryption is [age](https://age-encryption.org), which has libraries for JavaScript, Python, Go, Rust and others. For JavaScript, use [typage](https://github.com/FiloSottile/typage) (`age-encryption` on npm), by age's author.
+
+**An event's `data` is a string**: the JSON of what you recorded, encrypted to the public key, as base64. Everything else about the request is unchanged:
+
+```json
+{
+  "1": { "data": "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBj…" },
+  "2": { "data": "YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBM…" }
+}
+```
+
+The start of a media item is an event too, and its `data` is encrypted the same way.
+
+**A media part is encrypted on its own**, and the body of the `PUT` is the encrypted bytes. The limit is on what you send, so cut the recording small enough that each piece still fits once it's encrypted. age adds 184 bytes to every file, and 16 more for every 64 KiB, so a piece of `max_part_size - 184 - 16 × ⌈max_part_size / 65536⌉` bytes always fits. Because each part is encrypted separately, the parts can only be joined once they're decrypted.
+
+**Encrypt once, when you record it, and keep what you encrypted.** Encrypting the same data twice gives different bytes, so a retry that encrypted again would be a different event under the same ID, and Pig would refuse it. Store the encrypted event in your queue and send exactly that until Pig confirms it. It also means a device that's lost or stolen holds nothing readable.
+
+Your task can't read its own events back once they're encrypted. Keep anything it needs later, a running score or a staircase, in a variable of its own.
+
+**Pig checks that each event and part is encrypted, not who it's encrypted to.** It can't tell which key was used; that's how age works. An event or part that isn't encrypted is refused with `can_retry: false`. The usual cause is a browser that saved the task's settings before encryption was turned on. Reloading the page fetches them again, and a new run will encrypt.
+
+Whether a run is encrypted is settled when it starts. Changing the task's configuration while a run is going doesn't change what that run accepts.
 
 ## Cross-origin requests
 
