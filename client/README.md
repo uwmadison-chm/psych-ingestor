@@ -103,7 +103,7 @@ before it.
 telling the participant they can close the tab. Offline, it waits until the device is back
 online. If the server refuses the run itself (the task was closed while the device was
 offline, say), nothing for it can ever be sent, so `sent()` rejects with the same
-`PigError` the run's `error` event carries. The data stays on the device.
+`PigError` the run's `error` event carries. The run's data stays on the device, counted in `failed`; see below.
 
 You don't number your events. The client gives each one an event ID, counting from 1.
 
@@ -306,7 +306,7 @@ run.addEventListener("error", (e) => console.warn(e.detail.code, e.detail.messag
 If Pig refuses an event for good (because it's too big, or reuses an ID), the client keeps
 it on the device rather than dropping it, counts it in `failed`, and carries on with the
 rest. The same goes for a media part, except that the rest of that item is kept aside
-with it, since later parts can't make it whole. Call `pig.discardFailed()` to throw those away. *Provisional.*
+with it, since later parts can't make it whole. If the server refuses the run itself, everything for that run is kept aside the same way, including anything added after. Call `pig.discardFailed()` to throw all of it away. *Provisional.*
 
 If a run expires on the server while events are still waiting (a device offline for a
 long time, say), the client starts a new run for the same participant and sends them
