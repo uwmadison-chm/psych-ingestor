@@ -15,13 +15,20 @@ export interface Stamp {
 export interface TaskSettings {
   task_code: string;
   open: boolean;
+  /** Every parameter a run needs. */
   parameters: string[];
+  /** The ones held to the safe-value rule; the rest are text. Missing from settings
+   * saved by version 0.2.0 of the client, when every parameter was one. */
+  path_parameters?: string[];
   expires_after_sec: number;
   max_event_size_bytes: number;
   media: { max_part_size_bytes: number } | null;
   /** The public key events and media parts are encrypted to, or null if the task
    * doesn't encrypt. Missing from settings saved by version 0.2.0 of the client. */
   encryption?: { public_key: string } | null;
+  /** The parameters a run's `pig_sig` has to cover, or null if the task doesn't check
+   * signatures. Missing from settings saved by version 0.2.0 of the client. */
+  parameter_signing?: { signed_parameters: string[] } | null;
 }
 
 /** What the page knows about itself, for a run's first event. */

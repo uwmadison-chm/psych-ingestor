@@ -14,6 +14,11 @@ export const SERVER = "https://pig.test";
 
 interface FakeTask {
   parameters: string[];
+  /** The ones held to the safe-value rule, if not all of them. */
+  path_parameters?: string[];
+  /** The parameters a signature covers, for a task that checks them. The pretend Pig
+   * takes a pig_sig of "good", and no other. */
+  signed_parameters?: string[];
   open: boolean;
   max_event_size_bytes: number;
   /** The largest media part, for a task that takes media. */
@@ -178,10 +183,12 @@ export class FakePig {
           task_code: code,
           open: task.open,
           parameters: task.parameters,
+          path_parameters: task.path_parameters ?? task.parameters,
           expires_after_sec: 86400,
           max_event_size_bytes: task.max_event_size_bytes,
           media: task.max_part_size ? { max_part_size_bytes: task.max_part_size } : null,
           encryption: task.public_key ? { public_key: task.public_key } : null,
+          parameter_signing: task.signed_parameters ? { signed_parameters: task.signed_parameters } : null,
         },
       };
     }
@@ -190,6 +197,9 @@ export class FakePig {
       const parameters = JSON.parse(body!);
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
+      if (task.signed_parameters && parameters.pig_sig !== "good") {
+        return { status: 403, body: { message: "The signature doesn't match. Use the link you were sent." } };
+      }
       const id = `run-${this.runs.size + 1}`;
       this.runs.set(id, { status: "in_progress", events: new Map(), parameters, media: new Map() });
       return { status: 201, body: { run_id: id, run_number: this.runs.size } };

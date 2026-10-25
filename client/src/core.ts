@@ -49,6 +49,12 @@ export { PigError };
 // offline run with a bad link fails at the start, not after the participant has done
 // the whole task.
 const SAFE_VALUE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
+// A text parameter: anything up to 2048 characters but control characters and half a
+// UTF-16 pair. The same rule as the server's; see docs/configuration.md.
+const MAX_TEXT_LENGTH = 2048;
+const NOT_TEXT = /[\p{Cc}\p{Cs}]/u;
+// The parameter a run's signature travels in.
+const SIGNATURE_PARAMETER = "pig_sig";
 
 export const DEFAULTS = {
   // Waiting between tries after a failure: doubling from the first, up to the cap, with
@@ -611,7 +617,14 @@ export class Core {
       this.log("debug", `Couldn't start run ${run.id} on the server yet: ${reply.message}`);
       return "later";
     }
-    const code = reply.status === 404 ? "task-unknown" : reply.status === 409 ? "task-closed" : "refused";
+    const code =
+      reply.status === 403
+        ? "bad-signature"
+        : reply.status === 404
+          ? "task-unknown"
+          : reply.status === 409
+            ? "task-closed"
+            : "refused";
     await this.store.updateRun(run.id, (r) => {
       r.failed = { code, message: reply.message };
     });
@@ -1157,14 +1170,28 @@ function checkParameters(settings: TaskSettings, parameters: TaskParameters): vo
       `This task needs ${settings.parameters.join(", ")} to start, and ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing. Check the link.`,
     );
   }
+  const pathParameters = settings.path_parameters ?? settings.parameters;
   for (const name of settings.parameters) {
     const value = parameters[name];
-    if (typeof value !== "string" || !SAFE_VALUE.test(value)) {
+    if (pathParameters.includes(name)) {
+      if (typeof value !== "string" || !SAFE_VALUE.test(value)) {
+        throw new PigError(
+          "parameters",
+          `${name}=${JSON.stringify(value)} isn't allowed. Values may use letters, digits, underscore, and dash (not first), 1 to 64 characters. Check the link.`,
+        );
+      }
+    } else if (typeof value !== "string" || value.length > MAX_TEXT_LENGTH || NOT_TEXT.test(value)) {
       throw new PigError(
         "parameters",
-        `${name}=${JSON.stringify(value)} isn't allowed. Values may use letters, digits, underscore, and dash (not first), 1 to 64 characters. Check the link.`,
+        `The value for ${name} isn't allowed. It may be any text up to ${MAX_TEXT_LENGTH} characters, without control characters like tabs or line breaks. Check the link.`,
       );
     }
+  }
+  if (settings.parameter_signing && !(SIGNATURE_PARAMETER in parameters)) {
+    throw new PigError(
+      "bad-signature",
+      `This task only starts runs from signed links, and this link has no ${SIGNATURE_PARAMETER}. Use the link you were sent, exactly as it is.`,
+    );
   }
 }
 
