@@ -10,7 +10,7 @@ The main developer is Nate Vack. In these documents, "I" normally refers to him,
 
 Early. Much of `docs/` is draft, and open questions are marked as such in place. Don't treat a draft as a decision, and don't quietly resolve an open question — raise it.
 
-There is now a working first implementation (the run, event, and media endpoints in `docs/api.md`, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
+There is now a working first implementation (the run, event, and media endpoints in `docs/api.md`, `/health`, TOML config, SQLite, `pig check|serve|sweep|runs|health|migrate`), built deliberately as something to get feedback on rather than as a settled design. It had to answer some open questions to exist; those answers are marked *provisional* where the question appears in `docs/`. A provisional answer is not a decision either — changing one should be cheap, and if it isn't, that's worth saying.
 
 This guidance applies generally -- when I've asked for something that conflicts with past decisions, or past decisions seem inappropriate for work you're doing, stop and ask rather than tying to brute-force your way through things, or guess what I mean. Sometimes I forget stuff. Sometimes I change my mind and forget to write it down.
 
