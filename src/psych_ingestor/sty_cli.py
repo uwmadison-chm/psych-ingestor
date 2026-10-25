@@ -340,6 +340,7 @@ def sign(
     *values: str,
     key: str,
     csv_file: Annotated[Path | None, cyclopts.Parameter(name="--csv")] = None,
+    column: str = signing.SIGNATURE_PARAMETER,
     url: str | None = None,
     config: StyConfigPath | None = None,
 ) -> None:
@@ -347,12 +348,12 @@ def sign(
     from it.
 
     Signs exactly the parameters the task's signed_parameters in pigsty.toml lists,
-    and prints the pig_sig value that goes in the link alongside them:
+    and prints the _sig value that goes in the link alongside them:
 
         pigsty sign stroop --key lucida/signing participant_id=10351 session=baseline
 
     With --csv, signs every row of a CSV file instead, and writes it to standard output
-    with a pig_sig column added. The file needs a column named for each signed
+    with a _sig column added. The file needs a column named for each signed
     parameter. Other columns are kept as they are, so a REDCap export can be signed and
     imported again:
 
@@ -371,8 +372,12 @@ def sign(
         The signing key to sign with, by name, from private_keys_dir.
     csv_file
         A CSV file to sign every row of.
+    column
+        With --csv, what to call the column the signatures go in. REDCap field names
+        have to start with a letter, so for REDCap, name it for the field, like sig,
+        and pipe it into the link as _sig=[sig].
     url
-        Print a whole link instead: this address, with the parameters and pig_sig added.
+        Print a whole link instead: this address, with the parameters and _sig added.
         Not used with --csv.
     """
     loaded = _load(config)
@@ -381,7 +386,7 @@ def sign(
     if csv_file is not None:
         if values or url:
             _fail("With --csv, the values come from the file. Leave out the others.")
-        _sign_csv(csv_file, task, signed_parameters, signing_key)
+        _sign_csv(csv_file, column, task, signed_parameters, signing_key)
         return
 
     given = _parse_values(list(values))
@@ -397,12 +402,12 @@ def sign(
             f"{task} doesn't sign {', '.join(unsigned)}; it signs "
             f"{', '.join(signed_parameters)}. Put anything else in the link unsigned."
         )
-    pig_sig = signing.sign(signing_key, task, given)
+    signature = signing.sign(signing_key, task, given)
     if url is None:
-        print(pig_sig)
+        print(signature)
         return
     query = urllib.parse.urlencode(
-        {**given, signing.SIGNATURE_PARAMETER: pig_sig}, quote_via=urllib.parse.quote
+        {**given, signing.SIGNATURE_PARAMETER: signature}, quote_via=urllib.parse.quote
     )
     print(f"{url}{'&' if '?' in url else '?'}{query}")
 
@@ -449,7 +454,11 @@ def _parse_values(values: list[str]) -> dict[str, str]:
 
 
 def _sign_csv(
-    path: Path, task: str, signed_parameters: list[str], signing_key: keys.SigningKey
+    path: Path,
+    column: str,
+    task: str,
+    signed_parameters: list[str],
+    signing_key: keys.SigningKey,
 ) -> None:
     try:
         # utf-8-sig, because Excel starts a "CSV UTF-8" file with a byte-order mark.
@@ -466,10 +475,9 @@ def _sign_csv(
             f"{path} has no column for {', '.join(missing)}. {task} signs "
             f"{', '.join(signed_parameters)}, and needs a column named for each."
         )
-    if signing.SIGNATURE_PARAMETER in columns:
+    if column in columns:
         _fail(
-            f"{path} already has a {signing.SIGNATURE_PARAMETER} column. Take it out to "
-            "sign the file again."
+            f"{path} already has a {column} column. Take it out to sign the file again."
         )
     # Every row is checked before anything is written, so a bad one never leaves half a
     # file behind. csv.DictReader fills a short row with None, and puts a long row's
@@ -480,16 +488,14 @@ def _sign_csv(
                 f"Row {number} of {path}, after the header, doesn't have the same "
                 "number of columns as the header."
             )
-    writer = csv.DictWriter(
-        sys.stdout, fieldnames=[*columns, signing.SIGNATURE_PARAMETER]
-    )
+    writer = csv.DictWriter(sys.stdout, fieldnames=[*columns, column])
     writer.writeheader()
     for row in rows:
         values = {name: row[name] for name in signed_parameters}
         writer.writerow(
             {
                 **row,
-                signing.SIGNATURE_PARAMETER: signing.sign(signing_key, task, values),
+                column: signing.sign(signing_key, task, values),
             }
         )
 

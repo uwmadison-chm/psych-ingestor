@@ -306,14 +306,14 @@ signed_by = ["lucida/signing"]
 A link for this task looks like this, with the signature as one more parameter:
 
 ```
-https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&pig_sig=lucida/signing.Xk3…
+https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&_sig=lucida/signing.Xk3…
 ```
 
 Every signed parameter is required, and the signature covers exactly those. Anything else in the link, like a `nextURL`, is an extra parameter as usual: recorded, unsigned, free to vary.
 
 A signed parameter that isn't a path parameter, like `modules` above, is **text**. It's kept exactly as it arrives, may be any text up to 2,048 characters without control characters like tabs or line breaks, and can never be used in an organize pattern. *Provisional, like allowing characters outside ASCII.* Path parameters are held to the safe value rule whether they're signed or not.
 
-`pig check` refuses a task that signs anything but leaves out part of the run key, since a participant could then change who they are while the rest of the link stayed locked. *Provisional.* It also refuses a `signed_by` that names a key the file doesn't have, or an encryption key, and any parameter whose name starts with `pig_`, which Pig keeps for its own, like `pig_sig`.
+`pig check` refuses a task that signs anything but leaves out part of the run key, since a participant could then change who they are while the rest of the link stayed locked. *Provisional.* It also refuses a `signed_by` that names a key the file doesn't have, or an encryption key, and any parameter whose name starts with `_`, which Pig keeps for its own, like `_sig`.
 
 Pig checks the signature when the run starts, and only then. A link that's missing its signature, was signed for another task or with a key the task doesn't list, or has had a value changed since it was signed, gets a `403`. After that, the run ID is what identifies the run, as it is for any task. The run records which key signed it, in the database and in its manifest; the signature itself isn't kept.
 

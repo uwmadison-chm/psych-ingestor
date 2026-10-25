@@ -26,7 +26,7 @@ export interface TaskSettings {
   /** The public key events and media parts are encrypted to, or null if the task
    * doesn't encrypt. Missing from settings saved by version 0.2.0 of the client. */
   encryption?: { public_key: string } | null;
-  /** The parameters a run's `pig_sig` has to cover, or null if the task doesn't check
+  /** The parameters a run's `_sig` has to cover, or null if the task doesn't check
    * signatures. Missing from settings saved by version 0.2.0 of the client. */
   parameter_signing?: { signed_parameters: string[] } | null;
 }

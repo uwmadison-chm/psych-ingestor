@@ -54,7 +54,7 @@ const SAFE_VALUE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
 const MAX_TEXT_LENGTH = 2048;
 const NOT_TEXT = /[\p{Cc}\p{Cs}]/u;
 // The parameter a run's signature travels in.
-const SIGNATURE_PARAMETER = "pig_sig";
+const SIGNATURE_PARAMETER = "_sig";
 
 export const DEFAULTS = {
   // Waiting between tries after a failure: doubling from the first, up to the cap, with

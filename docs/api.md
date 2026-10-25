@@ -576,14 +576,14 @@ Whether a run is encrypted is settled when it starts. Changing the task's config
 
 *Only for tasks whose configuration sets `signed_by`. The [JavaScript client](../client/README.md) does all of this for you.*
 
-A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The signature is one more parameter, `pig_sig`. Send it with the others when you start the run, exactly as the link had it:
+A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The signature is one more parameter, `_sig`. Send it with the others when you start the run, exactly as the link had it:
 
 ```json
 {
   "id": "10235",
   "event": "base",
   "modules": "questions:1,2,3|reels:03,22",
-  "pig_sig": "lucida/signing.Xk3p…"
+  "_sig": "lucida/signing.Xk3p…"
 }
 ```
 

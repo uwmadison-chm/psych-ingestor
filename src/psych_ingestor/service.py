@@ -900,7 +900,7 @@ def _as_purge_hashes(submitted: Any) -> dict[str, str]:
 
 
 def _check_signature(
-    task: TaskDefinition, parameters: dict[str, str], pig_sig: Any
+    task: TaskDefinition, parameters: dict[str, str], signature: Any
 ) -> str:
     """The name of the key that signed this run's parameters, or a 403 saying why
     they don't check out.
@@ -911,7 +911,7 @@ def _check_signature(
     """
     values = {name: parameters[name] for name in task.signed_parameters}
     try:
-        return signing.verify(pig_sig, task.code, values, task.signing_keys)
+        return signing.verify(signature, task.code, values, task.signing_keys)
     except signing.BadSignature as bad:
         raise RequestProblem(
             403,

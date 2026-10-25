@@ -38,9 +38,9 @@ TEXT_VALUE_EXPLANATION = (
     "like tabs or line breaks"
 )
 
-# Every parameter name starting with this is Pig's own, like `pig_sig`, so a task's
+# Every parameter name starting with this is Pig's own, like `_sig`, so a task's
 # parameters can never collide with one.
-RESERVED_PARAMETER_PREFIX = "pig_"
+RESERVED_PARAMETER_PREFIX = "_"
 
 
 # A working copy keeps its configuration, database, and data under `local/`, which is the
@@ -229,7 +229,7 @@ class TaskDefinition(BaseModel):
             if name.startswith(RESERVED_PARAMETER_PREFIX):
                 raise ValueError(
                     f"parameter name {name!r} starts with {RESERVED_PARAMETER_PREFIX}, "
-                    "which is kept for Pig's own parameters, like pig_sig. Call it "
+                    "which is kept for Pig's own parameters, like _sig. Call it "
                     "something else."
                 )
 

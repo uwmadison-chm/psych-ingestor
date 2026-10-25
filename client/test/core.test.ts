@@ -108,8 +108,8 @@ describe("a run while online", () => {
     const pig = new FakePig();
     pig.tasks.stroop.signed_parameters = ["participant_id", "session"];
     const { core } = await setUp({ pig });
-    await assert.rejects(startRun(core, { parameters: { ...PARAMETERS, pig_sig: "bad" } }), { code: "bad-signature" });
-    await startRun(core, { parameters: { ...PARAMETERS, pig_sig: "good" } });
+    await assert.rejects(startRun(core, { parameters: { ...PARAMETERS, _sig: "bad" } }), { code: "bad-signature" });
+    await startRun(core, { parameters: { ...PARAMETERS, _sig: "good" } });
   });
 
   test("passes extra run parameters through", async () => {

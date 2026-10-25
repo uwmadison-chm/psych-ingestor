@@ -11,7 +11,7 @@ covers those: the task code, the key's name, and each signed parameter's name an
 Pig builds that message itself, on both sides (`pigsty sign` and `pig serve`), so a
 participant's browser never has to put anything in a canonical order.
 
-The signature travels as one more parameter, `pig_sig`, written `{key name}.{signature}`.
+The signature travels as one more parameter, `_sig`, written `{key name}.{signature}`.
 A key name never has a dot in it, and the signature is base64url, which doesn't either.
 
 Signatures don't expire. An offline participant can do a whole run before their device
@@ -30,10 +30,9 @@ from cryptography.exceptions import InvalidSignature
 
 from . import keys
 
-# The parameter a signature travels in. Every parameter name starting `pig_` is Pig's,
-# so a task's own can never collide with it.
-SIGNATURE_PARAMETER = "pig_sig"
-RESERVED_PREFIX = "pig_"
+# The parameter a signature travels in. Every parameter name starting `_` is Pig's (see
+# `config.RESERVED_PARAMETER_PREFIX`), so a task's own can never collide with it.
+SIGNATURE_PARAMETER = "_sig"
 
 # Bumped if what's signed ever changes, so an old signature can't be read as a new one.
 MESSAGE_VERSION = 1
@@ -63,30 +62,30 @@ def message(task_code: str, key_name: str, values: dict[str, str]) -> bytes:
 
 
 def sign(key: keys.SigningKey, task_code: str, values: dict[str, str]) -> str:
-    """The `pig_sig` value for these parameters."""
+    """The `_sig` value for these parameters."""
     signature = key.private.sign(message(task_code, key.name, values))
     encoded = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
     return f"{key.name}.{encoded}"
 
 
 def verify(
-    pig_sig: object,
+    signature: object,
     task_code: str,
     values: dict[str, str],
     accepted: dict[str, str],
 ) -> str:
-    """Check a `pig_sig` against the values it should cover, and return the name of the
+    """Check a `_sig` against the values it should cover, and return the name of the
     key that signed it. `accepted` is the task's `signed_by`: each key's name and its
     public key.
 
     Raises BadSignature, saying what's wrong, for a signature that's missing, can't be
     read, is by a key the task doesn't accept, or doesn't match the values.
     """
-    if pig_sig is None:
+    if signature is None:
         raise BadSignature(f"there's no {SIGNATURE_PARAMETER} parameter.")
-    if not isinstance(pig_sig, str):
+    if not isinstance(signature, str):
         raise BadSignature(f"{SIGNATURE_PARAMETER} has to be text.")
-    key_name, _, encoded = pig_sig.rpartition(".")
+    key_name, _, encoded = signature.rpartition(".")
     try:
         keys.check_key_name(key_name)
     except ValueError:

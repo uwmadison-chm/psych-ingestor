@@ -17,7 +17,7 @@ interface FakeTask {
   /** The ones held to the safe-value rule, if not all of them. */
   path_parameters?: string[];
   /** The parameters a signature covers, for a task that checks them. The pretend Pig
-   * takes a pig_sig of "good", and no other. */
+   * takes a _sig of "good", and no other. */
   signed_parameters?: string[];
   open: boolean;
   max_event_size_bytes: number;
@@ -197,7 +197,7 @@ export class FakePig {
       const parameters = JSON.parse(body!);
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
-      if (task.signed_parameters && parameters.pig_sig !== "good") {
+      if (task.signed_parameters && parameters._sig !== "good") {
         return { status: 403, body: { message: "The signature doesn't match. Use the link you were sent." } };
       }
       const id = `run-${this.runs.size + 1}`;
