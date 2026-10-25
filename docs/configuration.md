@@ -46,15 +46,15 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 open = true
 max_event_size = "1M"      # optional, defaults to 1M
 expires_after = "24h"      # optional, defaults to 24h
 
 [task.interview]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true               # this task records audio; off unless you say so
 max_part_size = "8M"       # optional, defaults to 8M
 ```
@@ -263,8 +263,8 @@ allow. See [deployment.md](deployment.md).
 public_keys_file = "public_keys.txt"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 encrypt_to = "lucida/2026a"
 ```
 

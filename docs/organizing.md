@@ -138,11 +138,11 @@ The directory is everything up to the last `/` before the first placeholder. It'
 The pattern is filled in from each run. Its placeholders, in braces, are:
 
 - `{task_code}` and `{run_number}`, which every run has. The run number is written with four digits, `0001`.
-- Any parameter the task lists under `parameters` in `pig.toml`, like `{participant_id}`.
+- Any parameter the task lists under `path_parameters` in `pig.toml`, like `{participant_id}`.
 
 Every pattern has to include `{run_number}`. Without it, a participant's second run would land on top of the first.
 
-Only parameters the task declares can be used. Extra parameters that arrive in a link, like `utm_source`, are recorded but never checked, so they can't become part of a path. To use one, add it to the task's `parameters`.
+Only parameters the task declares can be used. Extra parameters that arrive in a link, like `utm_source`, are recorded but never checked, so they can't become part of a path. To use one, add it to the task's `path_parameters`.
 
 Every part of the path the pattern makes, its fixed parts included, has to be a [safe value](configuration.md#safe-values): letters, digits, underscore, and dash. So `run-{run_number}` is fine, and `v1.2/{run_number}` isn't. The task's directory can be anything.
 

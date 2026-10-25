@@ -94,8 +94,8 @@ def check(*, config: ConfigPath | None = None) -> None:
     for code, task in sorted(loaded.task.items()):
         state = "open" if task.open else "closed"
         print(f"\n{code} ({state})")
-        print(f"  expects:     {', '.join(task.parameters)}")
-        print(f"  run key:     {', '.join(task.run_key)}")
+        print(f"  expects:     {', '.join(task.path_parameters)}")
+        print(f"  run key:     {', '.join(task.run_key_parameters)}")
         print(
             f"  runs expire: {describe_duration(task.expires_after)} after they start"
         )

@@ -485,7 +485,7 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
                 f"the pattern uses {{{name}}}, which this task doesn't declare. It "
                 "arrived in the link as an extra parameter, and those are never "
                 "checked, so they can't be used in a path. Add it to the task's "
-                "parameters in pig.toml if it should be."
+                "path_parameters in pig.toml if it should be."
             )
         raise RunProblem(
             f"the pattern uses {{{name}}}, and this run has no parameter by that "

@@ -108,8 +108,11 @@ class TaskDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    parameters: list[str]
-    run_key: list[str]
+    # Parameters Pig holds to the safe-value rule, so `pigsty organize` can use them in
+    # a path. See docs/configuration.md.
+    path_parameters: list[str]
+    # The path parameters whose values decide whether two runs are repeats of each other.
+    run_key_parameters: list[str]
     open: bool = True
     max_event_size: int = Field(default=1024 * 1024)
     # How long a run may stay open, counted from when it started. After this, the next
@@ -142,6 +145,12 @@ class TaskDefinition(BaseModel):
                 "abandon_after is now called expires_after. It means the same thing: how "
                 "long a run may stay open, counted from when it started."
             )
+        if isinstance(raw, dict) and {"parameters", "run_key"} & raw.keys():
+            raise ValueError(
+                "parameters and run_key are now called path_parameters and "
+                "run_key_parameters. They mean the same things: the parameters a run "
+                "needs, which can be used in a path, and which of them identify the run."
+            )
         if isinstance(raw, dict) and "path" in raw:
             raise ValueError(
                 "path is no longer a task setting; remove it. See docs/configuration.md."
@@ -160,22 +169,26 @@ class TaskDefinition(BaseModel):
 
     @model_validator(mode="after")
     def _check_coherence(self) -> TaskDefinition:
-        for name in self.parameters:
+        for name in self.path_parameters:
             if not name.isidentifier():
                 raise ValueError(
                     f"parameter name {name!r} isn't usable; parameter names should look "
                     "like participant_id"
                 )
 
-        missing = [name for name in self.run_key if name not in self.parameters]
+        missing = [
+            name for name in self.run_key_parameters if name not in self.path_parameters
+        ]
         if missing:
             raise ValueError(
-                f"run_key names {missing} that aren't in parameters. Every part of the "
-                "run key has to be something the link supplies."
+                f"run_key_parameters names {missing} that aren't in path_parameters. "
+                "pigsty organize builds a run's path from its run key, so every part of "
+                "it has to be usable in a path."
             )
-        if not self.run_key:
+        if not self.run_key_parameters:
             raise ValueError(
-                "run_key can't be empty; a run has to be a repeat of something"
+                "run_key_parameters can't be empty; a run has to be a repeat of "
+                "something"
             )
         return self
 

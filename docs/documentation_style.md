@@ -91,7 +91,7 @@ happened and what to do.
 > No: Invalid run parameters.
 >
 > Yes: This task expects a `participant_id` in the link, and the link didn't have one.
-> Check the link you sent participants, or the `parameters` setting for this task.
+> Check the link you sent participants, or the `path_parameters` setting for this task.
 
 Name the specific thing that was wrong. "Invalid configuration" sends someone hunting
 through a file; "the `data_path` for task `stroop` points outside the data directory" does

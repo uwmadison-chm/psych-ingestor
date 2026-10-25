@@ -16,12 +16,12 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 
 [task.balloons]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 """
 
 
@@ -118,8 +118,8 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.Stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 """
     with pytest.raises(ConfigurationError):
         load_config(write_config(tmp_path, config_text))
@@ -131,23 +131,38 @@ data_root = "./data"
 database = "./pig.db"
 
 [task."stroop.v2"]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 """
     with pytest.raises(ConfigurationError):
         load_config(write_config(tmp_path, config_text))
 
 
-def test_load_config_rejects_run_key_not_in_parameters(tmp_path: Path) -> None:
+def test_load_config_rejects_run_key_not_in_path_parameters(tmp_path: Path) -> None:
+    config_text = """
+data_root = "./data"
+database = "./pig.db"
+
+[task.stroop]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id", "session"]
+"""
+    with pytest.raises(ConfigurationError):
+        load_config(write_config(tmp_path, config_text))
+
+
+def test_load_config_names_the_renamed_parameter_lists(tmp_path: Path) -> None:
+    """`parameters` and `run_key` were renamed for issue #44. The old names are refused,
+    with the new ones in the message."""
     config_text = """
 data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
 parameters = ["participant_id"]
-run_key = ["participant_id", "session"]
+run_key = ["participant_id"]
 """
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(ConfigurationError, match="path_parameters"):
         load_config(write_config(tmp_path, config_text))
 
 
@@ -159,8 +174,8 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 path = "{participant_id}/{run_number}.jsonl"
 """
     with pytest.raises(ConfigurationError) as raised:
@@ -174,8 +189,8 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 abandon_after = "24h"
 """
     with pytest.raises(ConfigurationError) as raised:
@@ -189,8 +204,8 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 expires_after = "7d"
 """
     config = load_config(write_config(tmp_path, config_text))
@@ -238,8 +253,8 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.interview]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "2M"
 """

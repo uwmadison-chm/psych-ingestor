@@ -44,27 +44,27 @@ database = "./pig.db"
 public_keys_file = "./public_keys.txt"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 
 # Small parts, so a modest recording is cut into several.
 [task.voice]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "64K"
 
 # Encrypted in the browser. Small parts, so the recording is cut into several.
 [task.sealed]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "64K"
 encrypt_to = "e2e"
 
 [task.closed]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 open = false
 `,
 );

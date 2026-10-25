@@ -81,7 +81,7 @@ class Pig:
         return {
             "task_code": task.code,
             "open": task.open,
-            "parameters": task.parameters,
+            "parameters": task.path_parameters,
             "expires_after_sec": task.expires_after,
             "max_event_size_bytes": task.max_event_size,
             # A feature a task can have off is `null` when it's off and an object of its
@@ -120,8 +120,10 @@ class Pig:
             self.connection,
             run_id=run_id,
             task_code=task.code,
-            run_key_hash=runs.hash_run_key([parameters[name] for name in task.run_key]),
-            run_key_names=list(task.run_key),
+            run_key_hash=runs.hash_run_key(
+                [parameters[name] for name in task.run_key_parameters]
+            ),
+            run_key_names=list(task.run_key_parameters),
             parameters=parameters,
             extra_parameters=extra,
             started_at=db.now(),
@@ -145,12 +147,12 @@ class Pig:
             )
 
         parameters: dict[str, str] = {}
-        for name in task.parameters:
+        for name in task.path_parameters:
             if name not in submitted:
                 raise RequestProblem(
                     422,
                     f"This task needs {name!r}, and it wasn't in the request. It expects "
-                    f"{task.parameters}.",
+                    f"{task.path_parameters}.",
                 )
             value = submitted[name]
             # A JSON number is what you get from `participant_id: 10351` in JavaScript,

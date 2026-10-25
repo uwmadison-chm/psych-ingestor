@@ -29,14 +29,14 @@ database = "./pig.db"
 public_keys_file = "public_keys.txt"
 
 [task.secret]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 encrypt_to = "lucida/2026a"
 
 [task.plain]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 """
 
 
