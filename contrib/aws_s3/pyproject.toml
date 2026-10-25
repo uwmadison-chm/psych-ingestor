@@ -1,0 +1,21 @@
+[project]
+name = "pig-aws-s3"
+version = "0.1.0"
+description = "Helpers for running Psych Ingestor with an S3 bucket in the middle"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.36",
+]
+
+[project.scripts]
+pig-expire-versions = "pig_aws_s3.expire:main"
+
+[build-system]
+requires = ["uv_build>=0.11.22,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.16.0",
+]

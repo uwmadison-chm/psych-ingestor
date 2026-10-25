@@ -14,6 +14,8 @@ runs — writing each one's manifest and moving it into `done/` — expiring run
 been open longer than their task allows, and retrying whatever didn't work last time.
 Copying finished runs offsite isn't built yet; when it is, it'll run here too.
 
+If finished runs go offsite through a versioned S3 bucket on a service without lifecycle rules, `contrib/aws_s3/` has a script that expires old versions in their place. It runs on the secure side, not here.
+
 Both are required. A deployment that runs only the service collects data correctly and
 never finishes any of it — runs pile up in `finalizing`, which is not data loss but is not
 finished either.
