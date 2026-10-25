@@ -41,6 +41,7 @@
     "check": "tsc -p .",
     "test": "node --test test/*.test.ts",
     "e2e": "npm run build && playwright test",
+    "benchmark": "node scripts/build-benchmark.js",
     "prepublishOnly": "npm run check && npm test && npm run build"
   },
   "devDependencies": {

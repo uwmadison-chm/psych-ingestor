@@ -343,7 +343,10 @@ npm run check        # type-check
 npm test             # the queue and sender, in Node, against a pretend Pig
 npm run build        # dist/
 npm run e2e          # a real browser against a real `pig serve`
+npm run benchmark    # benchmarks/dist/encryption.html
 ```
+
+The benchmark page times the client's encryption, for events and for recordings, in whatever browser opens it. It's one file with nothing to fetch, so it can go on any https server and be opened on a phone; a browser only encrypts on a page it considers secure, which an https page, localhost, or a file is, and a plain http address isn't.
 
 Node runs the TypeScript sources directly, without compiling them, so the code sticks to
 TypeScript that only adds types: no enums, no namespaces. It needs Node 22.18 or later.
