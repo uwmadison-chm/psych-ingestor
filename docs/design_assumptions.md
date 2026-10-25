@@ -54,10 +54,10 @@ That one lasted a few weeks, which is the lesson. If an exception ever comes bac
 needs silent corruption on one side, an ordinary human typo on the other, no information
 destroyed — and a reason that would survive the next change of layout.
 
-## Run parameters will be used in filenames; be careful
+## Path parameters will be used in filenames; be careful
 
 Pig stores every run under its run ID, so nothing a participant supplies becomes a path
-on the collecting machine. But `pigsty organize` builds a readable tree like
+on the collecting machine. But `pigsty organize` builds a readable tree from a task's path parameters, like
 
 `{task_code}/{participant_id}/{session}_run-0001.jsonl`
 
@@ -69,6 +69,8 @@ trying to sanitize.
 The rule for what counts as safe is in [configuration.md](configuration.md), and it's
 deliberately narrow: letters, digits, underscore, and a non-leading dash. Narrow enough
 that `..` can't be expressed, so traversal isn't a thing we have to be clever about.
+
+A parameter that isn't a path parameter (only a signed one, so far) isn't held to that rule, and organize refuses to put it in a path. Which parameters were path parameters is recorded in each run's manifest, so organize can tell without `pig.toml`. See issue #44.
 
 ## Data is minimally-processed JSONL
 

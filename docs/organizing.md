@@ -16,6 +16,8 @@ Pig stores each finished run in a directory named for its run ID: `done/stroop/9
 
 Neither runs on the web server. Neither reads `pig.toml` or Pig's database, so neither has to be there. Everything they need is in each run.
 
+The same machine also signs links, with `pigsty sign`, for tasks that only start runs from signed ones. See [Signing links](#signing-links).
+
 ## pigsty.toml
 
 Where the data ends up gets its own configuration file, `pigsty.toml`, separate from the web server's `pig.toml`. Keep the two on different machines: `pigsty.toml` is for the side that will eventually hold private keys, and nothing about it should be on a public-facing server.
@@ -129,6 +131,51 @@ age -d -i lucida/2026a.key media/00001/000001.part > 000001.webm-part
 
 That's also the yearly check that the backed-up key works: decrypt one real run with the backup, on a machine that isn't the secure server.
 
+## Signing links
+
+A task with `signed_by` in `pig.toml` only starts a run from a link whose parameters were signed with one of its signing keys. The signing keys live in `private_keys_dir`, beside the encryption keys, and their public halves go to the web server in the same exported file:
+
+```
+pigsty keys new --signing lucida/signing
+pigsty keys export > public_keys.txt
+```
+
+Copy the file to the web server and add `signed_by = ["lucida/signing"]` to the task, with its `signed_parameters`. See [configuration.md](configuration.md#parameter-signing).
+
+`pigsty sign` needs to know which parameters to sign, and never reads `pig.toml`, so the task's entry in `pigsty.toml` lists them too, the same list:
+
+```toml
+# pigsty.toml
+[task.teddy]
+datastore_base = "/secure/lucida/pig/teddy"
+organized = "/secure/lucida/intermediate_data/pig/teddy/{id}/{event}_{run_number}"
+signed_parameters = ["id", "event", "modules"]
+```
+
+If the two lists differ, links signed here don't start runs there, so the first test link shows it. With `pig_url` set, `pigsty check` also compares them with what the web server says, and warns if they differ.
+
+To sign one link's parameters, give their values. It prints the `pig_sig` to add to the link:
+
+```
+pigsty sign teddy --key lucida/signing id=10235 event=base 'modules=questions:1,2,3|reels:03,22'
+```
+
+With `--url`, it prints the whole link, ready to paste into a browser, which is the easy way to test a task that checks signatures:
+
+```
+pigsty sign teddy --key lucida/signing --url https://teddy.example.edu/ id=10235 event=base modules=reels:01
+```
+
+To sign a whole list of participants, give it a CSV file with a column named for each signed parameter. It writes the file again with a `pig_sig` column added, keeping every other column as it was:
+
+```
+pigsty sign teddy --key lucida/signing --csv roster.csv > signed.csv
+```
+
+For REDCap, import `signed.csv` into a text field called `pig_sig`, and build the link by piping: `…?id=[record_id]&event=base&modules=…&pig_sig=[pig_sig]`. In a longitudinal project, the field is on each event, so each session gets its own signature. REDCap can't make the signature itself, which is why it's made here, on the machine with the key.
+
+Signatures don't expire, and a signing key can't be used to decrypt anything. Back the key file up like any other: losing it means signing every outstanding link again with a new key. Anyone who has it can make links that work, so it never leaves this machine except to be backed up.
+
 ## Patterns
 
 A task's `organized` is a directory, then a pattern. In the example above, the directory is `/some/mount/mystudy/intermediate_data/pig/stroop` and the pattern is `{session}/{participant_id}_{run_number}`.
@@ -142,7 +189,7 @@ The pattern is filled in from each run. Its placeholders, in braces, are:
 
 Every pattern has to include `{run_number}`. Without it, a participant's second run would land on top of the first.
 
-Only parameters the task declares can be used. Extra parameters that arrive in a link, like `utm_source`, are recorded but never checked, so they can't become part of a path. To use one, add it to the task's `path_parameters`.
+Only path parameters can be used. Extra parameters that arrive in a link, like `utm_source`, are recorded but never checked, so they can't become part of a path. Nor can a signed parameter that isn't a path parameter, like Teddy's `modules`: it's text, which can be anything. To use one, add it to the task's `path_parameters`, and Pig will hold it to the rule for values in paths from then on. Which parameters were path parameters is recorded in each run's `pig-run.json`, so organize knows without `pig.toml`.
 
 Every part of the path the pattern makes, its fixed parts included, has to be a [safe value](configuration.md#safe-values): letters, digits, underscore, and dash. So `run-{run_number}` is fine, and `v1.2/{run_number}` isn't. The task's directory can be anything.
 
@@ -166,7 +213,7 @@ Only one `pigsty organize` works on a task at a time.
 
 - **Two runs would land in the same place.** Neither is placed, unless one is already in the tree, in which case it stays and the new one isn't placed. This happens when a pattern leaves out something that tells runs apart, or when two values differ only in capitals: `PPT-1003` and `ppt-1003` are two participants to Pig, but one directory on a Mac.
 - **Something else is already at its path** in the tree.
-- **The pattern names something the run doesn't have**, or a value isn't safe in a path. Values are checked again here, whatever the web server checked, because a web server that's been broken into can write anything.
+- **The pattern names something the run doesn't have**, or a parameter that isn't a path parameter, or a value isn't safe in a path. Values are checked again here, whatever the web server checked, because a web server that's been broken into can write anything.
 - **The run has a symbolic link in it.**
 - **The run has no `pig-run.json`.** Everything in `runs/` should have been put there by `pigsty admit`.
 

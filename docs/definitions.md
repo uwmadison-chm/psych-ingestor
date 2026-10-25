@@ -196,7 +196,7 @@ copies the file as it is. A run that never sent an
 event still has an empty `events.jsonl`, so "is the dataset there" always has one answer.
 
 `manifest.json` says what the run is without reference to Pig: the task code, the run
-number and which parameters it counts, the parameters the link carried, whether the run
+number and which parameters it counts, the parameters the run started with and which of them were path parameters and which were signed, the key that signed them, whether the run
 was finalized or expired, when it started, closed and was finished, which events are
 media items and whether each was finished, and the size and hash of every other file in
 the directory, media parts included. It's written once, when the sweep finishes the run,
@@ -266,11 +266,15 @@ task is open. Lives in a version-controlled file. See [configuration.md](configu
 The directory Pig stores data under. It holds two trees, `in_progress/` and `done/`, each
 with one directory per task and one directory per run inside that.
 
+## Run parameters
+
+What a task sends Pig when it starts a run: names and values, like `participant_id=10351`. Usually they come from the link the participant followed, but not always; a task can build them itself. A task's configuration says which it needs. Its **path parameters** may end up in file names, so their values are held to the safe value rule. Its **signed parameters** are covered by a signature, if it checks one, and a signed parameter that isn't a path parameter is text. Any others that arrive are **extra parameters**: recorded, and never used for anything. See [configuration.md](configuration.md#identifying-the-run).
+
 ## Parameter signing
 
 An optional per-task feature: run parameters carry a signature proving the link came from
 you, so a participant can't edit their own ID or condition assignment. Off by default,
-because it makes testing considerably harder.
+because it makes testing considerably harder. See [configuration.md](configuration.md#parameter-signing).
 
 ## Open / closed
 

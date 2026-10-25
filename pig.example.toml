@@ -40,3 +40,12 @@ max_part_size = "8M"      # optional, defaults to 8M; most tasks never set it
 #
 # public_keys_file = "./public_keys.txt"   # at the top of the file, above any [task.…]
 # encrypt_to = "lucida/2026a"              # in a task
+
+# Only starting runs from signed links, so a participant can't edit their own. Needs
+# public_keys_file too, with a signing key the secure side made with
+# `pigsty keys new --signing lucida/signing`. Every part of the run key has to be
+# signed. A signed parameter that isn't in path_parameters is text, like a list of
+# modules, and can't be used in a path. See docs/configuration.md.
+#
+# signed_parameters = ["participant_id", "session"]   # in a task
+# signed_by = ["lucida/signing"]                      # in a task

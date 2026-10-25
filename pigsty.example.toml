@@ -10,9 +10,10 @@
 # Where Pig's web server is, for pigsty purge.
 pig_url = "http://127.0.0.1:8000"
 
-# The private keys encrypted runs are decrypted with, one .key file each. Only needed
-# once a task encrypts: uncomment it, and make a key with
-# `pigsty keys new lucida/2026a`. See docs/organizing.md.
+# The private keys encrypted runs are decrypted with and links are signed with, one .key
+# file each. Only needed once a task encrypts or checks signatures: uncomment it, and
+# make a key with `pigsty keys new lucida/2026a` or
+# `pigsty keys new --signing lucida/signing`. See docs/organizing.md.
 # private_keys_dir = "./private_keys"
 
 [task.stroop]
@@ -21,6 +22,9 @@ pig_url = "http://127.0.0.1:8000"
 datastore_base = "./stroop-data"
 # Where pigsty organize puts each run. Everything before the first placeholder is a
 # directory of this task's own; the rest is filled in from each run. Placeholders are
-# {task_code}, {run_number}, and any parameter the task declares in pig.toml. It has
+# {task_code}, {run_number}, and any of the task's path_parameters in pig.toml. It has
 # to include {run_number}.
 organized = "./organized/stroop/{session}/{participant_id}_{run_number}"
+# For a task that checks signatures: the parameters pigsty sign signs, the same list as
+# the task's signed_parameters in pig.toml.
+# signed_parameters = ["participant_id", "session"]

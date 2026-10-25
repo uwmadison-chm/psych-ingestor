@@ -28,11 +28,11 @@ what holds your data. (Pig borrows its words from BIDS: a participant comes in f
   `session`. This is also set in configuration, and Pig will reject a run that doesn't
   match.
 
-Those parameters will eventually become directory and file names, so their values are
+Most of those parameters will eventually become directory and file names, so their values are
 restricted: letters, digits, underscore, and dash, up to 64 characters, and no dash at the
 start. Anything else — a space, a dot, an accented letter, an empty value — and Pig
 refuses to start the run rather than guessing at what you meant. Worth knowing when you're
-deciding what to put in participant links.
+deciding what to put in participant links. (A task that [checks signatures](#signed-links) can also take parameters that are text, which are held to a looser rule. `GET /task/{task_code}` says which are which.)
 
 Case matters. `?session=Baseline` and `?session=baseline` are two different sessions, and
 Pig keeps exactly what your link said. If your links come from more than one place, make
@@ -115,10 +115,12 @@ it may send media. The JavaScript client uses it so it can start a run while off
   "task_code": "stroop",
   "open": true,
   "parameters": ["participant_id", "session"],
+  "path_parameters": ["participant_id", "session"],
   "expires_after_sec": 86400,
   "max_event_size_bytes": 1048576,
   "media": null,
-  "encryption": null
+  "encryption": null,
+  "parameter_signing": null
 }
 ```
 
@@ -126,10 +128,12 @@ it may send media. The JavaScript client uses it so it can start a run while off
 | --- | --- |
 | `open` | Whether Pig will start new runs for this task. |
 | `parameters` | The parameters a run needs. |
+| `path_parameters` | The ones whose values have to be letters, digits, underscore, and dash, because they may end up in file names. The rest are text: anything up to 2,048 characters, without control characters like tabs or line breaks. |
 | `expires_after_sec` | How long a run may stay open, in seconds, counted from when it started. See [When a run expires](#when-a-run-expires). |
 | `max_event_size_bytes` | The biggest event Pig will store, in bytes, measured as JSON. |
 | `media` | `null` if this task can't send audio, video, and other files. If it can, the settings for them (below). |
 | `encryption` | `null` if this task doesn't encrypt. If it does, `{"public_key": "age1…"}`, the key to encrypt to. See [Encrypted tasks](#encrypted-tasks). |
+| `parameter_signing` | `null` if this task starts a run from any link. If it only starts runs from signed links, `{"signed_parameters": [...]}`, the parameters the signature covers. See [Signed links](#signed-links). |
 
 A task that takes media gets its media settings instead of `null`:
 
@@ -162,7 +166,7 @@ Send the run parameters as JSON:
 ```
 
 Pig checks them against what your task's configuration expects, and refuses the run if they
-don't match.
+don't match: `422` for a parameter that's missing or has a value Pig can't use, and `403` for a link whose [signature](#signed-links) doesn't check out.
 
 You get back the run ID to use in every later request, and the run number — which time this
 is for this participant and session:
@@ -567,6 +571,27 @@ Your task can't read its own events back once they're encrypted. Keep anything i
 **Pig checks that each event and part is encrypted, not who it's encrypted to.** It can't tell which key was used; that's how age works. An event or part that isn't encrypted is refused with `can_retry: false`. The usual cause is a browser that saved the task's settings before encryption was turned on. Reloading the page fetches them again, and a new run will encrypt.
 
 Whether a run is encrypted is settled when it starts. Changing the task's configuration while a run is going doesn't change what that run accepts.
+
+## Signed links
+
+*Only for tasks whose configuration sets `signed_by`. The [JavaScript client](../client/README.md) does all of this for you.*
+
+A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The signature is one more parameter, `pig_sig`. Send it with the others when you start the run, exactly as the link had it:
+
+```json
+{
+  "id": "10235",
+  "event": "base",
+  "modules": "questions:1,2,3|reels:03,22",
+  "pig_sig": "lucida/signing.Xk3p…"
+}
+```
+
+Your task doesn't need to know anything about signatures: it never makes or checks one. `GET /task/{task_code}` says which parameters a signature covers, so a task can tell a participant their link is broken before it asks Pig, but Pig is the one that checks.
+
+If the signature is missing, can't be read, was made for another task or with a key this task doesn't accept, or a value it covers has changed, you get `403 Forbidden`, with a message saying which. Tell the participant to use the link they were sent. Retrying won't help, and nor will an edited link.
+
+Pig checks the signature only when the run starts. Every later request uses the run ID, as for any task. Signatures don't expire, so a link works as long as the key that signed it is listed for the task.
 
 ## Cross-origin requests
 
