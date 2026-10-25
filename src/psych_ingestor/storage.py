@@ -34,7 +34,7 @@ START_LENGTH = 64
 # Every manifest carries these two, so a reader can tell what it's looking at and which
 # shape to expect. Bump the version when the manifest's shape changes.
 MANIFEST_TYPE = "pig_run_manifest"
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 
 
 def run_directory(root: Path, task_code: str, run_id: str) -> Path:
@@ -330,7 +330,11 @@ def manifest_for(
         "run_number": run.run_number,
         # The ordered parameter names, because "this is run 2" means nothing offline
         # unless you know 2 of what.
-        "run_key": run.run_key_names,
+        "run_key_parameters": run.run_key_names,
+        # Which of `parameters` were held to the safe-value rule, so organize can tell a
+        # value it may put in a path from one it mustn't, and which ones were signed.
+        "path_parameters": run.path_parameter_names,
+        "signed_parameters": run.signed_parameter_names,
         "disposition": run.disposition.value,
         "started_at": run.started_at.isoformat(),
         "closed_at": run.closed_at.isoformat(),
@@ -342,6 +346,9 @@ def manifest_for(
         # parts. The files below are then the ciphertext, and pigsty admit decrypts
         # them. Null for a run that isn't encrypted.
         "encrypted_to": run.encrypted_to,
+        # The name of the key that signed `signed_parameters`, which Pig checked when
+        # the run started. Null for a run whose task didn't check signatures.
+        "signed_by": run.signed_by,
         "files": describe_files(directory),
     }
 

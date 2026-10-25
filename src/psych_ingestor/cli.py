@@ -94,7 +94,14 @@ def check(*, config: ConfigPath | None = None) -> None:
     for code, task in sorted(loaded.task.items()):
         state = "open" if task.open else "closed"
         print(f"\n{code} ({state})")
-        print(f"  expects:     {', '.join(task.path_parameters)}")
+        print(f"  expects:     {', '.join(task.required_parameters)}")
+        text = [
+            name
+            for name in task.required_parameters
+            if name not in task.path_parameters
+        ]
+        if text:
+            print(f"  as text:     {', '.join(text)} (not usable in a path)")
         print(f"  run key:     {', '.join(task.run_key_parameters)}")
         print(
             f"  runs expire: {describe_duration(task.expires_after)} after they start"
@@ -105,6 +112,9 @@ def check(*, config: ConfigPath | None = None) -> None:
             )
         if task.encrypt_to:
             print(f"  encrypts to: {task.encrypt_to}")
+        if task.checks_signatures:
+            print(f"  signed:      {', '.join(task.signed_parameters)}")
+            print(f"  signed by:   {', '.join(task.signed_by)}")
     largest = max(
         (task.max_part_size for task in loaded.task.values() if task.media), default=0
     )

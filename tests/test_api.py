@@ -59,10 +59,12 @@ def test_reading_a_tasks_settings(client: TestClient):
         "task_code": "stroop",
         "open": True,
         "parameters": ["participant_id", "session"],
+        "path_parameters": ["participant_id", "session"],
         "expires_after_sec": 86400,
         "max_event_size_bytes": 1048576,
         "media": None,
         "encryption": None,
+        "parameter_signing": None,
     }
 
 

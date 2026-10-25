@@ -53,14 +53,16 @@ RUNS_DIRECTORY = "runs"
 # copied by organize into the readable tree.
 RUN_FILE = "pig-run.json"
 RUN_FILE_TYPE = "pig_run"
-RUN_FILE_VERSION = 1
+RUN_FILE_VERSION = 2
 
 # The manifest's fields that describe the run rather than its files.
 RUN_FIELDS = (
     "run_id",
     "task_code",
     "run_number",
-    "run_key",
+    "run_key_parameters",
+    "path_parameters",
+    "signed_parameters",
     "disposition",
     "started_at",
     "closed_at",
@@ -68,6 +70,7 @@ RUN_FIELDS = (
     "parameters",
     "extra_parameters",
     "media",
+    "signed_by",
 )
 
 # What a run is copied into before it's renamed into `runs/`. Starts with a dot, so a
@@ -77,7 +80,9 @@ SCRATCH_SUFFIX = ".admitting"
 CIPHERTEXT_SUFFIX = ".ciphertext"
 
 # Manifests admit reads. Version 2 is from before encryption, and its runs never are.
-MANIFEST_VERSIONS = (2, storage.MANIFEST_VERSION)
+# Versions 2 and 3 are from before signing, and before parameters were split into path
+# parameters and signed ones; see `_from_before_signing`.
+MANIFEST_VERSIONS = (2, 3, storage.MANIFEST_VERSION)
 
 # Held while an admit works on a task's datastore, so two at once can't both admit the
 # same run.
@@ -257,7 +262,21 @@ def _read_manifest(task_code: str, source: Path) -> dict[str, Any]:
             f"{manifest['task_code']}, but it's in task {task_code}'s incoming "
             f"directory as {source.name}. One of them has been moved or edited."
         )
+    if manifest["manifest_version"] < 4:
+        return _from_before_signing(manifest)
     return manifest
+
+
+def _from_before_signing(manifest: dict[str, Any]) -> dict[str, Any]:
+    """An older manifest in today's shape. Before signing, the run key was `run_key`,
+    every parameter a task declared was a path parameter, and nothing was signed."""
+    return {
+        **manifest,
+        "run_key_parameters": manifest["run_key"],
+        "path_parameters": list(manifest["parameters"]),
+        "signed_parameters": [],
+        "signed_by": None,
+    }
 
 
 def _check_listing(source: Path, manifest: dict[str, Any]) -> None:

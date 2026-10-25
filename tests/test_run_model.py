@@ -26,6 +26,8 @@ def make_run(**overrides) -> Run:
         "parameters": {"participant_id": "10351", "session": "baseline"},
         "extra_parameters": {},
         "run_key_names": ["participant_id", "session"],
+        "path_parameter_names": ["participant_id", "session"],
+        "signed_parameter_names": [],
         "phase": Phase.COLLECTING,
         "started_at": STARTED,
     }
@@ -322,6 +324,14 @@ def _shape(path):
 
 def _old_database(path, version):
     connection = db.connect(path)
+    if version < 4:
+        connection.execute("ALTER TABLE runs DROP COLUMN signed_by")
+        connection.execute(
+            "ALTER TABLE run_identifiers DROP COLUMN path_parameter_names"
+        )
+        connection.execute(
+            "ALTER TABLE run_identifiers DROP COLUMN signed_parameter_names"
+        )
     if version < 3:
         connection.execute("ALTER TABLE runs DROP COLUMN encrypted_to")
     if version < 2:
@@ -335,7 +345,7 @@ def test_every_older_version_has_a_migration():
     assert sorted(db.MIGRATIONS) == list(range(1, db.SCHEMA_VERSION))
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_a_migrated_database_is_the_same_as_a_new_one(tmp_path, version):
     _old_database(tmp_path / "old.db", version)
     db.connect(tmp_path / "new.db").close()

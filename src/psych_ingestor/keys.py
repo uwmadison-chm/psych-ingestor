@@ -1,20 +1,30 @@
-"""Keys for end-to-end encryption: public keys on the web side, private keys on the
-secure side, and the one file that carries the first from the second to the first.
+"""Keys for end-to-end encryption and for parameter signing: public keys on the web
+side, private keys on the secure side, and the one file that carries the first from the
+second to the first.
 
 A task that encrypts has its events and media parts encrypted in the participant's
 browser, to a public key the web server hands out. The matching private key is on the
 secure side only, and nothing on the web server can read the data. See issue #10.
 
+A task that checks signatures only starts a run whose parameters were signed with a
+private key on the secure side. The web server has the public key, which can check a
+signature but not make one, so nothing on the web server can make a link that works.
+See `signing.py` and issue #15.
+
 The encryption is age (https://age-encryption.org). age calls a public key a
 *recipient* and a private key an *identity*; Pig says public key and private key
-everywhere, and this is the one place that mentions age's words.
+everywhere, and this is the one place that mentions age's words. Signing is Ed25519,
+with keys written the way age writes its own, in bech32, but with prefixes of their own,
+so the two kinds can't be mistaken for each other.
 
 - **Secure side.** `private_keys_dir` in `pigsty.toml` is a directory of `.key` files,
-  one private key each, in the format `age-keygen` writes. A key's name is its path
-  inside the directory without `.key`, so `lucida/2026a.key` is `lucida/2026a`.
-  `pigsty keys new` makes one; `pigsty keys export` writes the public keys file.
+  one private key each. An encryption key is in the format `age-keygen` writes, and a
+  signing key is the same but for its prefix. A key's name is its path inside the
+  directory without `.key`, so `lucida/2026a.key` is `lucida/2026a`. `pigsty keys new`
+  makes one of either kind; `pigsty keys export` writes the public keys file, with both.
 - **Web side.** `public_keys_file` in `pig.toml` is that exported file, copied over
-  whole. A task's `encrypt_to` names one of its keys.
+  whole. A task's `encrypt_to` names one of its encryption keys, and its `signed_by`
+  names signing keys.
 
 Nothing here reads either configuration file. The callers say which files to read.
 """
@@ -26,13 +36,25 @@ import binascii
 import importlib.metadata
 import os
 import stat
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 import pyrage
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 from pyrage import x25519
 
+from . import bech32
 from .config import SAFE_VALUE_EXPLANATION, ConfigurationError, is_safe_value
 
 KEY_SUFFIX = ".key"
@@ -44,6 +66,13 @@ AGE_HEADER = b"age-encryption.org/v1\n"
 
 PUBLIC_KEY_PREFIX = "age1"
 PRIVATE_KEY_PREFIX = "AGE-SECRET-KEY-1"
+
+# A signing key's prefixes, before the bech32 `1`. Each is followed by the 32 bytes of an
+# Ed25519 key: the public key itself, or the seed the private key is made from.
+SIGNING_PUBLIC_PREFIX = "pigpk"
+SIGNING_PRIVATE_PREFIX = "PIG-SIGNING-KEY-"
+SIGNING_PUBLIC_KEY_PREFIX = SIGNING_PUBLIC_PREFIX + "1"
+SIGNING_PRIVATE_KEY_PREFIX = SIGNING_PRIVATE_PREFIX + "1"
 
 
 def check_key_name(name: str) -> None:
@@ -101,12 +130,16 @@ def read_public_keys(path: Path) -> dict[str, str]:
 
 
 def check_public_key(public_key: str) -> None:
-    """Raise ValueError unless this is a well-formed public key. The checksum built into
-    the format catches a key that was cut short or mistyped."""
+    """Raise ValueError unless this is a well-formed public key, of either kind. The
+    checksum built into the format catches a key that was cut short or mistyped."""
+    if is_signing_public_key(public_key):
+        signing_public_key(public_key)
+        return
     if not public_key.startswith(PUBLIC_KEY_PREFIX):
         raise ValueError(
-            f"{public_key[:12]!r}… isn't a public key Pig can encrypt to. Public keys "
-            f"start with {PUBLIC_KEY_PREFIX}."
+            f"{public_key[:12]!r}… isn't a public key Pig can use. Public keys start "
+            f"with {PUBLIC_KEY_PREFIX}, for encryption, or "
+            f"{SIGNING_PUBLIC_KEY_PREFIX}, for signing."
         )
     try:
         x25519.Recipient.from_str(public_key)
@@ -115,6 +148,26 @@ def check_public_key(public_key: str) -> None:
             f"{public_key[:12]}… isn't a whole public key ({error}). It may have been "
             "cut short when it was copied."
         ) from None
+
+
+def is_signing_public_key(public_key: str) -> bool:
+    """Whether a public key is for checking signatures, rather than encrypting to."""
+    return public_key.startswith(SIGNING_PUBLIC_KEY_PREFIX)
+
+
+def signing_public_key(public_key: str) -> Ed25519PublicKey:
+    """A signing public key, from the way the public keys file writes it, or ValueError
+    saying what's wrong with it."""
+    try:
+        prefix, raw = bech32.decode(public_key)
+    except ValueError as error:
+        raise ValueError(
+            f"{public_key[:12]}… isn't a whole public key ({error}). It may have been "
+            "cut short when it was copied."
+        ) from None
+    if prefix != SIGNING_PUBLIC_PREFIX or len(raw) != 32:
+        raise ValueError(f"{public_key[:12]}… isn't a signing public key.")
+    return Ed25519PublicKey.from_public_bytes(raw)
 
 
 # ------------------------------------------------------------------ ciphertext
@@ -142,6 +195,8 @@ def is_encrypted_bytes(start: bytes) -> bool:
 
 @dataclass(frozen=True)
 class PrivateKey:
+    """A private key for decrypting."""
+
     name: str
     path: Path
     identity: x25519.Identity
@@ -151,17 +206,45 @@ class PrivateKey:
         return str(self.identity.to_public())
 
 
+@dataclass(frozen=True)
+class SigningKey:
+    """A private key for signing parameters."""
+
+    name: str
+    path: Path
+    private: Ed25519PrivateKey
+
+    @property
+    def public_key(self) -> str:
+        raw = self.private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return bech32.encode(SIGNING_PUBLIC_PREFIX, raw)
+
+
 def read_private_keys(directory: Path) -> list[PrivateKey]:
-    """Every private key in a directory and the directories inside it, sorted by name.
+    """Every private key for decrypting in a directory and the directories inside it,
+    sorted by name.
 
     Raises ConfigurationError for a key file that's readable by anyone but its owner, or
-    that isn't a private key, or for anything in the directory that's a symbolic link.
+    that isn't a private key of either kind, or for anything in the directory that's a
+    symbolic link.
     """
+    return [key for key in read_all_keys(directory) if isinstance(key, PrivateKey)]
+
+
+def read_signing_keys(directory: Path) -> list[SigningKey]:
+    """Every signing key in a directory and the directories inside it, sorted by name.
+    Raises ConfigurationError as `read_private_keys` does."""
+    return [key for key in read_all_keys(directory) if isinstance(key, SigningKey)]
+
+
+def read_all_keys(directory: Path) -> list[PrivateKey | SigningKey]:
+    """Every private key in a directory, of both kinds, sorted by name. Raises
+    ConfigurationError as `read_private_keys` does."""
     if not directory.is_dir():
         raise ConfigurationError(
             f"private_keys_dir is {directory}, and there's no directory there."
         )
-    keys = []
+    keys: list[PrivateKey | SigningKey] = []
     for path in sorted(directory.rglob(f"*{KEY_SUFFIX}")):
         if path.is_symlink():
             raise ConfigurationError(
@@ -177,14 +260,20 @@ def read_private_keys(directory: Path) -> list[PrivateKey]:
         except ValueError as error:
             raise ConfigurationError(f"{path}: {error}") from None
         _check_permissions(path)
-        keys.append(PrivateKey(name, path, _read_private_key_file(path)))
+        keys.append(_read_key_file(name, path))
     return keys
 
 
 def read_private_key_file(path: Path) -> PrivateKey:
     """One private key file named on the command line, for a restore test."""
     _check_permissions(path)
-    return PrivateKey(path.stem, path, _read_private_key_file(path))
+    key = _read_key_file(path.stem, path)
+    if not isinstance(key, PrivateKey):
+        raise ConfigurationError(
+            f"{path} is a signing key. Decrypting needs a key made by pigsty keys new "
+            "without --signing."
+        )
+    return key
 
 
 def _check_permissions(path: Path) -> None:
@@ -197,7 +286,8 @@ def _check_permissions(path: Path) -> None:
         )
 
 
-def _read_private_key_file(path: Path) -> x25519.Identity:
+def _read_key_file(name: str, path: Path) -> PrivateKey | SigningKey:
+    """A key file of either kind, told apart by the prefix on its one key line."""
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
@@ -207,18 +297,34 @@ def _read_private_key_file(path: Path) -> x25519.Identity:
         for line in text.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+    if len(lines) == 1 and lines[0].startswith(SIGNING_PRIVATE_KEY_PREFIX):
+        return SigningKey(name, path, _read_signing_key(path, lines[0]))
     if len(lines) != 1 or not lines[0].startswith(PRIVATE_KEY_PREFIX):
         raise ConfigurationError(
             f"{path} isn't a private key file. It should hold one line starting "
-            f"{PRIVATE_KEY_PREFIX}, and any number of lines starting with #."
+            f"{PRIVATE_KEY_PREFIX} (for decrypting) or {SIGNING_PRIVATE_KEY_PREFIX} (for "
+            "signing), and any number of lines starting with #."
         )
     try:
-        return x25519.Identity.from_str(lines[0])
+        return PrivateKey(name, path, x25519.Identity.from_str(lines[0]))
     except pyrage.IdentityError as error:
         raise ConfigurationError(
             f"{path} has a private key that can't be read ({error}). It may have been "
             "cut short when it was copied."
         ) from None
+
+
+def _read_signing_key(path: Path, line: str) -> Ed25519PrivateKey:
+    try:
+        prefix, seed = bech32.decode(line)
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{path} has a signing key that can't be read ({error}). It may have been "
+            "cut short when it was copied."
+        ) from None
+    if prefix != SIGNING_PRIVATE_PREFIX.lower() or len(seed) != 32:
+        raise ConfigurationError(f"{path} has a signing key that can't be read.")
+    return Ed25519PrivateKey.from_private_bytes(seed)
 
 
 def new_private_key(directory: Path, name: str, now: datetime) -> PrivateKey:
@@ -231,13 +337,41 @@ def new_private_key(directory: Path, name: str, now: datetime) -> PrivateKey:
     check_key_name(name)
     path = directory / f"{name}{KEY_SUFFIX}"
     identity = x25519.Identity.generate()
-    text = (
+    _write_key_file(
+        path,
         f"# created: {now.replace(microsecond=0).isoformat()}\n"
         f"# made by pigsty keys new, from psych-ingestor {_version('psych-ingestor')} "
         f"using pyrage {_version('pyrage')}\n"
         f"# public key: {identity.to_public()}\n"
-        f"{identity}\n"
+        f"{identity}\n",
     )
+    return PrivateKey(name, path, identity)
+
+
+def new_signing_key(directory: Path, name: str, now: datetime) -> SigningKey:
+    """Make a new signing key and write it to `{directory}/{name}.key`, readable only by
+    its owner. Refuses to replace a key that's already there.
+
+    The file is laid out like an age key file, so the two kinds sit side by side in
+    `private_keys_dir`, but age can't read this one.
+    """
+    check_key_name(name)
+    path = directory / f"{name}{KEY_SUFFIX}"
+    private = Ed25519PrivateKey.generate()
+    key = SigningKey(name, path, private)
+    seed = private.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+    _write_key_file(
+        path,
+        f"# created: {now.replace(microsecond=0).isoformat()}\n"
+        f"# made by pigsty keys new --signing, from psych-ingestor "
+        f"{_version('psych-ingestor')} using cryptography {_version('cryptography')}\n"
+        f"# public key: {key.public_key}\n"
+        f"{bech32.encode(SIGNING_PRIVATE_PREFIX, seed).upper()}\n",
+    )
+    return key
+
+
+def _write_key_file(path: Path, text: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Made with its final permissions, so it's never readable by anyone else even for a
     # moment, and with O_EXCL so it can't replace a key that's there.
@@ -246,18 +380,24 @@ def new_private_key(directory: Path, name: str, now: datetime) -> PrivateKey:
         written.write(text)
         written.flush()
         os.fsync(written.fileno())
-    return PrivateKey(name, path, identity)
 
 
-def public_keys_text(keys: list[PrivateKey], directory: Path, now: datetime) -> str:
-    """The public keys file for these private keys, as `pigsty keys export` prints it."""
+def public_keys_text(
+    keys: Sequence[PrivateKey | SigningKey], directory: Path, now: datetime
+) -> str:
+    """The public keys file for these private keys, of both kinds, as `pigsty keys
+    export` prints it."""
     lines = [
         "# Public keys, for public_keys_file in pig.toml.",
         f"# Written by pigsty keys export from {directory} on {now.date().isoformat()}.",
         "# Don't edit this file. Make or remove keys there, then export again.",
     ]
-    lines += [f"{key.name} {key.public_key}" for key in keys]
+    lines += [f"{key.name} {key.public_key}" for key in sorted(keys, key=_by_name)]
     return "\n".join(lines) + "\n"
+
+
+def _by_name(key: PrivateKey | SigningKey) -> str:
+    return key.name
 
 
 def _version(package: str) -> str:
