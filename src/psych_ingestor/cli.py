@@ -103,6 +103,8 @@ def check(*, config: ConfigPath | None = None) -> None:
             print(
                 f"  media:       yes, parts up to {describe_size(task.max_part_size)}"
             )
+        if task.encrypt_to:
+            print(f"  encrypts to: {task.encrypt_to}")
     largest = max(
         (task.max_part_size for task in loaded.task.values() if task.media), default=0
     )
@@ -246,6 +248,28 @@ def runs(
             f"{run.run_id}  {run.task_code:<{task_width}}  run-{run.run_number:04d}  "
             f"{run.api_status:<{status_width}}  {run.phase:<{phase_width}}  "
             f"{counts[run.run_id]:>{count_width}} events  {described}"
+        )
+
+
+@app.command
+def migrate(*, config: ConfigPath | None = None) -> None:
+    """Bring a database made by an older version of Pig up to date.
+
+    Stop pig serve first. Pig refuses to use a database from an older version until
+    this has run, so nothing is changed without someone deciding to.
+    """
+    loaded = _load(config)
+    try:
+        before = db.migrate(loaded.database)
+    except db.DatabaseProblem as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+    if before == db.SCHEMA_VERSION:
+        print(f"{loaded.database} is already at schema version {before}.")
+    else:
+        print(
+            f"Migrated {loaded.database} from schema version {before} "
+            f"to {db.SCHEMA_VERSION}."
         )
 
 

@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import db, media, purge, runs, storage
+from . import db, keys, media, purge, runs, storage
 from .config import SAFE_VALUE_EXPLANATION, Config, TaskDefinition, is_safe_value
 from .media import MediaItem
 from .runs import Disposition, Phase, RequestProblem, Run
@@ -85,9 +85,14 @@ class Pig:
             "expires_after_sec": task.expires_after,
             "max_event_size_bytes": task.max_event_size,
             # A feature a task can have off is `null` when it's off and an object of its
-            # settings when it's on. Encryption and signing will follow the same shape.
+            # settings when it's on. Signing will follow the same shape.
             "media": (
                 {"max_part_size_bytes": task.max_part_size} if task.media else None
+            ),
+            # The key, but not its name: the browser has no use for the name, and
+            # nothing it sends says which key it used. See docs/api.md.
+            "encryption": (
+                {"public_key": task.public_key} if task.public_key else None
             ),
         }
 
@@ -120,6 +125,7 @@ class Pig:
             parameters=parameters,
             extra_parameters=extra,
             started_at=db.now(),
+            encrypted_to=task.encrypt_to,
         )
         return {"run_id": run_id, "run_number": run_number}
 
@@ -175,7 +181,7 @@ class Pig:
         self, task_code: str, run_id: str, submitted: dict[str, Any]
     ) -> StoreResult:
         # An unknown task or run is a 404 before anything else.
-        self._run_for_task(task_code, run_id)
+        run = self._run_for_task(task_code, run_id)
         task = self.task(task_code)
         events = _as_event_dict(submitted)
 
@@ -183,7 +189,7 @@ class Pig:
         errors: dict[str, dict[str, Any]] = {}
         checked: dict[str, tuple[Any, str]] = {}
         for event_id, event in events.items():
-            problem, digest = _check_event(task, event_id, event)
+            problem, digest = _check_event(task, run, event_id, event)
             if problem:
                 errors[event_id] = problem
             else:
@@ -307,6 +313,8 @@ class Pig:
                 event_id,
                 f"Event IDs can be at most {MAX_EVENT_ID_LENGTH} characters.",
             )
+        if run.encrypted_to and not keys.is_encrypted_text(data):
+            return self._start_refused(run, event_id, _NOT_ENCRYPTED)
 
         stored_at = db.now()
         # The hash and the size limit cover what the task sent, and the media ID isn't
@@ -457,6 +465,11 @@ class Pig:
         except BaseException:
             writer.discard()
             raise
+        if run.encrypted_to and not keys.is_encrypted_bytes(writer.start):
+            writer.discard()
+            return self._media_refused(
+                422, run, item, key, _PART_NOT_ENCRYPTED, can_retry=False
+            )
 
         # The check and the rename happen under one write lock, as an event's check
         # and append do. A part that lands replaces whatever had its name, so two
@@ -694,8 +707,20 @@ class Pig:
         return runs.stored_event_ids(self.connection, run_id)
 
 
+# What an encrypting run says to plaintext. The usual cause is a browser that loaded the
+# task's settings before it encrypted, and kept them while it was offline.
+_NOT_ENCRYPTED = (
+    "This run is encrypted, and this event isn't. Pig only takes encrypted events for "
+    "it. The page probably has an old copy of this task's settings; reloading it fetches "
+    "the current ones, and a new run will encrypt."
+)
+_PART_NOT_ENCRYPTED = (
+    "This run is encrypted, and this part isn't. Pig only takes encrypted parts for it."
+)
+
+
 def _check_event(
-    task: TaskDefinition, event_id: str, event: Any
+    task: TaskDefinition, run: Run, event_id: str, event: Any
 ) -> tuple[dict[str, Any] | None, str]:
     """Check one event against everything that doesn't need the database. Returns a
     problem, or None and the hash of what the task sent."""
@@ -719,6 +744,8 @@ def _check_event(
             "inside 'data', so put everything you want to keep in there.",
             False,
         ), ""
+    if run.encrypted_to and not keys.is_encrypted_text(event["data"]):
+        return _problem(_NOT_ENCRYPTED, False), ""
 
     # The size limit and the hash both cover what the task sent, not what Pig adds.
     hashed = storage.hashed_text({"event_id": event_id, "data": event["data"]})

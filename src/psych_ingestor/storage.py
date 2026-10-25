@@ -28,11 +28,13 @@ STATE_DIRECTORY = ".state"
 # What a file is called while it's being written. Never left behind on purpose, and
 # the sweep removes any that were: see `remove_partial_files`.
 PARTIAL_SUFFIX = ".partial"
+# How much of a media part PartWriter keeps: enough to tell an encrypted one.
+START_LENGTH = 64
 
 # Every manifest carries these two, so a reader can tell what it's looking at and which
 # shape to expect. Bump the version when the manifest's shape changes.
 MANIFEST_TYPE = "pig_run_manifest"
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 
 
 def run_directory(root: Path, task_code: str, run_id: str) -> Path:
@@ -159,6 +161,9 @@ class PartWriter:
         self.scratch = scratch
         scratch.parent.mkdir(parents=True, exist_ok=True)
         self.size = 0
+        # The part's first few bytes, so an encrypted run can check they start an age
+        # file without reading the part back.
+        self.start = b""
         self._hash = hashlib.sha256()
         # Held open across several calls, so a context manager can't scope it.
         self._handle = open(self.scratch, "wb")  # noqa: SIM115
@@ -170,6 +175,8 @@ class PartWriter:
             raise PartTooLarge(
                 f"This part is bigger than this task allows ({self.limit} bytes)."
             )
+        if len(self.start) < START_LENGTH:
+            self.start += chunk[: START_LENGTH - len(self.start)]
         self._hash.update(chunk)
         self._handle.write(chunk)
 
@@ -331,6 +338,10 @@ def manifest_for(
         "parameters": run.parameters,
         "extra_parameters": run.extra_parameters,
         "media": media,
+        # The public key's name, if the browser encrypted the run's events and media
+        # parts. The files below are then the ciphertext, and pigsty admit decrypts
+        # them. Null for a run that isn't encrypted.
+        "encrypted_to": run.encrypted_to,
         "files": describe_files(directory),
     }
 

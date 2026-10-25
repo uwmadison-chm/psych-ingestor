@@ -33,3 +33,10 @@ parameters = ["participant_id"]
 run_key = ["participant_id"]
 media = true
 max_part_size = "8M"      # optional, defaults to 8M; most tasks never set it
+
+# Encrypting in the browser, so this server never holds anything it can read. Uncomment
+# both lines once the secure side has made a key and exported public_keys.txt with
+# `pigsty keys export`; see docs/configuration.md.
+#
+# public_keys_file = "./public_keys.txt"   # at the top of the file, above any [task.…]
+# encrypt_to = "lucida/2026a"              # in a task

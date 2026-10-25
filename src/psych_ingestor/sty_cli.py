@@ -8,17 +8,20 @@ command you type. See issue #33.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import cyclopts
 
 from . import admit as admit_module
+from . import db, keys, sty
 from . import organize as organize_module
 from . import purge as purge_module
-from . import sty
 from .config import ConfigurationError
 
 app = cyclopts.App(
@@ -54,40 +57,137 @@ def _load(path: Path | None) -> sty.StyConfig:
         raise SystemExit(1) from error
 
 
+# How long pigsty check waits for the web server. It's only asking for settings.
+CHECK_TIMEOUT_SECONDS = 10
+
+
+def _private_keys(loaded: sty.StyConfig) -> list[keys.PrivateKey]:
+    """Every private key in private_keys_dir, or none if there isn't one. Exits saying
+    what's wrong with a key that can't be used."""
+    if loaded.private_keys_dir is None:
+        return []
+    try:
+        return keys.read_private_keys(loaded.private_keys_dir)
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+
+
 @app.command
 def check(*, config: StyConfigPath | None = None) -> None:
     """Check pigsty.toml, and say what each task is set up to do.
 
-    The web server's pig.toml is checked by `pig check`.
+    Also checks every private key in private_keys_dir. With pig_url set, asks the web
+    server which public key each task encrypts to, and warns about one that no private
+    key here matches: data encrypted to it couldn't be decrypted. The web server's
+    pig.toml is checked by `pig check`.
     """
     loaded = _load(config)
+    private_keys = _private_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
     if loaded.pig_url:
         print(f"Purges runs from {loaded.pig_url}.")
     else:
         print("No pig_url, so pigsty purge won't run.")
+    if loaded.private_keys_dir is None:
+        print("No private_keys_dir, so encrypted runs can't be admitted.")
+    else:
+        print(
+            f"Decrypts with {len(private_keys)} private key(s) in "
+            f"{loaded.private_keys_dir}: "
+            + (", ".join(key.name for key in private_keys) or "none yet")
+        )
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
         print(f"  datastore: {task.datastore_base}")
         print(f"  organized: {task.organized_root}")
         print(f"  pattern:   {task.pattern}")
+    if loaded.pig_url:
+        _check_published_keys(loaded.pig_url, sorted(loaded.task), private_keys)
+
+
+def _check_published_keys(
+    pig_url: str, codes: list[str], private_keys: list[keys.PrivateKey]
+) -> None:
+    """Warn about any task the web server says encrypts to a public key that no private
+    key here matches. Only ever a warning: an unreachable server isn't this file's
+    problem, and the check is about the web server's configuration, not this one."""
+    have = {key.public_key: key.name for key in private_keys}
+    print()
+    for code in codes:
+        try:
+            settings = _task_settings(pig_url, code)
+        except purge_module.Unreachable as error:
+            print(f"Warning: didn't check which keys the web server uses: {error}")
+            return
+        if settings is None:
+            print(f"Warning: the web server at {pig_url} has no task {code!r}.")
+            continue
+        encryption = settings.get("encryption")
+        if not encryption:
+            print(f"{code}: the web server doesn't encrypt it.")
+        elif encryption.get("public_key") in have:
+            print(
+                f"{code}: encrypted to {have[encryption['public_key']]}, which is here."
+            )
+        else:
+            print(
+                f"Warning: {code}: the web server encrypts it to a public key that no "
+                "private key here matches. Runs encrypted to it couldn't be decrypted. "
+                "Check public_keys_file and encrypt_to in pig.toml."
+            )
+
+
+def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
+    """What `GET /task/{code}` answers, or None for a task the web server doesn't
+    have."""
+    url = f"{pig_url.rstrip('/')}/task/{code}"
+    try:
+        with urllib.request.urlopen(url, timeout=CHECK_TIMEOUT_SECONDS) as reply:
+            return json.loads(reply.read())
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise purge_module.Unreachable(
+            f"the web server at {pig_url} answered {error.code}."
+        ) from error
+    except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        reason = getattr(error, "reason", error)
+        raise purge_module.Unreachable(
+            f"couldn't reach Pig at {pig_url}: {reason}."
+        ) from error
 
 
 @app.command
-def admit(*, config: StyConfigPath | None = None) -> None:
+def admit(
+    *, config: StyConfigPath | None = None, copy_ciphertext_to: Path | None = None
+) -> None:
     """Check downloaded runs against their manifests, and move the ones that are whole
     into place.
 
     For each task in pigsty.toml, looks at the runs in its datastore's incoming/
     directory that aren't in runs/ yet. A run whose files all match its
-    manifest is copied into runs/. A run still downloading is left for next time. A run
-    that's all there but doesn't match is reported, and the command exits with an error.
+    manifest is copied into runs/, and decrypted on the way if it's encrypted. A run
+    still downloading is left for next time. A run that's all there but doesn't match,
+    or that no private key opens, is reported, and the command exits with an error.
     Nothing in incoming/ is ever changed.
+
+    Parameters
+    ----------
+    copy_ciphertext_to
+        Also keep each encrypted run as it arrived, with its manifest, in
+        {this}/{task_code}/{run_id}/. It's the only copy the manifest's hashes describe.
     """
     loaded = _load(config)
+    private_keys = _private_keys(loaded)
     problems = False
     for code, task in sorted(loaded.task.items()):
-        report = admit_module.admit(code, task.datastore_base)
+        report = admit_module.admit(
+            code,
+            task.datastore_base,
+            private_keys,
+            copy_ciphertext_to.resolve() / code if copy_ciphertext_to else None,
+        )
         counts = [
             f"admitted {len(report.admitted)} run(s)",
             f"{report.already_admitted} already admitted",
@@ -180,6 +280,78 @@ def purge(*, config: StyConfigPath | None = None) -> None:
         problems = problems or bool(report.problems)
     if problems:
         raise SystemExit(1)
+
+
+keys_app = cyclopts.App(
+    name="keys",
+    help="Make the private keys encrypted runs are decrypted with, and export their "
+    "public keys for the web server.",
+)
+app.command(keys_app)
+
+
+@keys_app.command
+def new(name: str, *, config: StyConfigPath | None = None) -> None:
+    """Make a new private key in private_keys_dir.
+
+    The key is written to {private_keys_dir}/{name}.key, readable only by you. A name
+    can have directories in it, like lucida/2026a. Afterwards, export the public keys,
+    copy the file to the web server, and set encrypt_to for the tasks that should use
+    this key.
+
+    Back the key file up somewhere an administrator can reach, like a 1Password vault.
+    Anything encrypted to it that hasn't been admitted yet can't be read without it.
+
+    Parameters
+    ----------
+    name
+        What to call the key, like lucida/2026a.
+    """
+    loaded = _load(config)
+    if loaded.private_keys_dir is None:
+        print(
+            "pigsty.toml has no private_keys_dir to put the key in. Add one, like "
+            'private_keys_dir = "/etc/pigsty/private_keys".',
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    try:
+        made = keys.new_private_key(loaded.private_keys_dir, name, db.now())
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+    except FileExistsError:
+        print(
+            f"There's already a key called {name}. Pick another name; a key is never "
+            "replaced, because data encrypted to it would be unreadable.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
+    print(f"Made {made.path}")
+    print(f"Its public key is {made.public_key}")
+    print("\nNext, export the public keys for the web server: pigsty keys export")
+
+
+@keys_app.command
+def export(*, config: StyConfigPath | None = None) -> None:
+    """Print the public keys file for the web server.
+
+    One line per private key in private_keys_dir: its name and its public key. Save it,
+    copy it to the web server, and point public_keys_file in pig.toml at it:
+
+        pigsty keys export > public_keys.txt
+    """
+    loaded = _load(config)
+    if loaded.private_keys_dir is None:
+        print(
+            "pigsty.toml has no private_keys_dir, so there are no keys to export.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    print(
+        keys.public_keys_text(_private_keys(loaded), loaded.private_keys_dir, db.now()),
+        end="",
+    )
 
 
 def main() -> None:

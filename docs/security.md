@@ -90,6 +90,30 @@ The web server is the machine on the public internet, so it's the one most likel
 
 The web server's checks are still worth having, but they're there for task authors: a value that can't become a path is refused when the run starts, while someone can still fix the task, rather than months later when the data is organized.
 
-Encryption (#10) won't change this. It will show that a run wasn't altered after the web server encrypted it, but not that the web server was honest when it did.
+Encryption doesn't change this. The browser encrypts, but anyone with the public key can make data that decrypts correctly, including the web server. So encryption keeps the web server from reading a run, not from replacing it with one of its own.
 
 The checks keep hostile data from landing anywhere but its own run directory. They don't make the data safe to open. Media in particular can be built to attack whatever decodes it, so run anything that processes collected data in a container or on an account that can't reach much else.
+
+## End-to-end encryption
+
+A task with `encrypt_to` set encrypts everything it records in the participant's browser, to a public key whose private half is only on the secure side. The web server and the bucket then carry data they can't read. If the web server is broken into, what's there to take is event IDs, run parameters, times, sizes and ciphertext. See [configuration.md](configuration.md#encryption) for turning it on and [organizing.md](organizing.md#encrypted-runs) for the keys.
+
+It also means a participant's lost or stolen device holds nothing readable. The JavaScript client encrypts each event before it's saved on the device.
+
+What isn't encrypted, and is worth knowing about when someone asks what's identifying:
+
+- **Run parameters.** `participant_id` and the rest are what Pig uses to number runs, so it has to read them. They're in the database until the run is purged and in the run's manifest. Opaque participant codes, with the mapping kept somewhere else, are the answer to that, not encryption.
+- **Extra parameters**, recorded on the run as they arrived.
+- **Times.** When each event arrived, in the run's data file, and when the run started and closed, in the database.
+- **Sizes**, of events and media parts, and file modification times.
+
+The encryption is [age](https://age-encryption.org): X25519 and ChaCha20-Poly1305, with no settings to get wrong. Neither is a NIST-approved algorithm, and no browser library is a FIPS-validated module, so this isn't FIPS 140 encryption. No choice available to a task in a browser would be.
+
+### Keeping the private key
+
+Losing the private key loses whatever was encrypted to it and hasn't been admitted yet. Admitted runs are already decrypted, so if `pigsty admit` runs often, what's at risk is small. Still, back up each key file somewhere an administrator can reach without its usual keeper, like a shared 1Password vault. UW–Madison's Storage and Encryption Standard asks for exactly that: a backup copy of the key that's available without the normal keyholder.
+
+Once a year, decrypt a real run with the backed-up copy on a machine that isn't the secure server, to show the backup works. The key files are ordinary age key files, so the stock `age` command can do it without Pig; see [organizing.md](organizing.md#decrypting-by-hand).
+
+A key is never replaced and needn't ever be deleted. To change keys, make a new one and point tasks at it. Old ones stay in `private_keys_dir`, so a run encrypted with an old one, from a browser that saved its settings a while ago, still decrypts.
+

@@ -19,6 +19,9 @@ export interface TaskSettings {
   expires_after_sec: number;
   max_event_size_bytes: number;
   media: { max_part_size_bytes: number } | null;
+  /** The public key events and media parts are encrypted to, or null if the task
+   * doesn't encrypt. Missing from settings saved by version 0.2.0 of the client. */
+  encryption?: { public_key: string } | null;
 }
 
 /** What the page knows about itself, for a run's first event. */

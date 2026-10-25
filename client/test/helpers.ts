@@ -18,12 +18,16 @@ interface FakeTask {
   max_event_size_bytes: number;
   /** The largest media part, for a task that takes media. */
   max_part_size?: number;
+  /** The public key, for a task that encrypts. */
+  public_key?: string;
 }
 
 interface FakeMedia {
   event_id: string;
   /** Part number → its bytes, as text. */
   parts: Map<number, string>;
+  /** Part number → its bytes, as they came. */
+  bytes: Map<number, Uint8Array>;
   finished: boolean;
 }
 
@@ -52,6 +56,8 @@ export class FakePig {
   upcoming: (Answer | "network")[] = [];
   /** A function that may answer a request itself: return a Response, or nothing. */
   intercept: ((method: string, path: string, body?: string) => Response | undefined) | null = null;
+  /** The body of the request being answered, as bytes, when it was a Blob. */
+  #raw: Uint8Array | null = null;
 
   constructor() {
     this.tasks = {
@@ -64,6 +70,7 @@ export class FakePig {
     const { pathname } = new URL(String(url));
     const method = init.method ?? "GET";
     const body = init.body instanceof Blob ? await init.body.text() : (init.body as string | undefined);
+    this.#raw = init.body instanceof Blob ? new Uint8Array(await init.body.arrayBuffer()) : null;
     this.requests.push({ method, path: pathname, body });
     if (this.offline) throw new TypeError("Failed to fetch");
     const intercepted = this.intercept?.(method, pathname, body);
@@ -127,7 +134,7 @@ export class FakePig {
       }
       const mediaId = record.media.size + 1;
       record.events.set(event_id, text);
-      record.media.set(mediaId, { event_id, parts: new Map(), finished: false });
+      record.media.set(mediaId, { event_id, parts: new Map(), bytes: new Map(), finished: false });
       return { status: 201, body: { media_id: mediaId, max_part_size: task.max_part_size } };
     }
 
@@ -149,12 +156,13 @@ export class FakePig {
     const part = Number(rest[1]);
     if (record.status !== "in_progress") return closed();
     if (item.finished) return { status: 409, body: { ...summary(), errors: { [part]: { message: "Finished.", can_retry: false } } } };
-    if ((body ?? "").length > task.max_part_size) return { status: 413, body: { message: "Too big." } };
+    if ((this.#raw?.length ?? (body ?? "").length) > task.max_part_size) return { status: 413, body: { message: "Too big." } };
     const known = item.parts.get(part);
     if (known !== undefined && known !== body) {
       return { status: 422, body: { ...summary(), errors: { [part]: { message: "A different part.", can_retry: false } } } };
     }
     item.parts.set(part, body ?? "");
+    item.bytes.set(part, this.#raw ?? new TextEncoder().encode(body ?? ""));
     return { status: known === undefined ? 201 : 200, body: summary() };
   }
 
@@ -173,6 +181,7 @@ export class FakePig {
           expires_after_sec: 86400,
           max_event_size_bytes: task.max_event_size_bytes,
           media: task.max_part_size ? { max_part_size_bytes: task.max_part_size } : null,
+          encryption: task.public_key ? { public_key: task.public_key } : null,
         },
       };
     }

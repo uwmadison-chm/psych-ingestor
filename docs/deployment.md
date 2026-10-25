@@ -39,6 +39,18 @@ elsewhere would, so don't.
 
 Purging a run is a rename too, out of `done/` and into `purging/`, where it's deleted. That way the copy to the bucket never sees half a deleted run. And a media part is written under `uploading/` as it arrives, then renamed into its run, so a run never holds half a part.
 
+## Upgrading Pig
+
+A new version of Pig can change the shape of its database. When it does, Pig refuses to use a database from the older version, and says so, until you migrate it. Stop `pig serve` (and the sweep's timer), back up the database file, and run:
+
+```
+pig migrate
+```
+
+It brings the database up to date and leaves the runs in it as they were. It never runs on its own, so a database only changes when someone decides it should. A migration interrupted partway leaves the database at the last version it finished, and running `pig migrate` again carries on from there.
+
+A database from a newer version of Pig than the one installed is refused, and there's no going back to the older shape.
+
 ## The bucket is the undo for a purge
 
 Once the secure side has a run, `pigsty purge` asks Pig to delete it, and the next copy to the bucket deletes it there too. If the secure side's copy turns out to be bad after all, the bucket's retention is the only thing that can bring the run back: versioning, so a deleted object can be restored for a while. Pig can't check that the bucket has it. Set it up before purging anything.

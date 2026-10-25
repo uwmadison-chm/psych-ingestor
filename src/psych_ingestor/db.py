@@ -14,10 +14,11 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Bumped whenever the tables below change shape. There's no migration: a database from a
-# different version is refused with a message saying so, which beats a confusing "no such
-# column" from the first query that touches it.
-SCHEMA_VERSION = 2
+# Bumped whenever the tables below change shape, with an entry in MIGRATIONS that takes a
+# database from the version before. A database from an older version is refused until
+# `pig migrate` brings it up to date, and one from a newer version is refused outright.
+# Either beats a confusing "no such column" from the first query that touches it.
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -42,6 +43,11 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at       TEXT NOT NULL,
     closed_at        TEXT,
     done_at          TEXT,
+
+    -- The name of the public key the task encrypted to when this run started, or null
+    -- if it didn't encrypt. Fixed at start, so a run is encrypted or not all the way
+    -- through, whatever happens to the task's definition while it's open.
+    encrypted_to     TEXT,
 
     UNIQUE (task_code, run_key_hash, run_number),
 
@@ -115,6 +121,43 @@ CREATE TABLE IF NOT EXISTS media_parts (
     PRIMARY KEY (run_id, media_id, part)
 );
 """
+
+
+# What changes a database of each version into the next one: the statements to run, in
+# order. A migration is SQL and only SQL, run in one transaction with the version bump, so a database is always wholly one
+# version or the other. Version 1 is the first that was recorded; anything older is
+# refused.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    # Media: two new tables, and nothing about the old ones changes.
+    1: (
+        """
+CREATE TABLE media (
+    run_id         TEXT NOT NULL REFERENCES runs (run_id),
+    media_id       INTEGER NOT NULL,
+    event_id       TEXT NOT NULL,
+    declared_parts INTEGER,
+    finished_at    TEXT,
+    PRIMARY KEY (run_id, media_id),
+    UNIQUE (run_id, event_id),
+    CHECK ((declared_parts IS NULL) = (finished_at IS NULL))
+)
+""",
+        """
+CREATE TABLE media_parts (
+    run_id     TEXT NOT NULL,
+    media_id   INTEGER NOT NULL,
+    part       INTEGER NOT NULL,
+    bytes      INTEGER NOT NULL,
+    sha256     TEXT NOT NULL,
+    stored_at  TEXT NOT NULL,
+    PRIMARY KEY (run_id, media_id, part)
+)
+""",
+    ),
+    # Encryption: the key a run was encrypted to. Every run already there was started by
+    # a Pig that couldn't encrypt, so null is right for all of them.
+    2: ("ALTER TABLE runs ADD COLUMN encrypted_to TEXT",),
+}
 
 
 class DatabaseProblem(Exception):
@@ -212,17 +255,75 @@ def _is_brand_new(connection: sqlite3.Connection, path: Path) -> bool:
     does have tables, which is how the two are told apart. Reading it doesn't need the
     write lock.
     """
-    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    version = _version(connection)
     if version == SCHEMA_VERSION:
         return False
-    has_tables = connection.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
-    ).fetchone()[0]
-    if version == 0 and not has_tables:
+    if version == 0 and not _has_tables(connection):
         return True
     connection.close()
+    if version in MIGRATIONS:
+        raise DatabaseProblem(
+            f"{path} was made by an older version of Pig (its schema version is "
+            f"{version}; this Pig uses {SCHEMA_VERSION}). To bring it up to date, stop "
+            "pig serve and run: pig migrate"
+        )
     raise DatabaseProblem(
         f"{path} was made by a different version of Pig (its schema version is "
         f"{version}; this Pig uses {SCHEMA_VERSION}), and there's no migration between "
         "them. If nothing in it matters, delete it and Pig will make a new one."
     )
+
+
+def migrate(path: Path) -> int:
+    """Bring a database made by an older Pig up to this one's schema. Returns the
+    version it was before, which is SCHEMA_VERSION if it was already up to date.
+
+    Each step is its own transaction, so a migration interrupted partway leaves the
+    database at whichever version it last finished, and running this again carries on
+    from there. Raises DatabaseProblem for a database it can't migrate.
+    """
+    if not path.exists():
+        raise DatabaseProblem(f"There's no database at {path}, so nothing to migrate.")
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA secure_delete = ON")
+        before = None
+        while True:
+            # The version is read again under the write lock, so two migrations started
+            # at once can't both apply the same step.
+            connection.execute("BEGIN IMMEDIATE")
+            version = _version(connection)
+            if before is None:
+                before = version
+            if version == SCHEMA_VERSION:
+                connection.execute("ROLLBACK")
+                return before
+            if version not in MIGRATIONS:
+                connection.execute("ROLLBACK")
+                raise DatabaseProblem(
+                    f"{path} has schema version {version}, and this Pig uses "
+                    f"{SCHEMA_VERSION}. There's no migration from {version}."
+                )
+            try:
+                # Not executescript, which commits the open transaction before it starts.
+                for statement in MIGRATIONS[version]:
+                    connection.execute(statement)
+                connection.execute(f"PRAGMA user_version = {version + 1}")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
+            connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+
+def _version(connection: sqlite3.Connection) -> int:
+    return connection.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _has_tables(connection: sqlite3.Connection) -> bool:
+    count = connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
+    ).fetchone()[0]
+    return count > 0

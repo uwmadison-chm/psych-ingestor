@@ -1,7 +1,7 @@
 # The Psych Ingestor JavaScript client
 
-**Status: early.** Starting runs, events, media, finalizing, offline runs, and resuming
-across pages all work. Encryption isn't here yet. Names marked *provisional* below may
+**Status: early.** Starting runs, events, media, finalizing, offline runs, resuming
+across pages, and encryption all work. Names marked *provisional* below may
 change. See [issue #11](https://github.com/uwmadison-chm/psych-ingestor/issues/11).
 
 This is a small library for tasks that run in a web browser. It talks to Pig for you:
@@ -128,6 +128,14 @@ your own `_client`; `add()` will refuse it. *Provisional names.*
 Every run also starts with an event the client sends itself, event `0`, describing the
 browser: its user agent, languages, time zone, screen and window size, and the client's
 version. Nothing in it identifies the participant. *Provisional.*
+
+## Tasks that encrypt
+
+If the task's configuration on the server sets `encrypt_to`, the client encrypts everything it records, events and recordings both, before it's saved on the device. Nothing changes in your task: you call `add()` and `startMedia()` the same way. The server only ever holds data it can't read, and so does a lost device. See [api.md](../docs/api.md#encrypted-tasks).
+
+Once an event is encrypted, nothing on the device can read it, so the client can't hand your earlier events back. Keep anything your task computes from them, like a running score, in a variable of its own.
+
+The client learns that a task encrypts from its settings, which it saves for when it's offline. A device that saved them before encryption was turned on, and is offline, records a run unencrypted, and the server refuses it when it connects. Those events end up in `failed`; reloading the page while online fetches the current settings.
 
 ## When the network isn't there
 
@@ -335,7 +343,10 @@ npm run check        # type-check
 npm test             # the queue and sender, in Node, against a pretend Pig
 npm run build        # dist/
 npm run e2e          # a real browser against a real `pig serve`
+npm run benchmark    # benchmarks/dist/encryption.html
 ```
+
+The benchmark page times the client's encryption, for events and for recordings, in whatever browser opens it. It's one file with nothing to fetch, so it can go on any https server and be opened on a phone; a browser only encrypts on a page it considers secure, which an https page, localhost, or a file is, and a plain http address isn't.
 
 Node runs the TypeScript sources directly, without compiling them, so the code sticks to
 TypeScript that only adds types: no enums, no namespaces. It needs Node 22.18 or later.

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pig encryption benchmark</title>
+<!--
+  How fast a browser encrypts what Pig's client sends, for a task that encrypts.
+  `npm run benchmark` builds this into benchmarks/dist/encryption.html, one file with the
+  worker inside it. Open that from any https server, or from localhost, or as a file: the
+  browser only allows the encryption on a page it considers secure.
+-->
+<style>
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --fg: #1d2420; --muted: #5d6a63; --line: #d8ddd9;
+  --accent: #2f6b4f; --accent-fg: #ffffff; --warn: #9a5b00; --bad: #a23a2a;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141815; --surface: #1c211e; --fg: #e3e8e4; --muted: #9aa69f; --line: #2e3631;
+    --accent: #6cc196; --accent-fg: #0d1a13; --warn: #e0a548; --bad: #ef7a66;
+    color-scheme: dark;
+  }
+}
+body {
+  margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--sans);
+  padding: 24px 16px 48px;
+}
+main { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-size: 1.5rem; margin: 0; }
+h2 { font-size: 1rem; margin: 0; }
+p { margin: 0; max-width: 65ch; }
+.muted { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+button {
+  font: 600 1rem var(--sans); padding: 12px 20px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-fg);
+}
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+#status { font-family: var(--mono); font-size: .875rem; color: var(--muted); }
+.table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+th.num, td.num { text-align: right; white-space: nowrap; font-family: var(--mono); }
+.ok { color: var(--accent); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+pre {
+  font: .8rem/1.5 var(--mono); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 6px; padding: 12px; margin: 0; white-space: pre-wrap; word-break: break-word;
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Pig encryption benchmark</h1>
+  <p>This encrypts sample events and recording-sized parts with the client's own encryption code, in a worker, as the client does for a task that encrypts. Nothing is sent anywhere. Keep the screen on while it runs.</p>
+
+  <div class="controls">
+    <button id="run" type="button">Run benchmark</button>
+    <button id="copy" type="button" class="secondary" disabled>Copy results</button>
+    <span id="status">Not run yet. Takes about 10 seconds to a few minutes.</span>
+  </div>
+
+  <h2>Events</h2>
+  <p class="muted">Each is turned into JSON, encrypted, and base64-encoded, which is what the client does with every event. The smallest is nearly all the cost of a call; the large one is nearly all the cost of the bytes.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Event</th><th class="num">Size</th><th class="num">Each</th><th class="num">Rate</th></tr></thead>
+      <tbody>
+        <tr id="smallest"><td>Smallest possible, <code>{}</code></td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+        <tr id="typical"><td>One trial</td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+        <tr id="large"><td>Very large, near the default 1 MiB limit once encrypted</td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Recordings</h2>
+  <p class="muted">Media parts are encrypted as bytes, with no JSON or base64. 8 MB is the default <code>max_part_size</code>.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Part</th><th class="num">Size</th><th class="num">Each</th><th class="num">Rate</th></tr></thead>
+      <tbody>
+        <tr id="part1"><td>1 MB part</td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+        <tr id="part8"><td>8 MB part</td><td class="num"></td><td class="num"></td><td class="num"></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>While recording video at</th><th class="num">Share of one core spent encrypting</th></tr></thead>
+      <tbody>
+        <tr id="video2"><td>2.5 Mbit/s</td><td class="num"></td></tr>
+        <tr id="video5"><td>5 Mbit/s</td><td class="num"></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Report</h2>
+  <p class="muted">The same numbers as text, with the browser's own description of the device.</p>
+  <pre id="report">Run the benchmark to fill this in.</pre>
+</main>
+
+<!-- The worker, filled in by scripts/build-benchmark.js. -->
+<script type="text/plain" id="worker-source"></script>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const results = {};
+let reportText = "";
+
+function describeSize(size) {
+  if (size < 1024) return size + " B";
+  if (size < 1024 * 1024) return (size / 1024).toFixed(0) + " KB";
+  return (size / 1024 / 1024).toFixed(0) + " MB";
+}
+
+function describeMs(ms) {
+  return ms < 10 ? ms.toFixed(2) + " ms" : ms < 1000 ? ms.toFixed(0) + " ms" : (ms / 1000).toFixed(1) + " s";
+}
+
+function megabytesPerSecond(size, ms) {
+  return size / 1024 / 1024 / (ms / 1000);
+}
+
+function fill(id, cells, className = "") {
+  const tds = $(id).querySelectorAll("td.num");
+  cells.forEach((text, n) => { tds[n].textContent = text; tds[n].className = "num " + className; });
+}
+
+function showResult(id, size, ms) {
+  results[id] = { size, ms };
+  fill(id, [describeSize(size), describeMs(ms), megabytesPerSecond(size, ms).toFixed(1) + " MB/s"]);
+}
+
+function showVideo() {
+  const rate = megabytesPerSecond(results.part8.size, results.part8.ms);
+  for (const [id, mbit] of [["video2", 2.5], ["video5", 5]]) {
+    const share = (100 * mbit / 8) / rate;
+    fill(id, [share.toFixed(share < 10 ? 1 : 0) + "%"], share < 25 ? "ok" : share < 60 ? "warn" : "bad");
+  }
+}
+
+function writeReport() {
+  const lines = [
+    "Pig encryption benchmark",
+    "Device: " + navigator.userAgent,
+    "Cores reported: " + (navigator.hardwareConcurrency ?? "unknown") +
+      (navigator.deviceMemory ? ", memory: " + navigator.deviceMemory + " GB" : ""),
+  ];
+  for (const row of document.querySelectorAll("tbody tr")) {
+    const cells = [...row.querySelectorAll("td")].map((td) => td.textContent.trim());
+    lines.push(cells[0] + ": " + cells.slice(1).filter(Boolean).join(", "));
+  }
+  reportText = lines.join("\n");
+  $("report").textContent = reportText;
+  $("copy").disabled = false;
+}
+
+const labels = {
+  smallest: "Encrypting the smallest event…",
+  typical: "Encrypting trial events…",
+  large: "Encrypting a very large event…",
+  part1: "Encrypting 1 MB parts…",
+  part8: "Encrypting 8 MB parts…",
+};
+
+function finish(message) {
+  $("status").textContent = message;
+  $("run").disabled = false;
+}
+
+function run() {
+  $("run").disabled = true;
+  const source = $("worker-source").textContent;
+  if (!source.trim()) {
+    finish("This is the unbuilt page. Run `npm run benchmark` and open benchmarks/dist/encryption.html.");
+    return;
+  }
+  if (!window.isSecureContext || !crypto.subtle) {
+    finish("The browser only encrypts on a secure page. Open this over https, from localhost, or as a file.");
+    return;
+  }
+  const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })));
+  worker.onerror = (event) => { finish("The worker failed: " + (event.message || "no reason given") + "."); };
+  worker.onmessage = ({ data }) => {
+    if (data.started) $("status").textContent = labels[data.started];
+    else if (data.finished) showResult(data.finished, data.size, data.ms);
+    else if (data.error) { finish("Failed: " + data.error); worker.terminate(); }
+    else if (data.done) { showVideo(); writeReport(); finish("Done."); worker.terminate(); }
+  };
+  worker.postMessage("go");
+}
+
+$("run").addEventListener("click", run);
+$("copy").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(reportText);
+    $("copy").textContent = "Copied";
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents($("report"));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    $("copy").textContent = "Selected; copy it";
+  }
+});
+</script>
+</body>
+</html>

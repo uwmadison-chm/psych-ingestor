@@ -41,6 +41,7 @@
     "check": "tsc -p .",
     "test": "node --test test/*.test.ts",
     "e2e": "npm run build && playwright test",
+    "benchmark": "node scripts/build-benchmark.js",
     "prepublishOnly": "npm run check && npm test && npm run build"
   },
   "devDependencies": {
@@ -49,5 +50,8 @@
     "fake-indexeddb": "6.2.5",
     "typescript": "5.9.3",
     "vite": "7.3.6"
+  },
+  "dependencies": {
+    "age-encryption": "0.3.1"
   }
 }
