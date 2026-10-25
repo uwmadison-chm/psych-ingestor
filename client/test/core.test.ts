@@ -78,7 +78,7 @@ describe("a run while online", () => {
     });
   });
 
-  test("passes extra link parameters through", async () => {
+  test("passes extra run parameters through", async () => {
     const pig = new FakePig();
     const { core } = await setUp({ pig });
     await startRun(core, { parameters: { ...PARAMETERS, utm_source: "email" } });

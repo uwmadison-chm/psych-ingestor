@@ -41,7 +41,7 @@ of Pig, not by the application.
 Not CORS headers and not a content security policy. The real mitigations, in rough order of
 how much they buy you:
 
-- **Parameter signing.** Link parameters carry a signature proving the link came from you,
+- **Parameter signing.** Run parameters carry a signature proving the link came from you,
   so a participant can't change their own participant ID or condition assignment. Off by
   default, per task, because it makes testing considerably harder — you can't type a test
   URL by hand.
@@ -67,7 +67,7 @@ else, which is the right amount for data that a researcher needs to read with or
 tools.
 
 Two consequences worth stating: the account running Pig needs write access to the data root
-and nothing beyond it, and link parameters that become path components must be checked
+and nothing beyond it, and run parameters that become path components must be checked
 before they're used, never sanitized into something safe-looking. See
 [design_assumptions.md](design_assumptions.md).
 

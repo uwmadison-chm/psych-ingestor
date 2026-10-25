@@ -37,7 +37,7 @@ One participant doing one task, one time: "participant 10351 played the Balloons
 
 A run is what your task starts when a participant arrives, and what it finalizes when they
 finish — or what Pig closes for it, once it's been open as long as the task allows. It's
-identified by a **run ID** that Pig generates and returns — not by the link parameters,
+identified by a **run ID** that Pig generates and returns — not by the run parameters,
 though the parameters are what determine which run is meant.
 
 A run is the only thing in Pig with a lifecycle. Everything else is either configuration or
@@ -257,7 +257,7 @@ the second one rather than picking a winner. See
 
 ## Task definition
 
-The configuration entry for one task: expected link parameters, which of them make up the
+The configuration entry for one task: expected run parameters, which of them make up the
 run key, how long a run may stay open, whether signing is on, allowed origins, whether the
 task is open. Lives in a version-controlled file. See [configuration.md](configuration.md).
 
@@ -268,7 +268,7 @@ with one directory per task and one directory per run inside that.
 
 ## Parameter signing
 
-An optional per-task feature: link parameters carry a signature proving the link came from
+An optional per-task feature: run parameters carry a signature proving the link came from
 you, so a participant can't edit their own ID or condition assignment. Off by default,
 because it makes testing considerably harder.
 

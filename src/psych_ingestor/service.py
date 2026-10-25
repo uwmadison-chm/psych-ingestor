@@ -140,7 +140,7 @@ class Pig:
         if not isinstance(submitted, dict):
             raise RequestProblem(
                 422,
-                "Expected a JSON object of link parameters, like "
+                "Expected a JSON object of run parameters, like "
                 '{"participant_id": "10351"}.',
             )
 

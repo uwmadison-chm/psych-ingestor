@@ -54,7 +54,7 @@ That one lasted a few weeks, which is the lesson. If an exception ever comes bac
 needs silent corruption on one side, an ordinary human typo on the other, no information
 destroyed — and a reason that would survive the next change of layout.
 
-## Link parameters will be used in filenames; be careful
+## Run parameters will be used in filenames; be careful
 
 Pig stores every run under its run ID, so nothing a participant supplies becomes a path
 on the collecting machine. But `pigsty organize` builds a readable tree like

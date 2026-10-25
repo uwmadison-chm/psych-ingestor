@@ -24,7 +24,7 @@ what holds your data. (Pig borrows its words from BIDS: a participant comes in f
 - **Your task code.** A short name for your task, set when someone adds it to Pig's
   configuration — `stroop`, `balloons`, `dd_game`. It appears in every URL your task calls,
   after `/task/`.
-- **The list of link parameters Pig expects for your task**, like `participant_id` and
+- **The list of run parameters Pig expects for your task**, like `participant_id` and
   `session`. This is also set in configuration, and Pig will reject a run that doesn't
   match.
 
@@ -107,7 +107,7 @@ await fetch(`${PIG}/task/${TASK}/run/${run_id}/finalize`, { method: "POST" });
 ### `GET /task/{task_code}`
 
 You don't need this to record data. It's for a task that wants to check its own settings
-before it starts a run: which link parameters to expect, how big an event can be, whether
+before it starts a run: which run parameters to expect, how big an event can be, whether
 it may send media. The JavaScript client uses it so it can start a run while offline.
 
 ```json
@@ -125,7 +125,7 @@ it may send media. The JavaScript client uses it so it can start a run while off
 | Field | Means |
 | --- | --- |
 | `open` | Whether Pig will start new runs for this task. |
-| `parameters` | The link parameters a run needs. |
+| `parameters` | The parameters a run needs. |
 | `expires_after_sec` | How long a run may stay open, in seconds, counted from when it started. See [When a run expires](#when-a-run-expires). |
 | `max_event_size_bytes` | The biggest event Pig will store, in bytes, measured as JSON. |
 | `media` | `null` if this task can't send audio, video, and other files. If it can, the settings for them (below). |
@@ -152,7 +152,7 @@ Anyone can read this. Everything in it is something your task could learn by try
 
 ### `POST /task/{task_code}/run`
 
-Send the link parameters as JSON:
+Send the run parameters as JSON:
 
 ```json
 {
@@ -331,7 +331,7 @@ What you see is the reply to your next request:
 ```
 
 with status code `409 Conflict`. `stored` is everything Pig kept, and `errors` lists what it
-didn't take. Do what the message says: start a new run with the same link parameters, and
+didn't take. Do what the message says: start a new run with the same run parameters, and
 send the refused events to the new run ID. Pig gives the new run the next run number, so
 nothing is overwritten and the two runs sit side by side in your data.
 
@@ -595,7 +595,7 @@ Three things you can rely on that you might expect to be in flux:
 
 - **A closed run stays closed.** Once a run is finalized or expired, nothing reopens it.
   If there's more to record, that's a new run with a new run number.
-- **Extra link parameters are fine.** Pig ignores parameters it doesn't know about — a
+- **Extra run parameters are fine.** Pig ignores parameters it doesn't know about — a
   `utm_source` or a leftover `debug=1` won't stop a run from starting. Only the parameters
   your task's configuration names are used to identify the run.
 - **Pig has no notion of a study.** Tasks are the top level. Your task code is the whole

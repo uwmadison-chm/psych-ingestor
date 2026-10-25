@@ -16,7 +16,7 @@ One Pig deployment serves all of your lab's tasks, so this file grows as you add
 Two places, split by whether a human writes it or the service does:
 
 - **A file, in version control** — task definitions. The things you'd want to review, diff,
-  and roll back: expected link parameters, the run key, allowed origins, signing, whether
+  and roll back: expected run parameters, the run key, allowed origins, signing, whether
   the task is open.
 - **The database** — what accumulates at runtime: runs, participants discovered as they
   arrive, event bookkeeping. SQLite, in WAL mode.
@@ -287,7 +287,7 @@ whose data collection is ending — and they expire on their own schedule like a
 
 ### Parameter signing
 
-*Not built.* Off by default and set per task. When on, Pig verifies that a participant's link parameters
+*Not built.* Off by default and set per task. When on, Pig verifies that a participant's run parameters
 were signed by you, so participants can't edit their own ID or condition.
 
 It complicates testing considerably — you can't just type a URL by hand — so it needs an
@@ -316,7 +316,7 @@ names.
 
 A task code must be a safe value, below, and lowercase. It becomes a directory name on
 every machine the data reaches, and macOS and Linux disagree about whether `Stroop/` and
-`stroop/` are the same directory; requiring one spelling sidesteps that. Link parameter
+`stroop/` are the same directory; requiring one spelling sidesteps that. Run parameter
 values aren't held to this, because they don't become directory names on the collecting
 machine — see below.
 
@@ -327,7 +327,7 @@ is what keeps a future study layer out of the URL space; see
 
 ## Safe values
 
-Some values end up as directory and file names: the task code, and the link parameters
+Some values end up as directory and file names: the task code, and the run parameters
 when `pigsty organize` builds a readable tree from them. Those have to be restricted,
 because a filesystem will accept things that later turn out to be a problem — and the
 check has to happen when the run starts, on the collecting machine, because by the time

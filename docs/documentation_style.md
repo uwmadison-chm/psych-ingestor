@@ -88,7 +88,7 @@ and they guess wrong.
 Error text is documentation, read at the worst possible moment. Every error should say what
 happened and what to do.
 
-> No: Invalid link parameters.
+> No: Invalid run parameters.
 >
 > Yes: This task expects a `participant_id` in the link, and the link didn't have one.
 > Check the link you sent participants, or the `parameters` setting for this task.

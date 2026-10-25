@@ -69,7 +69,7 @@ Summarized from `docs/design_assumptions.md`; that file is canonical.
   no threads, no schedulers, no work outliving a request. Finishing closed runs, copying
   them offsite, and expiring runs that have been open too long are all scheduled CLI
   commands.
-- **Extra link parameters are ignored**, not an error. Recorded on the run, never used to
+- **Extra run parameters are ignored**, not an error. Recorded on the run, never used to
   identify or route anything.
 - **Repeat runs are always allowed** and always get their own dataset. `max_runs` may be
   added someday but does not yet exist.
