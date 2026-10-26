@@ -1,7 +1,8 @@
 # The JavaScript client: test it, build it, and keep the built files somewhere a task
 # author can download them without installing anything.
 #
-# Every push and pull request that touches the client runs its tests and builds it; the
+# Every push and pull request that touches the client runs its Node tests and builds it;
+# the browser tests are slow, so they run locally (`npm run e2e`) and not here. The
 # built files are attached to the run as an artifact called "pig-client". Pushing a tag
 # like v0.3.0 publishes that version to npm, and then attaches the files to a GitHub
 # release of that name. `just release` makes and pushes the tag.
@@ -17,9 +18,9 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
-    paths: ["client/**", "src/**", "pyproject.toml", ".github/workflows/client.yml"]
+    paths: ["client/**", "pyproject.toml", ".github/workflows/client.yml"]
   pull_request:
-    paths: ["client/**", "src/**", "pyproject.toml", ".github/workflows/client.yml"]
+    paths: ["client/**", "pyproject.toml", ".github/workflows/client.yml"]
 
 permissions:
   contents: read
@@ -40,17 +41,10 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
-      # The browser tests run against a real `pig serve`.
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync
-        working-directory: .
-
       - run: npm ci
       - run: npm run check
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium
-      - run: npx playwright test
 
       - uses: actions/upload-artifact@v4
         with:
