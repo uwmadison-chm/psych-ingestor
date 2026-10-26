@@ -1,6 +1,6 @@
 [project]
 name = "psych-ingestor"
-version = "1.0.0-pre.1"
+version = "1.0.0-pre.2"
 description = "An HTTP API for ingesting, routing, and storing data from online behavioral-research tasks"
 requires-python = ">=3.12"
 dependencies = [
