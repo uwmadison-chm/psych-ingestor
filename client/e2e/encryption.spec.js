@@ -20,7 +20,7 @@ function run(variable, fallback, ...args) {
 }
 
 test("an encrypted run is unreadable on the web server and decrypted by admit", async ({ page, request }) => {
-  const settings = await (await request.get(`${PIG}/task/sealed`)).json();
+  const settings = await (await request.get(`${PIG}/v1/task/sealed`)).json();
   expect(settings.encryption.public_key).toMatch(/^age1/);
 
   await page.goto("/script.html");

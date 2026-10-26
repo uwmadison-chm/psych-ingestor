@@ -191,9 +191,9 @@ def _check_signed_parameters(
 
 
 def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
-    """What `GET /task/{code}` answers, or None for a task the web server doesn't
+    """What `GET /v1/task/{code}` answers, or None for a task the web server doesn't
     have."""
-    url = f"{pig_url.rstrip('/')}/task/{code}"
+    url = f"{pig_url.rstrip('/')}/v1/task/{code}"
     try:
         with urllib.request.urlopen(url, timeout=CHECK_TIMEOUT_SECONDS) as reply:
             return json.loads(reply.read())

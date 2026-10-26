@@ -202,7 +202,7 @@ describe("offline", () => {
     await core.sent(run.id);
     const batches = pig.sent("events").filter((r) => r.path.includes("run-2"));
     assert.equal(batches.length, 1);
-    assert.equal(Object.keys(JSON.parse(batches[0].body!)).length, 31);
+    assert.equal(Object.keys(JSON.parse(batches[0].body!).events).length, 31);
   });
 
   test("can't start a task this device has never seen", async () => {
@@ -483,5 +483,5 @@ test("the server address may end with a slash", async () => {
   const pig = new FakePig();
   const { core } = await setUp({ pig });
   await startRun(core, { server: `${SERVER}/` });
-  assert.equal(pig.requests[0].path, "/task/stroop");
+  assert.equal(pig.requests[0].path, "/v1/task/stroop");
 });

@@ -175,8 +175,8 @@ class Pig:
         if not isinstance(submitted, dict):
             raise RequestProblem(
                 422,
-                "Expected a JSON object of run parameters, like "
-                '{"participant_id": "10351"}.',
+                "Expected the run parameters as a JSON object, like "
+                '{"parameters": {"participant_id": "10351"}}.',
             )
 
         parameters: dict[str, str] = {}
@@ -922,11 +922,55 @@ def _check_signature(
         ) from None
 
 
+def read_start_request(body: Any) -> tuple[Any, Any]:
+    """The parameters and the signature in a request to start a run.
+
+    Each request body is an object with named fields, rather than the parameters or the
+    events themselves, so there's room for something new beside them without taking a
+    name a task might want.
+    """
+    _check_fields(
+        body,
+        required="parameters",
+        allowed={"parameters", "signature"},
+        example='{"parameters": {"participant_id": "10351"}}',
+    )
+    return body["parameters"], body.get("signature")
+
+
+def read_events_request(body: Any) -> Any:
+    """The events in a request that sends them. See `read_start_request`."""
+    _check_fields(
+        body,
+        required="events",
+        allowed={"events"},
+        example='{"events": {"1": {"data": {...}}}}',
+    )
+    return body["events"]
+
+
+def _check_fields(body: Any, required: str, allowed: set[str], example: str) -> None:
+    if not isinstance(body, dict) or required not in body:
+        raise RequestProblem(
+            422, f"Expected a JSON object with {required!r} in it, like {example}."
+        )
+    unexpected = sorted(str(name) for name in set(body) - allowed)
+    if unexpected:
+        # Refused rather than ignored: a parameter or an event put here by mistake would
+        # otherwise be dropped without anyone being told.
+        raise RequestProblem(
+            422,
+            f"This request can only have {' and '.join(map(repr, sorted(allowed)))} "
+            f"in it, and it also has {', '.join(map(repr, unexpected))}. Did that "
+            f"belong inside {required!r}?",
+        )
+
+
 def _as_event_dict(submitted: Any) -> dict[str, Any]:
     if not isinstance(submitted, dict):
         raise RequestProblem(
             422,
-            'Expected a JSON object whose keys are your event IDs, like {"1": '
-            '{"data": {...}}}.',
+            "Expected the events as a JSON object whose keys are your event IDs, like "
+            '{"events": {"1": {"data": {...}}}}.',
         )
     return {str(event_id): event for event_id, event in submitted.items()}

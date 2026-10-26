@@ -144,9 +144,9 @@ def test_media_directories_are_named_for_their_event_ids(
     client: TestClient, pig: Pig, tmp_path: Path
 ):
     run_id = client.post(
-        "/task/interview/run", json={"participant_id": "10351"}
+        "/v1/task/interview/run", json={"parameters": {"participant_id": "10351"}}
     ).json()["run_id"]
-    base = f"/task/interview/run/{run_id}/media"
+    base = f"/v1/task/interview/run/{run_id}/media"
     client.post(base, json={"event_id": "prompt3_audio", "data": {}})
     client.put(f"{base}/1/1", content=b"first")
     client.put(f"{base}/1/2", content=b"second")
@@ -154,7 +154,7 @@ def test_media_directories_are_named_for_their_event_ids(
     # One the task never finished is copied too: organize doesn't judge the data.
     client.post(base, json={"event_id": "prompt4_audio", "data": {}})
     client.put(f"{base}/2/1", content=b"only")
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
     datastore, tree = tmp_path / "interview-data", tmp_path / "interview"
     arrive(pig, datastore, run_id, task="interview")
 

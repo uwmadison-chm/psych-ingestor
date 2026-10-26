@@ -12,8 +12,8 @@ Pig builds that message itself, on both sides (`pigsty sign` and `pig serve`), s
 participant's browser never has to put anything in a canonical order.
 
 The signature is written `{key name}.{signature}`. A key name never has a dot in it, and
-the signature is base64url, which doesn't either. It travels in a header when a run
-starts, not among the parameters, so it never takes a name a task might want. In a link,
+the signature is base64url, which doesn't either. It travels beside the parameters
+when a run starts, not among them, so it never takes a name a task might want. In a link,
 it's one more query parameter, `sig` unless the task says otherwise (`LINK_PARAMETER`):
 what to call it there is up to whatever reads the link, which is the client, not Pig.
 
@@ -32,9 +32,6 @@ import re
 from cryptography.exceptions import InvalidSignature
 
 from . import keys
-
-# The header a run's signature comes in, when it starts.
-SIGNATURE_HEADER = "Pig-Signature"
 
 # What the signature is called in a link, unless the task renames it. The client and
 # `pigsty sign` use the same default, so a link pigsty makes is one the client reads.

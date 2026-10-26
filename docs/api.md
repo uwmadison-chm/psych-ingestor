@@ -23,7 +23,7 @@ what holds your data. (Pig borrows its words from BIDS: a participant comes in f
   example below uses that; replace it with yours.
 - **Your task code.** A short name for your task, set when someone adds it to Pig's
   configuration — `stroop`, `balloons`, `dd_game`. It appears in every URL your task calls,
-  after `/task/`.
+  after `/v1/task/`.
 - **The list of run parameters Pig expects for your task**, like `participant_id` and
   `session`. This is also set in configuration, and Pig will reject a run that doesn't
   match.
@@ -32,7 +32,7 @@ Most of those parameters will eventually become directory and file names, so the
 restricted: letters, digits, underscore, and dash, up to 64 characters, and no dash at the
 start. Anything else — a space, a dot, an accented letter, an empty value — and Pig
 refuses to start the run rather than guessing at what you meant. Worth knowing when you're
-deciding what to put in participant links. (A task that [checks signatures](#signed-links) can also take parameters that are text, which are held to a looser rule. `GET /task/{task_code}` says which are which.)
+deciding what to put in participant links. (A task that [checks signatures](#signed-links) can also take parameters that are text, which are held to a looser rule. `GET /v1/task/{task_code}` says which are which.)
 
 Case matters. `?session=Baseline` and `?session=baseline` are two different sessions, and
 Pig keeps exactly what your link said. If your links come from more than one place, make
@@ -73,38 +73,39 @@ const PIG = "https://pig.yourlab.edu";
 const TASK = "stroop";
 
 // 1. Start the run.
-const startResponse = await fetch(`${PIG}/task/${TASK}/run`, {
+const startResponse = await fetch(`${PIG}/v1/task/${TASK}/run`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    participant_id: "10351",
-    session: "baseline"
+    parameters: { participant_id: "10351", session: "baseline" }
   })
 });
 const { run_id } = await startResponse.json();
 
 // 2. Send some events. The keys are your event IDs.
-await fetch(`${PIG}/task/${TASK}/run/${run_id}`, {
+await fetch(`${PIG}/v1/task/${TASK}/run/${run_id}`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
-    "1": {
-      data: { type: "task_start", time: "2026-07-26T18:25:43.511-05:00" }
-    },
-    "2": {
-      data: { type: "trial", time: "2026-07-26T18:25:47.204-05:00",
-              word: "GREEN", ink: "red", rt: 843, correct: true }
+    events: {
+      "1": {
+        data: { type: "task_start", time: "2026-07-26T18:25:43.511-05:00" }
+      },
+      "2": {
+        data: { type: "trial", time: "2026-07-26T18:25:47.204-05:00",
+                word: "GREEN", ink: "red", rt: 843, correct: true }
+      }
     }
   })
 });
 
 // 3. Tell Pig you're done.
-await fetch(`${PIG}/task/${TASK}/run/${run_id}/finalize`, { method: "POST" });
+await fetch(`${PIG}/v1/task/${TASK}/run/${run_id}/finalize`, { method: "POST" });
 ```
 
 ## Reading a task's settings
 
-### `GET /task/{task_code}`
+### `GET /v1/task/{task_code}`
 
 You don't need this to record data. It's for a task that wants to check its own settings
 before it starts a run: which run parameters to expect, how big an event can be, whether
@@ -154,16 +155,20 @@ Anyone can read this. Everything in it is something your task could learn by try
 
 ## Starting a run
 
-### `POST /task/{task_code}/run`
+### `POST /v1/task/{task_code}/run`
 
-Send the run parameters as JSON:
+Send the run parameters as JSON, under `parameters`:
 
 ```json
 {
-  "participant_id": "10351",
-  "session": "baseline"
+  "parameters": {
+    "participant_id": "10351",
+    "session": "baseline"
+  }
 }
 ```
+
+`parameters` is every name and value from the participant's link. A task that [checks signatures](#signed-links) also sends `signature`, beside `parameters`. Nothing else goes at the top: Pig refuses anything else there with a `422`, since a parameter put there by mistake would otherwise be lost.
 
 Pig checks them against what your task's configuration expects, and refuses the run if they
 don't match: `422` for a parameter that's missing or has a value Pig can't use, and `403` for a link whose [signature](#signed-links) doesn't check out.
@@ -189,17 +194,21 @@ You can use it to change what the participant sees: a run number above 1 means t
 
 ## Sending events
 
-### `POST /task/{task_code}/run/{run_id}`
+### `POST /v1/task/{task_code}/run/{run_id}`
 
-The body is a JSON object whose keys are your event IDs:
+Send the events under `events`, as a JSON object whose keys are your event IDs:
 
 ```json
 {
-  "1": { "data": { "type": "task_start", "time": "2026-07-26T18:25:43.511-05:00" } },
-  "2": { "data": { "type": "instructions", "time": "2026-07-26T18:25:43.511-05:00" } },
-  "3": { "data": { "type": "get_ready", "time": "2026-07-26T18:26:03.29-05:00" } }
+  "events": {
+    "1": { "data": { "type": "task_start", "time": "2026-07-26T18:25:43.511-05:00" } },
+    "2": { "data": { "type": "instructions", "time": "2026-07-26T18:25:43.511-05:00" } },
+    "3": { "data": { "type": "get_ready", "time": "2026-07-26T18:26:03.29-05:00" } }
+  }
 }
 ```
+
+As with starting a run, Pig refuses anything but `events` at the top.
 
 **Event IDs** are yours to make up, and must be unique within the run. A counter starting
 at 1 is fine. So is a UUID. Pig uses the ID to make sure it stores each event exactly once,
@@ -290,7 +299,7 @@ can't control the message in that case. If you're batching, batch modestly.
 
 ## Finishing a run
 
-### `POST /task/{task_code}/run/{run_id}/finalize`
+### `POST /v1/task/{task_code}/run/{run_id}/finalize`
 
 Closes the run to further data.
 
@@ -346,7 +355,7 @@ it received is already saved.
 
 ## Checking on a run
 
-### `GET /task/{task_code}/run/{run_id}`
+### `GET /v1/task/{task_code}/run/{run_id}`
 
 ```json
 {
@@ -387,7 +396,7 @@ next to the data file, in a directory named for the media ID.
 
 ### Starting a media item
 
-#### `POST /task/{task_code}/run/{run_id}/media`
+#### `POST /v1/task/{task_code}/run/{run_id}/media`
 
 ```json
 {
@@ -416,7 +425,7 @@ ID, same `data` gets `200 OK` and the same media ID back. Same event ID with dif
 
 ### Sending the parts
 
-#### `PUT /task/{task_code}/run/{run_id}/media/{media_id}/{part}`
+#### `PUT /v1/task/{task_code}/run/{run_id}/media/{media_id}/{part}`
 
 The body is the bytes, and nothing else: no JSON around them, no base64, no form
 encoding. Send whatever your recorder hands you, as it hands it to you. `part` is a
@@ -424,7 +433,7 @@ number counting from 1, and it's required even if there's only one part. Parts c
 arrive in any order.
 
 ```javascript
-await fetch(`${PIG}/task/${TASK}/run/${runId}/media/${mediaId}/${part}`, {
+await fetch(`${PIG}/v1/task/${TASK}/run/${runId}/media/${mediaId}/${part}`, {
   method: "PUT",
   body: blob
 });
@@ -471,7 +480,7 @@ settings.
 
 ### Finishing a media item
 
-#### `POST /task/{task_code}/run/{run_id}/media/{media_id}/finish`
+#### `POST /v1/task/{task_code}/run/{run_id}/media/{media_id}/finish`
 
 ```json
 { "parts": 37 }
@@ -543,7 +552,7 @@ belong together, no file extension chosen for you. What you send is what's store
 
 *Only for tasks whose configuration sets `encrypt_to`. The [JavaScript client](../client/README.md) does all of this for you.*
 
-An encrypted task encrypts everything it records before it sends it, so Pig stores it without being able to read it. Only the secure side, where the data ends up, has the key that opens it. `GET /task/{task_code}` gives the key to encrypt to:
+An encrypted task encrypts everything it records before it sends it, so Pig stores it without being able to read it. Only the secure side, where the data ends up, has the key that opens it. `GET /v1/task/{task_code}` gives the key to encrypt to:
 
 ```json
 "encryption": { "public_key": "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p" }
@@ -576,26 +585,22 @@ Whether a run is encrypted is settled when it starts. Changing the task's config
 
 *Only for tasks whose configuration sets `signed_by`. The [JavaScript client](../client/README.md) does all of this for you.*
 
-A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The link carries the signature as one more query parameter, usually `sig`. When you start the run, send it in a `Pig-Signature` header, exactly as the link had it, and send the parameters as usual without it:
+A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The link carries the signature as one more query parameter, usually `sig`. When you start the run, send it as `signature`, beside the parameters rather than among them, exactly as the link had it:
 
-```javascript
-await fetch(`${PIG}/task/teddy/run`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Pig-Signature": "lucida/signing.Xk3p…"
+```json
+{
+  "parameters": {
+    "id": "10235",
+    "event": "base",
+    "modules": "questions:1,2,3|reels:03,22"
   },
-  body: JSON.stringify({
-    id: "10235",
-    event: "base",
-    modules: "questions:1,2,3|reels:03,22"
-  })
-});
+  "signature": "lucida/signing.Xk3p…"
+}
 ```
 
-It's a header, not a parameter, so a task that doesn't sign sends exactly what it always did, and a signature never takes a name a task might want. A task that doesn't check signatures ignores the header. Among the parameters, a signature is only another extra parameter, and doesn't count.
+It sits beside the parameters so it never takes a name a task might want. A task that doesn't check signatures ignores it. Among the parameters, a signature is only another extra parameter, and doesn't count.
 
-Your task doesn't need to know anything about signatures: it never makes or checks one. `GET /task/{task_code}` says which parameters a signature covers, so a task can tell a participant their link is broken before it asks Pig, but Pig is the one that checks.
+Your task doesn't need to know anything about signatures: it never makes or checks one. `GET /v1/task/{task_code}` says which parameters a signature covers, so a task can tell a participant their link is broken before it asks Pig, but Pig is the one that checks.
 
 If the signature is missing, can't be read, was made for another task or with a key this task doesn't accept, or a value it covers has changed, you get `403 Forbidden`, with a message saying which. Tell the participant to use the link they were sent. Retrying won't help, and nor will an edited link.
 
@@ -624,7 +629,9 @@ Nothing here should stop you writing a task, but these will grow:
 - **The error for a repeated event ID will tell you about the version Pig already has.** It
   will tell you something; the exact shape isn't settled.
 
-Three things you can rely on that you might expect to be in flux:
+Four things you can rely on that you might expect to be in flux:
+
+- **This is version 1 of the API**, and every URL starts `/v1/`. A device can hold a run for weeks while it's offline, so when there's a version 2, Pig will go on answering `/v1/` beside it. For how long isn't settled yet (#76). `GET /health` isn't versioned.
 
 - **A closed run stays closed.** Once a run is finalized or expired, nothing reopens it.
   If there's more to record, that's a new run with a new run number.
@@ -640,7 +647,7 @@ Three things you can rely on that you might expect to be in flux:
 
 Pig's web server is on the public internet, so once a run is safely on the secure side, its copy on the web server should go. Purging deletes the run from `done/`, and the copy to the bucket then drops it from there too. See [organizing.md](organizing.md).
 
-### `POST /task/{task_code}/run/{run_id}/purge`
+### `POST /v1/task/{task_code}/run/{run_id}/purge`
 
 ```json
 {

@@ -11,11 +11,11 @@ import os
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, FastAPI, Header, Request
+from fastapi import APIRouter, Body, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import db, health, signing
+from . import db, health, service
 from .config import DEFAULT_CONFIG, ConfigSource
 from .runs import RequestProblem
 from .service import Pig
@@ -57,45 +57,46 @@ def create_app(config_path: Path) -> FastAPI:
             status_code=problem.status_code, content={"message": problem.message}
         )
 
-    @app.get("/task/{task_code}")
+    # Every task endpoint is under /v1/, so a later version can live beside this one
+    # for as long as an offline device might still turn up speaking it. /health isn't:
+    # whatever watches the service shouldn't have to know about API versions.
+    v1 = APIRouter(prefix="/v1")
+
+    @v1.get("/task/{task_code}")
     def describe_task(task_code: str) -> JSONResponse:
         with _pig(source) as pig:
             return JSONResponse(content=pig.describe_task(task_code))
 
-    @app.post("/task/{task_code}/run")
-    def start_run(
-        task_code: str,
-        parameters: dict[str, Any],
-        # A header rather than a parameter, so it never takes a name a task might want,
-        # and a task that doesn't sign sends exactly what it always did.
-        signature: Annotated[str | None, Header(alias=signing.SIGNATURE_HEADER)] = None,
-    ) -> JSONResponse:
+    @v1.post("/task/{task_code}/run")
+    def start_run(task_code: str, submitted: Annotated[Any, Body()]) -> JSONResponse:
+        parameters, signature = service.read_start_request(submitted)
         with _pig(source) as pig:
             return JSONResponse(
                 status_code=201,
                 content=pig.start_run(task_code, parameters, signature),
             )
 
-    @app.post("/task/{task_code}/run/{run_id}")
+    @v1.post("/task/{task_code}/run/{run_id}")
     def store_events(
-        task_code: str, run_id: str, events: dict[str, Any]
+        task_code: str, run_id: str, submitted: Annotated[Any, Body()]
     ) -> JSONResponse:
+        events = service.read_events_request(submitted)
         with _pig(source) as pig:
             result = pig.store_events(task_code, run_id, events)
             return JSONResponse(status_code=result.status_code, content=result.body())
 
-    @app.post("/task/{task_code}/run/{run_id}/finalize")
+    @v1.post("/task/{task_code}/run/{run_id}/finalize")
     def finalize_run(task_code: str, run_id: str) -> JSONResponse:
         with _pig(source) as pig:
             result = pig.finalize_run(task_code, run_id)
             return JSONResponse(status_code=result.status_code, content=result.body())
 
-    @app.get("/task/{task_code}/run/{run_id}")
+    @v1.get("/task/{task_code}/run/{run_id}")
     def describe_run(task_code: str, run_id: str) -> JSONResponse:
         with _pig(source) as pig:
             return JSONResponse(content=pig.describe_run(task_code, run_id))
 
-    @app.post("/task/{task_code}/run/{run_id}/media")
+    @v1.post("/task/{task_code}/run/{run_id}/media")
     def start_media(
         task_code: str, run_id: str, event: Annotated[Any, Body()]
     ) -> JSONResponse:
@@ -105,7 +106,7 @@ def create_app(config_path: Path) -> FastAPI:
             reply = pig.start_media(task_code, run_id, event)
             return JSONResponse(status_code=reply.status_code, content=reply.body)
 
-    @app.put("/task/{task_code}/run/{run_id}/media/{media_id}/{part}")
+    @v1.put("/task/{task_code}/run/{run_id}/media/{media_id}/{part}")
     async def store_part(
         task_code: str, run_id: str, media_id: int, part: int, request: Request
     ) -> JSONResponse:
@@ -122,7 +123,7 @@ def create_app(config_path: Path) -> FastAPI:
             )
             return JSONResponse(status_code=reply.status_code, content=reply.body)
 
-    @app.post("/task/{task_code}/run/{run_id}/media/{media_id}/finish")
+    @v1.post("/task/{task_code}/run/{run_id}/media/{media_id}/finish")
     def finish_media(
         task_code: str, run_id: str, media_id: int, declared: Annotated[Any, Body()]
     ) -> JSONResponse:
@@ -130,13 +131,15 @@ def create_app(config_path: Path) -> FastAPI:
             reply = pig.finish_media(task_code, run_id, media_id, declared)
             return JSONResponse(status_code=reply.status_code, content=reply.body)
 
-    @app.post("/task/{task_code}/run/{run_id}/purge")
+    @v1.post("/task/{task_code}/run/{run_id}/purge")
     def purge_run(
         task_code: str, run_id: str, submitted: Annotated[Any, Body()]
     ) -> JSONResponse:
         # Asked for by `pigsty purge`, never by a task. See docs/api.md.
         with _pig(source) as pig:
             return JSONResponse(content=pig.purge_run(task_code, run_id, submitted))
+
+    app.include_router(v1)
 
     @app.get("/health")
     def check_health() -> JSONResponse:

@@ -39,7 +39,7 @@ def secure_copy(pig: Pig, run_id: str, tmp_path: Path) -> Path:
 
 def ask(client: TestClient, run_id: str, hashes: dict, task: str = "stroop"):
     return client.post(
-        f"/task/{task}/run/{run_id}/purge", json={"purge_hashes": hashes}
+        f"/v1/task/{task}/run/{run_id}/purge", json={"purge_hashes": hashes}
     )
 
 
@@ -235,7 +235,7 @@ def test_a_run_asked_for_under_another_task_is_a_404(
 def test_a_malformed_request_is_a_422(pig: Pig, client: TestClient, body):
     run_id = finished_run(pig)
 
-    reply = client.post(f"/task/stroop/run/{run_id}/purge", json=body)
+    reply = client.post(f"/v1/task/stroop/run/{run_id}/purge", json=body)
 
     assert reply.status_code == 422
     assert done(pig, run_id).is_dir()

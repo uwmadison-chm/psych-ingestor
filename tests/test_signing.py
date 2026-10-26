@@ -172,7 +172,7 @@ def test_pigsty_makes_signing_keys(tmp_path: Path, capsys):
 
 
 def test_a_task_gives_what_it_signs(web: Path):
-    described = TestClient(create_app(web)).get("/task/teddy").json()
+    described = TestClient(create_app(web)).get("/v1/task/teddy").json()
     assert described["parameters"] == ["id", "event", "modules"]
     assert described["path_parameters"] == ["id", "event"]
     assert described["parameter_signing"] == {
@@ -294,20 +294,15 @@ def test_a_signature_among_the_parameters_doesnt_count(pig: Pig, signing_key):
 
 def test_the_api_answers_a_bad_signature_with_403(web: Path, signing_key):
     client = TestClient(create_app(web))
-    reply = client.post("/task/teddy/run", json=SIGNED)
+    reply = client.post("/v1/task/teddy/run", json={"parameters": SIGNED})
     assert reply.status_code == 403
     assert "no signature" in reply.json()["message"]
-    reply = client.post(
-        "/task/teddy/run", json=SIGNED, headers={"Pig-Signature": "lucida/x.AAAA"}
-    )
+    body = {"parameters": SIGNED, "signature": "lucida/x.AAAA"}
+    reply = client.post("/v1/task/teddy/run", json=body)
     assert reply.status_code == 403
     assert "Use the link you were sent" in reply.json()["message"]
-    reply = client.post(
-        "/task/teddy/run",
-        json=SIGNED,
-        headers={"Pig-Signature": signature_for(signing_key)},
-    )
-    assert reply.status_code == 201
+    body = {"parameters": SIGNED, "signature": signature_for(signing_key)}
+    assert client.post("/v1/task/teddy/run", json=body).status_code == 201
 
 
 # ------------------------------------------------------------------ pigsty sign

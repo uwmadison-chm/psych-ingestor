@@ -193,7 +193,7 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
         except (PurgeProblem, OSError) as problem:
             report.problems[str(incoming / run_id)] = f"couldn't hash it: {problem}"
             continue
-        path = f"/task/{task_code}/run/{urllib.parse.quote(run_id, safe='')}/purge"
+        path = f"/v1/task/{task_code}/run/{urllib.parse.quote(run_id, safe='')}/purge"
         try:
             status, body = send(path, {"purge_hashes": hashes})
         except Unreachable as error:

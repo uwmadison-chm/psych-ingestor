@@ -37,23 +37,23 @@ The example configuration has a `stroop` task expecting `participant_id` and `se
 From another terminal:
 
 ```
-curl -X POST localhost:8000/task/stroop/run \
+curl -X POST localhost:8000/v1/task/stroop/run \
   -H 'Content-Type: application/json' \
-  -d '{"participant_id": "10351", "session": "baseline"}'
+  -d '{"parameters": {"participant_id": "10351", "session": "baseline"}}'
 ```
 
 That gives you a run ID. Send events to it, keyed by IDs you make up:
 
 ```
-curl -X POST localhost:8000/task/stroop/run/YOUR-RUN-ID \
+curl -X POST localhost:8000/v1/task/stroop/run/YOUR-RUN-ID \
   -H 'Content-Type: application/json' \
-  -d '{"1": {"data": {"type": "task_start"}}}'
+  -d '{"events": {"1": {"data": {"type": "task_start"}}}}'
 ```
 
 ...and when you're done:
 
 ```
-curl -X POST localhost:8000/task/stroop/run/YOUR-RUN-ID/finalize
+curl -X POST localhost:8000/v1/task/stroop/run/YOUR-RUN-ID/finalize
 ```
 
 [api.md](api.md) has the full detail and a JavaScript example you can paste into a task.
@@ -62,12 +62,12 @@ The example configuration also has an `interview` task that takes media. Start a
 it, then send a recording as an event plus its bytes:
 
 ```
-curl -X POST localhost:8000/task/interview/run/YOUR-RUN-ID/media \
+curl -X POST localhost:8000/v1/task/interview/run/YOUR-RUN-ID/media \
   -H 'Content-Type: application/json' \
   -d '{"event_id": "prompt1_audio", "data": {"content_type": "audio/webm"}}'
-curl -X PUT localhost:8000/task/interview/run/YOUR-RUN-ID/media/1/1 \
+curl -X PUT localhost:8000/v1/task/interview/run/YOUR-RUN-ID/media/1/1 \
   --data-binary @some-file.webm
-curl -X POST localhost:8000/task/interview/run/YOUR-RUN-ID/media/1/finish \
+curl -X POST localhost:8000/v1/task/interview/run/YOUR-RUN-ID/media/1/finish \
   -H 'Content-Type: application/json' -d '{"parts": 1}'
 ```
 

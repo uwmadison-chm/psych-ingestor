@@ -101,10 +101,10 @@ def test_a_task_gives_the_public_key_it_encrypts_to(
     web: Path, private_key: keys.PrivateKey
 ):
     client = TestClient(create_app(web))
-    assert client.get("/task/secret").json()["encryption"] == {
+    assert client.get("/v1/task/secret").json()["encryption"] == {
         "public_key": private_key.public_key
     }
-    assert client.get("/task/plain").json()["encryption"] is None
+    assert client.get("/v1/task/plain").json()["encryption"] is None
 
 
 def test_encrypt_to_needs_a_public_keys_file(tmp_path: Path):
@@ -180,14 +180,16 @@ def test_an_encrypted_run_refuses_plaintext_parts(
     web: Path, private_key: keys.PrivateKey
 ):
     client = TestClient(create_app(web))
-    run_id = client.post("/task/secret/run", json=PARTICIPANT).json()["run_id"]
+    run_id = client.post(
+        "/v1/task/secret/run", json={"parameters": PARTICIPANT}
+    ).json()["run_id"]
     started = client.post(
-        f"/task/secret/run/{run_id}/media",
+        f"/v1/task/secret/run/{run_id}/media",
         json={"event_id": "clip", "data": encrypted_data({"p": 3}, private_key)},
     )
     assert started.status_code == 201
     media_id = started.json()["media_id"]
-    part = f"/task/secret/run/{run_id}/media/{media_id}"
+    part = f"/v1/task/secret/run/{run_id}/media/{media_id}"
 
     assert client.put(f"{part}/1", content=b"plain bytes").status_code == 422
     sent = client.put(f"{part}/1", content=encrypted(b"audio", private_key))

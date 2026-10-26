@@ -87,14 +87,14 @@ def test_a_media_run_is_admitted_with_its_parts(
     client: TestClient, pig: Pig, tmp_path: Path
 ):
     run_id = client.post(
-        "/task/interview/run", json={"participant_id": "10351"}
+        "/v1/task/interview/run", json={"parameters": {"participant_id": "10351"}}
     ).json()["run_id"]
-    base = f"/task/interview/run/{run_id}/media"
+    base = f"/v1/task/interview/run/{run_id}/media"
     client.post(base, json={"event_id": "prompt3_audio", "data": {}})
     client.put(f"{base}/1/1", content=b"first")
     client.put(f"{base}/1/2", content=b"second")
     client.post(f"{base}/1/finish", json={"parts": 2})
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
     sweep.sweep(pig.config, pig.connection)
     shutil.copytree(
         pig.config.done_root / "interview" / run_id, tmp_path / "incoming" / run_id
