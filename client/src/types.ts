@@ -26,7 +26,7 @@ export interface TaskSettings {
   /** The public key events and media parts are encrypted to, or null if the task
    * doesn't encrypt. Missing from settings saved by version 0.2.0 of the client. */
   encryption?: { public_key: string } | null;
-  /** The parameters a run's `_sig` has to cover, or null if the task doesn't check
+  /** The parameters a run's signature has to cover, or null if the task doesn't check
    * signatures. Missing from settings saved by version 0.2.0 of the client. */
   parameter_signing?: { signed_parameters: string[] } | null;
 }
@@ -52,6 +52,9 @@ export interface RunRecord {
   server: string;
   task: string;
   parameters: TaskParameters;
+  /** What the server checks the parameters against, for a task that signs them.
+   * Missing from a run recorded before signatures existed. */
+  signature?: string | null;
   settings: TaskSettings;
   client_info: ClientInfo;
   server_run_id: string | null;

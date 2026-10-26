@@ -38,10 +38,6 @@ TEXT_VALUE_EXPLANATION = (
     "like tabs or line breaks"
 )
 
-# Every parameter name starting with this is Pig's own, like `_sig`, so a task's
-# parameters can never collide with one.
-RESERVED_PARAMETER_PREFIX = "_"
-
 
 # A working copy keeps its configuration, database, and data under `local/`, which is the
 # one path version control ignores. Everything in the file is relative to the file, so
@@ -225,12 +221,6 @@ class TaskDefinition(BaseModel):
                 raise ValueError(
                     f"parameter name {name!r} isn't usable; parameter names should look "
                     "like participant_id"
-                )
-            if name.startswith(RESERVED_PARAMETER_PREFIX):
-                raise ValueError(
-                    f"parameter name {name!r} starts with {RESERVED_PARAMETER_PREFIX}, "
-                    "which is kept for Pig's own parameters, like _sig. Call it "
-                    "something else."
                 )
 
         missing = [

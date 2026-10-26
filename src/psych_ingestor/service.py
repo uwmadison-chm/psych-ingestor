@@ -115,7 +115,11 @@ class Pig:
 
     # ------------------------------------------------------------- starting
 
-    def start_run(self, task_code: str, submitted: dict[str, Any]) -> dict[str, Any]:
+    def start_run(
+        self, task_code: str, submitted: dict[str, Any], signature: Any = None
+    ) -> dict[str, Any]:
+        """Start a run with the parameters `submitted`. `signature` only matters to a
+        task that checks signatures; any other ignores it."""
         task = self.task(task_code)
         if not task.open:
             raise RequestProblem(
@@ -127,9 +131,7 @@ class Pig:
         if task.checks_signatures:
             # The signature isn't kept. It's no use without the parameters it covers,
             # and the key's name says what it proved.
-            signed_by = _check_signature(
-                task, parameters, extra.pop(signing.SIGNATURE_PARAMETER, None)
-            )
+            signed_by = _check_signature(task, parameters, signature)
         run_id = str(uuid.uuid4())
 
         # The directory first, then the row. A directory with no row is harmless litter;

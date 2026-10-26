@@ -22,7 +22,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import (
-    RESERVED_PARAMETER_PREFIX,
     SAFE_VALUE_EXPLANATION,
     ConfigurationError,
     is_safe_value,
@@ -179,9 +178,7 @@ class StyConfig(BaseModel):
             except PatternError as error:
                 raise ValueError(f"task {code!r}: {error}") from None
             for name in task.signed_parameters:
-                if not name.isidentifier() or name.startswith(
-                    RESERVED_PARAMETER_PREFIX
-                ):
+                if not name.isidentifier():
                     raise ValueError(
                         f"task {code!r}: {name!r} in signed_parameters isn't a name "
                         "pig.toml could have for a parameter."

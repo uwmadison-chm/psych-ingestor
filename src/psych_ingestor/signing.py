@@ -11,8 +11,11 @@ covers those: the task code, the key's name, and each signed parameter's name an
 Pig builds that message itself, on both sides (`pigsty sign` and `pig serve`), so a
 participant's browser never has to put anything in a canonical order.
 
-The signature travels as one more parameter, `_sig`, written `{key name}.{signature}`.
-A key name never has a dot in it, and the signature is base64url, which doesn't either.
+The signature is written `{key name}.{signature}`. A key name never has a dot in it, and
+the signature is base64url, which doesn't either. It travels in a header when a run
+starts, not among the parameters, so it never takes a name a task might want. In a link,
+it's one more query parameter, `sig` unless the task says otherwise (`LINK_PARAMETER`):
+what to call it there is up to whatever reads the link, which is the client, not Pig.
 
 Signatures don't expire. An offline participant can do a whole run before their device
 reaches Pig, and an expired signature would leave that data stuck on the device. Taking a
@@ -30,9 +33,12 @@ from cryptography.exceptions import InvalidSignature
 
 from . import keys
 
-# The parameter a signature travels in. Every parameter name starting `_` is Pig's (see
-# `config.RESERVED_PARAMETER_PREFIX`), so a task's own can never collide with it.
-SIGNATURE_PARAMETER = "_sig"
+# The header a run's signature comes in, when it starts.
+SIGNATURE_HEADER = "Pig-Signature"
+
+# What the signature is called in a link, unless the task renames it. The client and
+# `pigsty sign` use the same default, so a link pigsty makes is one the client reads.
+LINK_PARAMETER = "sig"
 
 # Bumped if what's signed ever changes, so an old signature can't be read as a new one.
 MESSAGE_VERSION = 1
@@ -62,7 +68,7 @@ def message(task_code: str, key_name: str, values: dict[str, str]) -> bytes:
 
 
 def sign(key: keys.SigningKey, task_code: str, values: dict[str, str]) -> str:
-    """The `_sig` value for these parameters."""
+    """The signature for these parameters, as it goes in a link."""
     signature = key.private.sign(message(task_code, key.name, values))
     encoded = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
     return f"{key.name}.{encoded}"
@@ -74,7 +80,7 @@ def verify(
     values: dict[str, str],
     accepted: dict[str, str],
 ) -> str:
-    """Check a `_sig` against the values it should cover, and return the name of the
+    """Check a signature against the values it should cover, and return the name of the
     key that signed it. `accepted` is the task's `signed_by`: each key's name and its
     public key.
 
@@ -82,15 +88,15 @@ def verify(
     read, is by a key the task doesn't accept, or doesn't match the values.
     """
     if signature is None:
-        raise BadSignature(f"there's no {SIGNATURE_PARAMETER} parameter.")
+        raise BadSignature("it has no signature.")
     if not isinstance(signature, str):
-        raise BadSignature(f"{SIGNATURE_PARAMETER} has to be text.")
+        raise BadSignature("the signature has to be text.")
     key_name, _, encoded = signature.rpartition(".")
     try:
         keys.check_key_name(key_name)
     except ValueError:
         raise BadSignature(
-            f"{SIGNATURE_PARAMETER} should be a key name, a dot, and a signature, and "
+            "a signature should be a key name, a dot, and the signature itself, and "
             "this one isn't. It may have been cut short when the link was copied."
         ) from None
     signature = _decode(encoded)
@@ -119,6 +125,6 @@ def _decode(encoded: str) -> bytes:
         if len(signature) == 64:
             return signature
     raise BadSignature(
-        f"the signature in {SIGNATURE_PARAMETER} can't be read. It may have been cut "
+        "the signature can't be read. It may have been cut "
         "short when the link was copied."
     )

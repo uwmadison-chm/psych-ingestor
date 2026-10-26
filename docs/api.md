@@ -576,16 +576,24 @@ Whether a run is encrypted is settled when it starts. Changing the task's config
 
 *Only for tasks whose configuration sets `signed_by`. The [JavaScript client](../client/README.md) does all of this for you.*
 
-A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The signature is one more parameter, `_sig`. Send it with the others when you start the run, exactly as the link had it:
+A task that checks signatures only starts a run from a link whose parameters were signed on the secure side, so a participant can't change their own ID, or anything else the signature covers, by editing the link. The link carries the signature as one more query parameter, usually `sig`. When you start the run, send it in a `Pig-Signature` header, exactly as the link had it, and send the parameters as usual without it:
 
-```json
-{
-  "id": "10235",
-  "event": "base",
-  "modules": "questions:1,2,3|reels:03,22",
-  "_sig": "lucida/signing.Xk3p…"
-}
+```javascript
+await fetch(`${PIG}/task/teddy/run`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Pig-Signature": "lucida/signing.Xk3p…"
+  },
+  body: JSON.stringify({
+    id: "10235",
+    event: "base",
+    modules: "questions:1,2,3|reels:03,22"
+  })
+});
 ```
+
+It's a header, not a parameter, so a task that doesn't sign sends exactly what it always did, and a signature never takes a name a task might want. A task that doesn't check signatures ignores the header. Among the parameters, a signature is only another extra parameter, and doesn't count.
 
 Your task doesn't need to know anything about signatures: it never makes or checks one. `GET /task/{task_code}` says which parameters a signature covers, so a task can tell a participant their link is broken before it asks Pig, but Pig is the one that checks.
 

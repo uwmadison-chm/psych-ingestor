@@ -91,13 +91,13 @@ def secure(private_keys_dir: Path) -> Path:
     return path
 
 
-def signed(signing_key: keys.SigningKey, values: dict = SIGNED) -> dict:
-    return {**values, "_sig": signing.sign(signing_key, "teddy", values)}
+def signature_for(signing_key: keys.SigningKey, values: dict = SIGNED) -> str:
+    return signing.sign(signing_key, "teddy", values)
 
 
-def refusal(pig: Pig, submitted: dict, task: str = "teddy") -> RequestProblem:
+def refusal(pig: Pig, submitted: dict, signature: object = None) -> RequestProblem:
     with pytest.raises(RequestProblem) as raised:
-        pig.start_run(task, submitted)
+        pig.start_run("teddy", submitted, signature)
     return raised.value
 
 
@@ -201,17 +201,13 @@ def test_signing_settings_that_cant_work_are_refused(web: Path, old, new, compla
         load_config(web)
 
 
-def test_a_task_parameter_cant_start_with_an_underscore(web: Path):
-    web.write_text(CONFIG.replace('["participant_id"]\nrun_key', '["_id"]\nrun_key'))
-    with pytest.raises(ConfigurationError, match="starts with _"):
-        load_config(web)
-
-
 # ------------------------------------------------------------------ starting runs
 
 
 def test_a_signed_link_starts_a_run(pig: Pig, signing_key: keys.SigningKey):
-    started = pig.start_run("teddy", {**signed(signing_key), "nextURL": "https://x"})
+    started = pig.start_run(
+        "teddy", {**SIGNED, "nextURL": "https://x"}, signature_for(signing_key)
+    )
     assert started["run_number"] == 1
 
     pig.finalize_run("teddy", started["run_id"])
@@ -226,8 +222,8 @@ def test_a_signed_link_starts_a_run(pig: Pig, signing_key: keys.SigningKey):
 
 
 def test_a_changed_value_is_refused(pig: Pig, signing_key: keys.SigningKey):
-    submitted = {**signed(signing_key), "modules": "questions:1"}
-    problem = refusal(pig, submitted)
+    submitted = {**SIGNED, "modules": "questions:1"}
+    problem = refusal(pig, submitted, signature_for(signing_key))
     assert problem.status_code == 403
     assert "doesn't match" in problem.message
 
@@ -235,7 +231,7 @@ def test_a_changed_value_is_refused(pig: Pig, signing_key: keys.SigningKey):
 @pytest.mark.parametrize(
     "signature, complaint",
     [
-        (None, "no _sig"),
+        (None, "no signature"),
         ("", "key name"),
         ("lucida/signing.not-a-signature", "can't be read"),
         ("lucida/other." + "A" * 86, "doesn't accept"),
@@ -245,12 +241,7 @@ def test_a_changed_value_is_refused(pig: Pig, signing_key: keys.SigningKey):
 def test_a_signature_that_cant_be_checked_is_refused(
     pig: Pig, signing_key: keys.SigningKey, signature, complaint
 ):
-    submitted = signed(signing_key)
-    if signature is None:
-        del submitted["_sig"]
-    else:
-        submitted["_sig"] = signature
-    problem = refusal(pig, submitted)
+    problem = refusal(pig, SIGNED, signature)
     assert problem.status_code == 403
     assert complaint in problem.message
 
@@ -258,49 +249,64 @@ def test_a_signature_that_cant_be_checked_is_refused(
 def test_a_link_signed_for_another_task_is_refused(
     pig: Pig, signing_key: keys.SigningKey
 ):
-    submitted = {
-        **SIGNED,
-        "_sig": signing.sign(signing_key, "other_task", SIGNED),
-    }
-    assert refusal(pig, submitted).status_code == 403
+    signature = signing.sign(signing_key, "other_task", SIGNED)
+    assert refusal(pig, SIGNED, signature).status_code == 403
 
 
 def test_a_missing_signed_parameter_is_a_422(pig: Pig, signing_key: keys.SigningKey):
-    submitted = signed(signing_key)
-    del submitted["modules"]
-    problem = refusal(pig, submitted)
+    submitted = {name: SIGNED[name] for name in ("id", "event")}
+    problem = refusal(pig, submitted, signature_for(signing_key))
     assert problem.status_code == 422
     assert "'modules'" in problem.message
 
 
 def test_text_parameters_have_rules_of_their_own(pig: Pig, signing_key):
     for value in ["two\nlines", "x" * 2049]:
-        problem = refusal(pig, signed(signing_key, {**SIGNED, "modules": value}))
+        values = {**SIGNED, "modules": value}
+        problem = refusal(pig, values, signature_for(signing_key, values))
         assert problem.status_code == 422
     # Path parameters are still held to the safe-value rule, signed or not.
-    problem = refusal(pig, signed(signing_key, {**SIGNED, "id": "../10235"}))
+    values = {**SIGNED, "id": "../10235"}
+    problem = refusal(pig, values, signature_for(signing_key, values))
     assert problem.status_code == 422
     assert "file name" in problem.message
 
 
 def test_text_is_kept_exactly_as_it_arrives(pig: Pig, signing_key: keys.SigningKey):
     values = {**SIGNED, "modules": "Café | ünïcode: 1,2"}
-    run_id = pig.start_run("teddy", signed(signing_key, values))["run_id"]
+    run_id = pig.start_run("teddy", values, signature_for(signing_key, values))[
+        "run_id"
+    ]
     run = pig._run_for_task("teddy", run_id)
     assert run.parameters == values
 
 
-def test_a_task_that_doesnt_sign_keeps__sig_as_an_extra(pig: Pig):
-    run_id = pig.start_run("stroop", {"participant_id": "1", "_sig": "x.y"})["run_id"]
-    assert pig._run_for_task("stroop", run_id).extra_parameters == {"_sig": "x.y"}
+def test_a_task_that_doesnt_sign_ignores_a_signature(pig: Pig):
+    run_id = pig.start_run("stroop", {"participant_id": "1"}, "x.y")["run_id"]
+    assert pig._run_for_task("stroop", run_id).extra_parameters == {}
+
+
+def test_a_signature_among_the_parameters_doesnt_count(pig: Pig, signing_key):
+    """It's only another parameter there, recorded like any extra."""
+    submitted = {**SIGNED, "sig": signature_for(signing_key)}
+    assert refusal(pig, submitted).status_code == 403
 
 
 def test_the_api_answers_a_bad_signature_with_403(web: Path, signing_key):
     client = TestClient(create_app(web))
-    reply = client.post("/task/teddy/run", json={**SIGNED, "_sig": "lucida/x.AAAA"})
+    reply = client.post("/task/teddy/run", json=SIGNED)
+    assert reply.status_code == 403
+    assert "no signature" in reply.json()["message"]
+    reply = client.post(
+        "/task/teddy/run", json=SIGNED, headers={"Pig-Signature": "lucida/x.AAAA"}
+    )
     assert reply.status_code == 403
     assert "Use the link you were sent" in reply.json()["message"]
-    reply = client.post("/task/teddy/run", json=signed(signing_key))
+    reply = client.post(
+        "/task/teddy/run",
+        json=SIGNED,
+        headers={"Pig-Signature": signature_for(signing_key)},
+    )
     assert reply.status_code == 201
 
 
@@ -315,7 +321,7 @@ def test_pigsty_sign_signs_what_pigsty_toml_lists(pig: Pig, secure: Path, capsys
     )
     signature = capsys.readouterr().out.strip()
     assert signature.startswith("lucida/signing.")
-    assert pig.start_run("teddy", {**SIGNED, "_sig": signature})["run_number"] == 1
+    assert pig.start_run("teddy", SIGNED, signature)["run_number"] == 1
 
 
 def test_pigsty_sign_can_print_a_whole_link(pig: Pig, secure: Path, capsys):
@@ -328,7 +334,8 @@ def test_pigsty_sign_can_print_a_whole_link(pig: Pig, secure: Path, capsys):
     link = urllib.parse.urlsplit(capsys.readouterr().out.strip())
     parameters = dict(urllib.parse.parse_qsl(link.query))
     assert parameters["modules"] == MODULES
-    assert pig.start_run("teddy", parameters)["run_number"] == 1
+    signature = parameters.pop("sig")
+    assert pig.start_run("teddy", parameters, signature)["run_number"] == 1
 
 
 @pytest.mark.parametrize(
@@ -377,20 +384,19 @@ def test_pigsty_sign_signs_a_csv(pig: Pig, secure: Path, tmp_path: Path, capsys)
     assert [row["record_id"] for row in rows] == ["1", "2"]
     for row in rows:
         values = {name: row[name] for name in ("id", "event", "modules")}
-        pig.start_run("teddy", {**values, "_sig": row["_sig"]})
+        pig.start_run("teddy", values, row["sig"])
 
 
-def test_pigsty_sign_can_name_the_csv_column(secure: Path, tmp_path: Path, capsys):
-    """REDCap field names have to start with a letter, so `_sig` can't be one."""
+def test_pigsty_sign_can_name_the_signature(secure: Path, tmp_path: Path, capsys):
     roster = tmp_path / "roster.csv"
     roster.write_text("id,event,modules\n10235,base,reels:01\n")
     pigsty(
         ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
-        + ["--csv", str(roster), "--column", "sig"],
+        + ["--csv", str(roster), "--name", "signature"],
         result_action="return_value",
     )
     (row,) = csv.DictReader(io.StringIO(capsys.readouterr().out))
-    assert row["sig"].startswith("lucida/signing.")
+    assert row["signature"].startswith("lucida/signing.")
 
 
 def test_pigsty_sign_refuses_a_csv_without_a_column(
@@ -426,7 +432,7 @@ def test_pigsty_check_warns_when_the_signed_lists_differ(
 
 
 def finished(pig: Pig, signing_key: keys.SigningKey, datastore: Path) -> str:
-    run_id = pig.start_run("teddy", signed(signing_key))["run_id"]
+    run_id = pig.start_run("teddy", SIGNED, signature_for(signing_key))["run_id"]
     pig.store_events("teddy", run_id, {"1": {"data": {"trial": 1}}})
     pig.finalize_run("teddy", run_id)
     sweep.sweep(pig.config, pig.connection)

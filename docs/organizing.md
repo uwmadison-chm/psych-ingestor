@@ -154,7 +154,7 @@ signed_parameters = ["id", "event", "modules"]
 
 If the two lists differ, links signed here don't start runs there, so the first test link shows it. With `pig_url` set, `pigsty check` also compares them with what the web server says, and warns if they differ.
 
-To sign one link's parameters, give their values. It prints the `_sig` to add to the link:
+To sign one link's parameters, give their values. It prints the signature to add to the link, as `sig`:
 
 ```
 pigsty sign teddy --key lucida/signing id=10235 event=base 'modules=questions:1,2,3|reels:03,22'
@@ -166,13 +166,15 @@ With `--url`, it prints the whole link, ready to paste into a browser, which is 
 pigsty sign teddy --key lucida/signing --url https://teddy.example.edu/ id=10235 event=base modules=reels:01
 ```
 
-To sign a whole list of participants, give it a CSV file with a column named for each signed parameter. It writes the file again with a `_sig` column added, keeping every other column as it was:
+To sign a whole list of participants, give it a CSV file with a column named for each signed parameter. It writes the file again with a `sig` column added, keeping every other column as it was:
 
 ```
 pigsty sign teddy --key lucida/signing --csv roster.csv > signed.csv
 ```
 
-For REDCap, whose field names have to start with a letter, name the column for a text field with `--column sig`, import `signed.csv`, and build the link by piping: `…?id=[record_id]&event=base&modules=…&_sig=[sig]`. In a longitudinal project, the field is on each event, so each session gets its own signature. REDCap can't make the signature itself, which is why it's made here, on the machine with the key.
+For REDCap, make `sig` a text field, import `signed.csv`, and build the link by piping: `…?id=[record_id]&event=base&modules=…&sig=[sig]`. In a longitudinal project, the field is on each event, so each session gets its own signature. REDCap can't make the signature itself, which is why it's made here, on the machine with the key.
+
+If the task reads the signature from the link under another name, give that name with `--name`, and it's used for the column and for the link `--url` prints.
 
 Signatures don't expire, and a signing key can't be used to decrypt anything. Back the key file up like any other: losing it means signing every outstanding link again with a new key. Anyone who has it can make links that work, so it never leaves this machine except to be backed up.
 

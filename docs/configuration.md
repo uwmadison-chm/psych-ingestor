@@ -303,17 +303,19 @@ signed_by = ["lucida/signing"]
 
 `signed_parameters` is the parameters the signature covers, and `signed_by` names the signing keys, from `public_keys_file`, that links for this task may be signed with. The keys are made on the secure side by `pigsty keys new --signing` and exported with the encryption keys, so it's the same file; see [organizing.md](organizing.md#signing-links). A task without `signed_by` doesn't check signatures.
 
-A link for this task looks like this, with the signature as one more parameter:
+A link for this task looks like this, with the signature as one more parameter, `sig`:
 
 ```
-https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&_sig=lucida/signing.Xk3…
+https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&sig=lucida/signing.Xk3…
 ```
+
+`sig` is the client's name for it, not Pig's. The client takes it out of the link and sends it to Pig in a header of its own (see [api.md](api.md#signed-links)), so a task can still have a parameter called `sig`, and can have the client read the signature from another name instead.
 
 Every signed parameter is required, and the signature covers exactly those. Anything else in the link, like a `nextURL`, is an extra parameter as usual: recorded, unsigned, free to vary.
 
 A signed parameter that isn't a path parameter, like `modules` above, is **text**. It's kept exactly as it arrives, may be any text up to 2,048 characters without control characters like tabs or line breaks, and can never be used in an organize pattern. *Provisional, like allowing characters outside ASCII.* Path parameters are held to the safe value rule whether they're signed or not.
 
-`pig check` refuses a task that signs anything but leaves out part of the run key, since a participant could then change who they are while the rest of the link stayed locked. *Provisional.* It also refuses a `signed_by` that names a key the file doesn't have, or an encryption key, and any parameter whose name starts with `_`, which Pig keeps for its own, like `_sig`.
+`pig check` refuses a task that signs anything but leaves out part of the run key, since a participant could then change who they are while the rest of the link stayed locked. *Provisional.* It also refuses a `signed_by` that names a key the file doesn't have, or an encryption key.
 
 Pig checks the signature when the run starts, and only then. A link that's missing its signature, was signed for another task or with a key the task doesn't list, or has had a value changed since it was signed, gets a `403`. After that, the run ID is what identifies the run, as it is for any task. The run records which key signed it, in the database and in its manifest; the signature itself isn't kept.
 

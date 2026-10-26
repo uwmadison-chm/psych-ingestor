@@ -340,7 +340,9 @@ def sign(
     *values: str,
     key: str,
     csv_file: Annotated[Path | None, cyclopts.Parameter(name="--csv")] = None,
-    column: str = signing.SIGNATURE_PARAMETER,
+    signature_name: Annotated[str, cyclopts.Parameter(name="--name")] = (
+        signing.LINK_PARAMETER
+    ),
     url: str | None = None,
     config: StyConfigPath | None = None,
 ) -> None:
@@ -348,12 +350,12 @@ def sign(
     from it.
 
     Signs exactly the parameters the task's signed_parameters in pigsty.toml lists,
-    and prints the _sig value that goes in the link alongside them:
+    and prints the signature that goes in the link alongside them, as sig:
 
         pigsty sign stroop --key lucida/signing participant_id=10351 session=baseline
 
     With --csv, signs every row of a CSV file instead, and writes it to standard output
-    with a _sig column added. The file needs a column named for each signed
+    with a sig column added. The file needs a column named for each signed
     parameter. Other columns are kept as they are, so a REDCap export can be signed and
     imported again:
 
@@ -372,13 +374,13 @@ def sign(
         The signing key to sign with, by name, from private_keys_dir.
     csv_file
         A CSV file to sign every row of.
-    column
-        With --csv, what to call the column the signatures go in. REDCap field names
-        have to start with a letter, so for REDCap, name it for the field, like sig,
-        and pipe it into the link as _sig=[sig].
+    signature_name
+        What to call the signature: the column it goes in, with --csv, or its
+        parameter in the link, with --url. Only needed if the task reads it from the
+        link under another name.
     url
-        Print a whole link instead: this address, with the parameters and _sig added.
-        Not used with --csv.
+        Print a whole link instead: this address, with the parameters and the
+        signature added. Not used with --csv.
     """
     loaded = _load(config)
     signed_parameters = _signed_parameters(loaded, task)
@@ -386,7 +388,7 @@ def sign(
     if csv_file is not None:
         if values or url:
             _fail("With --csv, the values come from the file. Leave out the others.")
-        _sign_csv(csv_file, column, task, signed_parameters, signing_key)
+        _sign_csv(csv_file, signature_name, task, signed_parameters, signing_key)
         return
 
     given = _parse_values(list(values))
@@ -407,7 +409,7 @@ def sign(
         print(signature)
         return
     query = urllib.parse.urlencode(
-        {**given, signing.SIGNATURE_PARAMETER: signature}, quote_via=urllib.parse.quote
+        {**given, signature_name: signature}, quote_via=urllib.parse.quote
     )
     print(f"{url}{'&' if '?' in url else '?'}{query}")
 

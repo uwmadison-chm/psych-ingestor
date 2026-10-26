@@ -108,8 +108,23 @@ describe("a run while online", () => {
     const pig = new FakePig();
     pig.tasks.stroop.signed_parameters = ["participant_id", "session"];
     const { core } = await setUp({ pig });
-    await assert.rejects(startRun(core, { parameters: { ...PARAMETERS, _sig: "bad" } }), { code: "bad-signature" });
-    await startRun(core, { parameters: { ...PARAMETERS, _sig: "good" } });
+    await assert.rejects(startRun(core, { signature: "bad" }), { code: "bad-signature" });
+    await startRun(core, { signature: "good" });
+  });
+
+  test("takes a link's signature out of its parameters, for a task that checks signatures", async () => {
+    const pig = new FakePig();
+    pig.tasks.stroop.signed_parameters = ["participant_id", "session"];
+    const { core } = await setUp({ pig });
+    await startRun(core, { parameters: { ...PARAMETERS, sig: "good" }, signatureParameter: "sig" });
+    assert.equal("sig" in pig.run("run-1").parameters, false);
+  });
+
+  test("leaves a parameter called sig alone, for a task that doesn't check signatures", async () => {
+    const pig = new FakePig();
+    const { core } = await setUp({ pig });
+    await startRun(core, { parameters: { ...PARAMETERS, sig: "mine" }, signatureParameter: "sig" });
+    assert.equal(pig.run("run-1").parameters.sig, "mine");
   });
 
   test("passes extra run parameters through", async () => {

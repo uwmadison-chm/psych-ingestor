@@ -17,7 +17,7 @@ interface FakeTask {
   /** The ones held to the safe-value rule, if not all of them. */
   path_parameters?: string[];
   /** The parameters a signature covers, for a task that checks them. The pretend Pig
-   * takes a _sig of "good", and no other. */
+   * takes a Pig-Signature header of "good", and no other. */
   signed_parameters?: string[];
   open: boolean;
   max_event_size_bytes: number;
@@ -63,6 +63,7 @@ export class FakePig {
   intercept: ((method: string, path: string, body?: string) => Response | undefined) | null = null;
   /** The body of the request being answered, as bytes, when it was a Blob. */
   #raw: Uint8Array | null = null;
+  #signature: string | null = null;
 
   constructor() {
     this.tasks = {
@@ -76,6 +77,7 @@ export class FakePig {
     const method = init.method ?? "GET";
     const body = init.body instanceof Blob ? await init.body.text() : (init.body as string | undefined);
     this.#raw = init.body instanceof Blob ? new Uint8Array(await init.body.arrayBuffer()) : null;
+    this.#signature = (init.headers as Record<string, string> | undefined)?.["Pig-Signature"] ?? null;
     this.requests.push({ method, path: pathname, body });
     if (this.offline) throw new TypeError("Failed to fetch");
     const intercepted = this.intercept?.(method, pathname, body);
@@ -197,7 +199,7 @@ export class FakePig {
       const parameters = JSON.parse(body!);
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
-      if (task.signed_parameters && parameters._sig !== "good") {
+      if (task.signed_parameters && this.#signature !== "good") {
         return { status: 403, body: { message: "The signature doesn't match. Use the link you were sent." } };
       }
       const id = `run-${this.runs.size + 1}`;
@@ -322,7 +324,14 @@ export const PARAMETERS = { participant_id: "10351", session: "baseline" };
 /** Start a run on the pretend server with the usual parameters. */
 export function startRun(
   core: Core,
-  extra: { server?: string; task?: string; parameters?: TaskParameters; finalizeWhenAbandoned?: boolean } = {},
+  extra: {
+    server?: string;
+    task?: string;
+    parameters?: TaskParameters;
+    signature?: string | null;
+    signatureParameter?: string | null;
+    finalizeWhenAbandoned?: boolean;
+  } = {},
 ) {
   return core.start({
     server: SERVER,

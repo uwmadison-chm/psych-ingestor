@@ -53,8 +53,6 @@ const SAFE_VALUE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
 // UTF-16 pair. The same rule as the server's; see docs/configuration.md.
 const MAX_TEXT_LENGTH = 2048;
 const NOT_TEXT = /[\p{Cc}\p{Cs}]/u;
-// The parameter a run's signature travels in.
-const SIGNATURE_PARAMETER = "_sig";
 
 export const DEFAULTS = {
   // Waiting between tries after a failure: doubling from the first, up to the cap, with
@@ -165,6 +163,8 @@ export class Core {
     server,
     task,
     parameters,
+    signature = null,
+    signatureParameter = null,
     finalizeWhenAbandoned = false,
     clientInfo,
     stamp,
@@ -172,6 +172,10 @@ export class Core {
     server: string;
     task: string;
     parameters: TaskParameters;
+    signature?: string | null;
+    /** Where startForURL() found the link's parameters, the one that holds the
+     * signature, if the task checks one. */
+    signatureParameter?: string | null;
     finalizeWhenAbandoned?: boolean;
     clientInfo: ClientInfo;
     stamp: Stamp;
@@ -180,7 +184,14 @@ export class Core {
     if (!settings.open) {
       throw new PigError("task-closed", `The task ${JSON.stringify(task)} isn't accepting new data right now.`);
     }
-    checkParameters(settings, parameters);
+    // Taken out of the link's parameters only for a task that signs. For any other, a
+    // parameter of that name is the task's own, and stays.
+    if (settings.parameter_signing && signature === null && signatureParameter !== null && signatureParameter in parameters) {
+      signature = parameters[signatureParameter];
+      parameters = { ...parameters };
+      delete parameters[signatureParameter];
+    }
+    checkParameters(settings, parameters, signature, signatureParameter);
 
     const id = randomId();
     const now = Date.now();
@@ -189,6 +200,7 @@ export class Core {
       server,
       task,
       parameters,
+      signature,
       settings,
       client_info: clientInfo,
       server_run_id: null,
@@ -601,7 +613,7 @@ export class Core {
   }
 
   async #sendStart(run: RunRecord, op: Op, waitMs?: number): Promise<"done" | "later" | "refused"> {
-    const reply = await this.http.startRun(run.server, run.task, run.parameters, waitMs);
+    const reply = await this.http.startRun(run.server, run.task, run.parameters, run.signature ?? null, waitMs);
     if (reply.ok) {
       await this.store.updateRun(run.id, (r) => {
         r.server_run_id = reply.body.run_id;
@@ -1162,7 +1174,12 @@ function takeEventId(run: RunRecord): string {
   return eventId;
 }
 
-function checkParameters(settings: TaskSettings, parameters: TaskParameters): void {
+function checkParameters(
+  settings: TaskSettings,
+  parameters: TaskParameters,
+  signature: string | null,
+  signatureParameter: string | null,
+): void {
   const missing = settings.parameters.filter((name) => !(name in parameters));
   if (missing.length > 0) {
     throw new PigError(
@@ -1187,10 +1204,12 @@ function checkParameters(settings: TaskSettings, parameters: TaskParameters): vo
       );
     }
   }
-  if (settings.parameter_signing && !(SIGNATURE_PARAMETER in parameters)) {
+  if (settings.parameter_signing && signature === null) {
     throw new PigError(
       "bad-signature",
-      `This task only starts runs from signed links, and this link has no ${SIGNATURE_PARAMETER}. Use the link you were sent, exactly as it is.`,
+      signatureParameter === null
+        ? "This task only starts runs from signed links, and start() was given no signature."
+        : `This task only starts runs from signed links, and this link has no ${signatureParameter}. Use the link you were sent, exactly as it is.`,
     );
   }
 }

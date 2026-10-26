@@ -139,9 +139,9 @@ The client learns that a task encrypts from its settings, which it saves for whe
 
 ## Tasks that check signatures
 
-If the task's configuration sets `signed_by`, Pig only starts a run whose parameters were signed on the secure side, so a participant can't edit their own link. The signature is one more parameter in the link, `_sig`, and the client passes it along with the rest; `startForURL()` needs nothing extra. Signing happens before the link is sent, with `pigsty sign`. See [configuration.md](../docs/configuration.md#parameter-signing).
+If the task's configuration sets `signed_by`, Pig only starts a run whose parameters were signed on the secure side, so a participant can't edit their own link. The signature is one more parameter in the link, `sig`. `startForURL()` takes it out of the parameters and sends it to Pig on its own, so it needs nothing extra. To read it from another name, pass `{ signatureParameter: "name" }`. With `start()`, pass the signature as `{ signature }`. A task that doesn't check signatures leaves a `sig` parameter where it is, as one of its own. Signing happens before the link is sent, with `pigsty sign`. See [configuration.md](../docs/configuration.md#parameter-signing).
 
-A link without `_sig` fails at `start()` with the code `bad-signature`, before the server is asked. So does a link the server refuses because a value was changed after signing. Offline, the server is only asked once the device connects, so a run from a changed link records normally and then ends up in `failed`.
+A link without a signature fails at `start()` with the code `bad-signature`, before the server is asked. So does a link the server refuses because a value was changed after signing. Offline, the server is only asked once the device connects, so a run from a changed link records normally and then ends up in `failed`.
 
 Signed parameters that Pig doesn't put in a path, like Teddy's `modules`, may be any text without control characters, up to 2048 characters. Every other parameter Pig needs is held to the rule for values in file names.
 
