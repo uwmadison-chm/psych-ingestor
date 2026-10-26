@@ -39,8 +39,8 @@ def test_a_new_task_appears_without_a_restart(client: TestClient, config_path: P
     with open(config_path, "a") as handle:
         handle.write(
             "\n[task.dd_game]\n"
-            'parameters = ["participant_id"]\n'
-            'run_key = ["participant_id"]\n'
+            'path_parameters = ["participant_id"]\n'
+            'run_key_parameters = ["participant_id"]\n'
         )
 
     started = client.post("/task/dd_game/run", json={"participant_id": "10351"})

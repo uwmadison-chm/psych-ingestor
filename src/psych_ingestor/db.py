@@ -18,7 +18,7 @@ from pathlib import Path
 # database from the version before. A database from an older version is refused until
 # `pig migrate` brings it up to date, and one from a newer version is refused outright.
 # Either beats a confusing "no such column" from the first query that touches it.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- through, whatever happens to the task's definition while it's open.
     encrypted_to     TEXT,
 
+    -- The name of the signing key the run's parameters were signed with, or null if its
+    -- task didn't check signatures when it started. Not the signature itself, which
+    -- proves nothing to anyone without the parameters, and those are in
+    -- run_identifiers.
+    signed_by        TEXT,
+
     UNIQUE (task_code, run_key_hash, run_number),
 
     -- The timestamps annotate transitions; they never decide which phase a run is in.
@@ -66,15 +72,18 @@ CREATE INDEX IF NOT EXISTS runs_by_phase ON runs (phase, task_code);
 -- remembered one. (`runs` still holds timestamps, which are quasi-identifiers; this is
 -- "direct identifiers here", not "that table is anonymous".)
 --
--- `run_key_names` is the ordered list of parameter names that made up the run key when
--- the run started. It's captured here because the sweep builds the manifest from this
--- database alone, and the task definition can change — or vanish — between run start and
--- sweep.
+-- `run_key_names`, `path_parameter_names` and `signed_parameter_names` are the ordered
+-- lists of parameter names in the task's run_key_parameters, path_parameters and
+-- signed_parameters when the run started. `parameters` has the values of all of them.
+-- They're captured here because the sweep builds the manifest from this database alone,
+-- and the task definition can change — or vanish — between run start and sweep.
 CREATE TABLE IF NOT EXISTS run_identifiers (
-    run_id           TEXT PRIMARY KEY REFERENCES runs (run_id),
-    parameters       TEXT NOT NULL,
-    extra_parameters TEXT NOT NULL,
-    run_key_names    TEXT NOT NULL
+    run_id                 TEXT PRIMARY KEY REFERENCES runs (run_id),
+    parameters             TEXT NOT NULL,
+    extra_parameters       TEXT NOT NULL,
+    run_key_names          TEXT NOT NULL,
+    path_parameter_names   TEXT NOT NULL DEFAULT '[]',
+    signed_parameter_names TEXT NOT NULL DEFAULT '[]'
 );
 
 -- One row per event Pig has durably written: proof it's on disk, and the hash that tells
@@ -157,6 +166,21 @@ CREATE TABLE media_parts (
     # Encryption: the key a run was encrypted to. Every run already there was started by
     # a Pig that couldn't encrypt, so null is right for all of them.
     2: ("ALTER TABLE runs ADD COLUMN encrypted_to TEXT",),
+    # Signing, and the parameter lists split apart for it. Before this, every parameter
+    # a task declared was a path parameter, and nothing was signed.
+    3: (
+        "ALTER TABLE runs ADD COLUMN signed_by TEXT",
+        """
+ALTER TABLE run_identifiers ADD COLUMN path_parameter_names TEXT NOT NULL DEFAULT '[]'
+""",
+        """
+ALTER TABLE run_identifiers ADD COLUMN signed_parameter_names TEXT NOT NULL DEFAULT '[]'
+""",
+        """
+UPDATE run_identifiers SET path_parameter_names =
+    (SELECT json_group_array(key) FROM json_each(run_identifiers.parameters))
+""",
+    ),
 }
 
 

@@ -16,7 +16,7 @@ One Pig deployment serves all of your lab's tasks, so this file grows as you add
 Two places, split by whether a human writes it or the service does:
 
 - **A file, in version control** — task definitions. The things you'd want to review, diff,
-  and roll back: expected link parameters, the run key, allowed origins, signing, whether
+  and roll back: expected run parameters, the run key, allowed origins, signing, whether
   the task is open.
 - **The database** — what accumulates at runtime: runs, participants discovered as they
   arrive, event bookkeeping. SQLite, in WAL mode.
@@ -46,15 +46,15 @@ data_root = "./data"
 database = "./pig.db"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 open = true
 max_event_size = "1M"      # optional, defaults to 1M
 expires_after = "24h"      # optional, defaults to 24h
 
 [task.interview]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true               # this task records audio; off unless you say so
 max_part_size = "8M"       # optional, defaults to 8M
 ```
@@ -114,10 +114,11 @@ last good version and reports the problem on `/health`.
 
 ### Identifying the run
 
-Which parameters Pig expects from the participant's link, and which of them make up the
-**run key** — the values that decide whether two runs are repeats of the same thing. A
-study that sees each participant once might use only `participant_id`; a study with
-repeated visits needs `session` as well, so `["participant_id", "session"]`.
+Which parameters Pig expects when a run starts, in `path_parameters`, and which of them make up the **run key**, in `run_key_parameters`: the values that decide whether two runs are repeats of the same thing. A study that sees each participant once might use only `participant_id`; a study with repeated visits needs `session` as well, so `["participant_id", "session"]`.
+
+They're called *path* parameters because `pigsty organize` can use them to name directories and files, so Pig holds their values to the [safe value](#safe-values) rule. A task that [checks signatures](#parameter-signing) can require other parameters too, which are text and never part of a path. A parameter in any of the lists is required.
+
+Earlier versions of Pig called these two lists `parameters` and `run_key`. A configuration that still uses those names is refused, with a message saying what they're called now.
 
 The two lists are separate on purpose, even though most tasks will set them the same. A
 task can require a parameter that doesn't identify the run — a `redcap_record` alongside
@@ -140,7 +141,7 @@ Pig records them anyway, on the run and in its manifest, because they cost almos
 to keep and occasionally explain something months later. They're never used to identify
 or route anything.
 
-**Open question:** do parameter values get checked for shape beyond the [safe
+**Open question:** do path parameter values get checked for shape beyond the [safe
 value](#safe-values) rule — digits only, a required prefix — or is any safe value accepted?
 *Provisional: any safe value is accepted. There's no way to ask for more.*
 
@@ -263,8 +264,8 @@ allow. See [deployment.md](deployment.md).
 public_keys_file = "public_keys.txt"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 encrypt_to = "lucida/2026a"
 ```
 
@@ -287,15 +288,42 @@ whose data collection is ending — and they expire on their own schedule like a
 
 ### Parameter signing
 
-*Not built.* Off by default and set per task. When on, Pig verifies that a participant's link parameters
-were signed by you, so participants can't edit their own ID or condition.
+A participant's link is in their hands, and they can edit it: change their own ID, or which parts of the task they do. Signing stops that. You sign each link's parameters on the secure side, with a private key the web server never sees, and Pig only starts a run from a link whose signature checks out.
 
-It complicates testing considerably — you can't just type a URL by hand — so it needs an
-easy way to generate a valid signed link, presumably a CLI command.
+```toml
+# local/pig.toml
+public_keys_file = "public_keys.txt"
 
-**Open questions**
-- What signing scheme, and where does the key live?
-- Do signed links expire?
+[task.teddy]
+path_parameters = ["id", "event"]
+run_key_parameters = ["id", "event"]
+signed_parameters = ["id", "event", "modules"]
+signed_by = ["lucida/signing"]
+```
+
+`signed_parameters` is the parameters the signature covers, and `signed_by` names the signing keys, from `public_keys_file`, that links for this task may be signed with. The keys are made on the secure side by `pigsty keys new --signing` and exported with the encryption keys, so it's the same file; see [organizing.md](organizing.md#signing-links). A task without `signed_by` doesn't check signatures.
+
+A link for this task looks like this, with the signature as one more parameter, `sig`:
+
+```
+https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&sig=lucida/signing.Xk3…
+```
+
+`sig` is the client's name for it, not Pig's. The client takes it out of the link and sends it to Pig in a header of its own (see [api.md](api.md#signed-links)), so a task can still have a parameter called `sig`, and can have the client read the signature from another name instead.
+
+Every signed parameter is required, and the signature covers exactly those. Anything else in the link, like a `nextURL`, is an extra parameter as usual: recorded, unsigned, free to vary.
+
+A signed parameter that isn't a path parameter, like `modules` above, is **text**. It's kept exactly as it arrives, may be any text up to 2,048 characters without control characters like tabs or line breaks, and can never be used in an organize pattern. *Provisional, like allowing characters outside ASCII.* Path parameters are held to the safe value rule whether they're signed or not.
+
+`pig check` refuses a task that signs anything but leaves out part of the run key, since a participant could then change who they are while the rest of the link stayed locked. *Provisional.* It also refuses a `signed_by` that names a key the file doesn't have, or an encryption key.
+
+Pig checks the signature when the run starts, and only then. A link that's missing its signature, was signed for another task or with a key the task doesn't list, or has had a value changed since it was signed, gets a `403`. After that, the run ID is what identifies the run, as it is for any task. The run records which key signed it, in the database and in its manifest; the signature itself isn't kept.
+
+Signatures don't expire. An offline participant can do a whole run before their device reaches Pig, and a signature that had expired by then would leave their data stuck on the device. To stop the links signed with a key from working, take it out of `signed_by`. To change keys, make a new one, export the public keys again, add the new key to `signed_by`, sign new links with it, and take the old one out once no outstanding link uses it.
+
+Signing makes testing harder, since you can't type a link by hand any more. `pigsty sign --url` makes a whole signed link to paste into a browser.
+
+What signing protects, and what it doesn't, is in [security.md](security.md).
 
 ### Allowed origins
 
@@ -316,7 +344,7 @@ names.
 
 A task code must be a safe value, below, and lowercase. It becomes a directory name on
 every machine the data reaches, and macOS and Linux disagree about whether `Stroop/` and
-`stroop/` are the same directory; requiring one spelling sidesteps that. Link parameter
+`stroop/` are the same directory; requiring one spelling sidesteps that. Path parameter
 values aren't held to this, because they don't become directory names on the collecting
 machine — see below.
 
@@ -327,7 +355,7 @@ is what keeps a future study layer out of the URL space; see
 
 ## Safe values
 
-Some values end up as directory and file names: the task code, and the link parameters
+Some values end up as directory and file names: the task code, and the path parameters
 when `pigsty organize` builds a readable tree from them. Those have to be restricted,
 because a filesystem will accept things that later turn out to be a problem — and the
 check has to happen when the run starts, on the collecting machine, because by the time
@@ -389,5 +417,5 @@ paths differ only in case; see [organizing.md](organizing.md).
 
 *Built.* `pig check` reads the file, reports every problem it can describe, and prints each
 task: whether it's open, what parameters it expects, which of them make up the run key,
-how long its runs may stay open, and whether it takes media. It exits non-zero on a bad file, so a deployment can
+how long its runs may stay open, whether it takes media, and what it signs. It exits non-zero on a bad file, so a deployment can
 gate a restart on it.

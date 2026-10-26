@@ -99,6 +99,8 @@ class Run:
     parameters: dict[str, str] | None
     extra_parameters: dict[str, Any] | None
     run_key_names: list[str] | None
+    path_parameter_names: list[str] | None
+    signed_parameter_names: list[str] | None
     phase: Phase
     started_at: datetime
     disposition: Disposition | None = None
@@ -106,6 +108,8 @@ class Run:
     done_at: datetime | None = None
     # The public key's name, if the run is encrypted. See `db.SCHEMA`.
     encrypted_to: str | None = None
+    # The signing key's name, if the run's parameters were signed. See `db.SCHEMA`.
+    signed_by: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Run:
@@ -117,6 +121,8 @@ class Run:
             parameters=_maybe_json(row["parameters"]),
             extra_parameters=_maybe_json(row["extra_parameters"]),
             run_key_names=_maybe_json(row["run_key_names"]),
+            path_parameter_names=_maybe_json(row["path_parameter_names"]),
+            signed_parameter_names=_maybe_json(row["signed_parameter_names"]),
             phase=Phase(row["phase"]),
             started_at=db.parse_time(row["started_at"]),
             disposition=(
@@ -125,6 +131,7 @@ class Run:
             closed_at=_maybe_time(row["closed_at"]),
             done_at=_maybe_time(row["done_at"]),
             encrypted_to=row["encrypted_to"],
+            signed_by=row["signed_by"],
         )
 
     @property
@@ -174,7 +181,8 @@ def hash_run_key(values: list[str]) -> str:
 # left join, because a purged run has none and is still a run.
 _SELECT = (
     "SELECT runs.*, run_identifiers.parameters, run_identifiers.extra_parameters, "
-    "run_identifiers.run_key_names FROM runs "
+    "run_identifiers.run_key_names, run_identifiers.path_parameter_names, "
+    "run_identifiers.signed_parameter_names FROM runs "
     "LEFT JOIN run_identifiers ON run_identifiers.run_id = runs.run_id"
 )
 
@@ -228,10 +236,13 @@ def insert(
     task_code: str,
     run_key_hash: str,
     run_key_names: list[str],
+    path_parameter_names: list[str],
+    signed_parameter_names: list[str],
     parameters: dict[str, str],
     extra_parameters: dict[str, Any],
     started_at: datetime,
     encrypted_to: str | None = None,
+    signed_by: str | None = None,
 ) -> int:
     """Give the run the next number for its key, and write it down.
 
@@ -260,7 +271,7 @@ def insert(
                 )
             connection.execute(
                 "INSERT INTO runs (run_id, task_code, run_key_hash, run_number, phase, "
-                "started_at, encrypted_to) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "started_at, encrypted_to, signed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     task_code,
@@ -269,16 +280,20 @@ def insert(
                     Phase.COLLECTING,
                     db.stamp(started_at),
                     encrypted_to,
+                    signed_by,
                 ),
             )
             connection.execute(
                 "INSERT INTO run_identifiers (run_id, parameters, extra_parameters, "
-                "run_key_names) VALUES (?, ?, ?, ?)",
+                "run_key_names, path_parameter_names, signed_parameter_names) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     json.dumps(parameters),
                     json.dumps(extra_parameters),
                     json.dumps(run_key_names),
+                    json.dumps(path_parameter_names),
+                    json.dumps(signed_parameter_names),
                 ),
             )
             connection.execute("COMMIT")

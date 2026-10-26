@@ -58,11 +58,14 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
 
     manifest = storage.read_manifest(done(pig, run_id))
     assert manifest["type"] == "pig_run_manifest"
-    assert manifest["manifest_version"] == 3
+    assert manifest["manifest_version"] == 4
     assert manifest["run_id"] == run_id
     assert manifest["task_code"] == "stroop"
     assert manifest["run_number"] == 1
-    assert manifest["run_key"] == ["participant_id", "session"]
+    assert manifest["run_key_parameters"] == ["participant_id", "session"]
+    assert manifest["path_parameters"] == ["participant_id", "session"]
+    assert manifest["signed_parameters"] == []
+    assert manifest["signed_by"] is None
     assert manifest["disposition"] == "finalized"
     # Parameters exactly as the link sent them. Nothing lowercases anything.
     assert manifest["parameters"] == BASELINE
@@ -204,7 +207,7 @@ def test_a_task_deleted_from_the_configuration_is_still_finished(pig: Pig):
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
-    assert storage.read_manifest(done(pig, run_id))["run_key"] == [
+    assert storage.read_manifest(done(pig, run_id))["run_key_parameters"] == [
         "participant_id",
         "session",
     ]

@@ -13,8 +13,15 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import db, keys, media, purge, runs, storage
-from .config import SAFE_VALUE_EXPLANATION, Config, TaskDefinition, is_safe_value
+from . import db, keys, media, purge, runs, signing, storage
+from .config import (
+    SAFE_VALUE_EXPLANATION,
+    TEXT_VALUE_EXPLANATION,
+    Config,
+    TaskDefinition,
+    is_safe_value,
+    is_text_value,
+)
 from .media import MediaItem
 from .runs import Disposition, Phase, RequestProblem, Run
 
@@ -81,11 +88,13 @@ class Pig:
         return {
             "task_code": task.code,
             "open": task.open,
-            "parameters": task.parameters,
+            "parameters": task.required_parameters,
+            # The ones held to the safe-value rule. The rest are text.
+            "path_parameters": task.path_parameters,
             "expires_after_sec": task.expires_after,
             "max_event_size_bytes": task.max_event_size,
             # A feature a task can have off is `null` when it's off and an object of its
-            # settings when it's on. Signing will follow the same shape.
+            # settings when it's on.
             "media": (
                 {"max_part_size_bytes": task.max_part_size} if task.media else None
             ),
@@ -94,11 +103,23 @@ class Pig:
             "encryption": (
                 {"public_key": task.public_key} if task.public_key else None
             ),
+            # Which parameters the signature covers, so pigsty check can compare them
+            # with pigsty.toml's, and a task can tell a link without one. Not which keys:
+            # nothing that asks has a use for them.
+            "parameter_signing": (
+                {"signed_parameters": task.signed_parameters}
+                if task.checks_signatures
+                else None
+            ),
         }
 
     # ------------------------------------------------------------- starting
 
-    def start_run(self, task_code: str, submitted: dict[str, Any]) -> dict[str, Any]:
+    def start_run(
+        self, task_code: str, submitted: dict[str, Any], signature: Any = None
+    ) -> dict[str, Any]:
+        """Start a run with the parameters `submitted`. `signature` only matters to a
+        task that checks signatures; any other ignores it."""
         task = self.task(task_code)
         if not task.open:
             raise RequestProblem(
@@ -106,6 +127,11 @@ class Pig:
             )
 
         parameters, extra = self._check_parameters(task, submitted)
+        signed_by = None
+        if task.checks_signatures:
+            # The signature isn't kept. It's no use without the parameters it covers,
+            # and the key's name says what it proved.
+            signed_by = _check_signature(task, parameters, signature)
         run_id = str(uuid.uuid4())
 
         # The directory first, then the row. A directory with no row is harmless litter;
@@ -120,12 +146,17 @@ class Pig:
             self.connection,
             run_id=run_id,
             task_code=task.code,
-            run_key_hash=runs.hash_run_key([parameters[name] for name in task.run_key]),
-            run_key_names=list(task.run_key),
+            run_key_hash=runs.hash_run_key(
+                [parameters[name] for name in task.run_key_parameters]
+            ),
+            run_key_names=list(task.run_key_parameters),
+            path_parameter_names=list(task.path_parameters),
+            signed_parameter_names=list(task.signed_parameters),
             parameters=parameters,
             extra_parameters=extra,
             started_at=db.now(),
             encrypted_to=task.encrypt_to,
+            signed_by=signed_by,
         )
         return {"run_id": run_id, "run_number": run_number}
 
@@ -134,23 +165,27 @@ class Pig:
     ) -> tuple[dict[str, str], dict[str, Any]]:
         """Split what arrived into the parameters this task uses and everything else.
 
+        Path parameters have to be safe values, since `pigsty organize` may put them in
+        a path. A parameter that's only signed is text, kept exactly as it arrives, and
+        only has to be short and free of control characters.
+
         Extra parameters are recorded and otherwise ignored — a `utm_source` or a
         leftover `debug=1` never stops a run from starting.
         """
         if not isinstance(submitted, dict):
             raise RequestProblem(
                 422,
-                "Expected a JSON object of link parameters, like "
+                "Expected a JSON object of run parameters, like "
                 '{"participant_id": "10351"}.',
             )
 
         parameters: dict[str, str] = {}
-        for name in task.parameters:
+        for name in task.required_parameters:
             if name not in submitted:
                 raise RequestProblem(
                     422,
                     f"This task needs {name!r}, and it wasn't in the request. It expects "
-                    f"{task.parameters}.",
+                    f"{task.required_parameters}.",
                 )
             value = submitted[name]
             # A JSON number is what you get from `participant_id: 10351` in JavaScript,
@@ -162,11 +197,17 @@ class Pig:
                     422,
                     f"The value for {name!r} has to be text; got {type(value).__name__}.",
                 )
-            if not is_safe_value(value):
+            if name in task.path_parameters and not is_safe_value(value):
                 raise RequestProblem(
                     422,
                     f"{value!r} can't be used for {name!r}, because it will become part "
                     f"of a file name. Allowed: {SAFE_VALUE_EXPLANATION}.",
+                )
+            if not is_text_value(value):
+                raise RequestProblem(
+                    422,
+                    f"The value for {name!r} can't be used. Allowed: "
+                    f"{TEXT_VALUE_EXPLANATION}.",
                 )
             parameters[name] = value
 
@@ -858,6 +899,27 @@ def _as_purge_hashes(submitted: Any) -> dict[str, str]:
             "hash of every file in the run. See docs/api.md.",
         )
     return hashes
+
+
+def _check_signature(
+    task: TaskDefinition, parameters: dict[str, str], signature: Any
+) -> str:
+    """The name of the key that signed this run's parameters, or a 403 saying why
+    they don't check out.
+
+    403 rather than 422, because nothing about the request is malformed: it's that Pig
+    won't start a run from this link. The message is for whoever made the link, and the
+    participant is told to use the one they were sent.
+    """
+    values = {name: parameters[name] for name in task.signed_parameters}
+    try:
+        return signing.verify(signature, task.code, values, task.signing_keys)
+    except signing.BadSignature as bad:
+        raise RequestProblem(
+            403,
+            f"This link can't start a run of {task.code!r}, because {bad} Use the link "
+            "you were sent, exactly as it is.",
+        ) from None
 
 
 def _as_event_dict(submitted: Any) -> dict[str, Any]:

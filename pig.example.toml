@@ -14,23 +14,23 @@ database = "./pig.db"
 # A study that sees each participant more than once, so `session` is part of what makes
 # two runs repeats of the same thing.
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 open = true
 max_event_size = "1M"
 expires_after = "24h"     # a run closes this long after it starts, finished or not
 
 # A one-visit study. No session anywhere, and the run key is just the participant.
 [task.balloons]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 open = true
 
 # A task that records audio answers. Media is off for a task unless it says so, and the
 # web server in front of Pig has to allow request bodies at least max_part_size large.
 [task.interview]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "8M"      # optional, defaults to 8M; most tasks never set it
 
@@ -40,3 +40,12 @@ max_part_size = "8M"      # optional, defaults to 8M; most tasks never set it
 #
 # public_keys_file = "./public_keys.txt"   # at the top of the file, above any [task.…]
 # encrypt_to = "lucida/2026a"              # in a task
+
+# Only starting runs from signed links, so a participant can't edit their own. Needs
+# public_keys_file too, with a signing key the secure side made with
+# `pigsty keys new --signing lucida/signing`. Every part of the run key has to be
+# signed. A signed parameter that isn't in path_parameters is text, like a list of
+# modules, and can't be used in a path. See docs/configuration.md.
+#
+# signed_parameters = ["participant_id", "session"]   # in a task
+# signed_by = ["lucida/signing"]                      # in a task

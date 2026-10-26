@@ -131,8 +131,7 @@ wrong:
 
 ## What isn't here yet
 
-The service is the requests in [api.md](api.md) plus `/health`. Not built: parameter
-signing, participant rosters, `max_runs`, settings returned at run start, copying runs
+The service is the requests in [api.md](api.md) plus `/health`. Not built: participant rosters, `max_runs`, settings returned at run start, copying runs
 offsite, a JavaScript helper for media uploads, and per-task allowed
 origins (every task currently allows any origin). See
 [configuration.md](configuration.md) for what's marked *built* and what isn't.

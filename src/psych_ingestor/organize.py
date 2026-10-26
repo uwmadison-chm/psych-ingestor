@@ -443,11 +443,16 @@ def _parse_run_file(run_file_bytes: bytes) -> dict[str, Any]:
         raise RunProblem(f"can't read {RUN_FILE}: {error}") from error
     if not isinstance(run, dict) or run.get("type") != RUN_FILE_TYPE:
         raise RunProblem(f"{RUN_FILE} isn't a Pig run file.")
-    if run.get("run_file_version") != RUN_FILE_VERSION:
+    version = run.get("run_file_version")
+    if version not in (1, RUN_FILE_VERSION):
         raise RunProblem(
-            f"{RUN_FILE} is version {run.get('run_file_version')!r}, and this version "
-            f"of Pig reads version {RUN_FILE_VERSION}."
+            f"{RUN_FILE} is version {version!r}, and this version of Pig reads "
+            f"versions 1 and {RUN_FILE_VERSION}."
         )
+    if version == 1:
+        # Admitted before parameters were split apart for signing, when every
+        # parameter a task declared was a path parameter.
+        run["path_parameters"] = list(run["parameters"])
     return run
 
 
@@ -455,12 +460,13 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
     """Fill a pattern from a run's pig-run.json, or raise RunProblem saying why it
     can't be.
 
-    Parameters come from `parameters` only: those are the ones the task declared, and
-    Pig checked every one against the safe-value rule when the run started.
-    `extra_parameters` were recorded as they arrived and never checked, so they can't
-    become part of a path.
+    Parameters come from `path_parameters` only: those are the ones Pig checked against
+    the safe-value rule when the run started. The task's other parameters are text,
+    and `extra_parameters` were recorded as they arrived and never checked, so neither
+    can become part of a path.
     """
     parameters = run["parameters"]
+    path_parameters = run["path_parameters"]
     values: dict[str, str] = {
         "task_code": run["task_code"],
         "run_number": f"{run['run_number']:04d}",
@@ -470,6 +476,13 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
         name = match.group(1)
         if name in BUILT_IN_NAMES:
             return values[name]
+        if name in parameters and name not in path_parameters:
+            raise RunProblem(
+                f"the pattern uses {{{name}}}, which isn't one of this task's "
+                "path_parameters. It's text, which can be anything, so it can't be "
+                "used in a path. Add it to the task's path_parameters in pig.toml if it "
+                "should be, and it will be held to the rule for values in paths."
+            )
         if name in parameters:
             # Each value on its own, not just the path it makes: a value of `a/b`
             # would otherwise pass as two safe parts and add a directory.
@@ -485,7 +498,7 @@ def render(pattern: str, run: dict[str, Any]) -> PurePosixPath:
                 f"the pattern uses {{{name}}}, which this task doesn't declare. It "
                 "arrived in the link as an extra parameter, and those are never "
                 "checked, so they can't be used in a path. Add it to the task's "
-                "parameters in pig.toml if it should be."
+                "path_parameters in pig.toml if it should be."
             )
         raise RunProblem(
             f"the pattern uses {{{name}}}, and this run has no parameter by that "

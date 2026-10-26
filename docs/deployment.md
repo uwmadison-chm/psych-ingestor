@@ -131,7 +131,7 @@ For each task:
 - Datasets holding more than one event with the same ID. Rare, and not data loss, but an
   analyst who assumes IDs are unique needs to know before they start counting. See
   [design_assumptions.md](design_assumptions.md).
-- Link parameters that have arrived in more than one capitalization. Pig treats them as
+- Run parameters that have arrived in more than one capitalization. Pig treats them as
   different values, so `PPT-1003` and `ppt-1003` are two participants as far as it knows,
   and that usually means two versions of a participant link are in circulation — worth
   knowing before someone asks why a spreadsheet has both.

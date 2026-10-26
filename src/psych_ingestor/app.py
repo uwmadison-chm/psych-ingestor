@@ -11,11 +11,11 @@ import os
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, FastAPI, Request
+from fastapi import Body, FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import db, health
+from . import db, health, signing
 from .config import DEFAULT_CONFIG, ConfigSource
 from .runs import RequestProblem
 from .service import Pig
@@ -63,10 +63,17 @@ def create_app(config_path: Path) -> FastAPI:
             return JSONResponse(content=pig.describe_task(task_code))
 
     @app.post("/task/{task_code}/run")
-    def start_run(task_code: str, parameters: dict[str, Any]) -> JSONResponse:
+    def start_run(
+        task_code: str,
+        parameters: dict[str, Any],
+        # A header rather than a parameter, so it never takes a name a task might want,
+        # and a task that doesn't sign sends exactly what it always did.
+        signature: Annotated[str | None, Header(alias=signing.SIGNATURE_HEADER)] = None,
+    ) -> JSONResponse:
         with _pig(source) as pig:
             return JSONResponse(
-                status_code=201, content=pig.start_run(task_code, parameters)
+                status_code=201,
+                content=pig.start_run(task_code, parameters, signature),
             )
 
     @app.post("/task/{task_code}/run/{run_id}")

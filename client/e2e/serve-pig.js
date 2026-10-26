@@ -14,8 +14,9 @@ mkdirSync(dir, { recursive: true });
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const pigstyCommand = (process.env.PIGSTY_COMMAND ?? "uv run pigsty").split(" ");
 
-// The secure side, for the encrypted task: a private key, and the public keys file the
-// web side reads. encryption.spec.js admits runs with the same pigsty.toml.
+// The secure side, for the encrypted task and the signed one: a private key of each
+// kind, and the public keys file the web side reads. encryption.spec.js admits runs, and
+// signing.spec.js signs links, with the same pigsty.toml.
 writeFileSync(
   join(dir, "pigsty.toml"),
   `private_keys_dir = "./private_keys"
@@ -23,6 +24,11 @@ writeFileSync(
 [task.sealed]
 datastore_base = "./sealed"
 organized = "./organized/sealed/{participant_id}_{run_number}"
+
+[task.signed]
+datastore_base = "./signed"
+organized = "./organized/signed/{participant_id}_{run_number}"
+signed_parameters = ["participant_id", "modules"]
 `,
 );
 function pigsty(...args) {
@@ -33,7 +39,10 @@ function pigsty(...args) {
   if (done.status !== 0) throw new Error(`pigsty ${args.join(" ")} failed: ${done.stderr}`);
   return done.stdout;
 }
+// Admit goes through every task in pigsty.toml, and the signed task's runs never arrive.
+mkdirSync(join(dir, "signed", "incoming"), { recursive: true });
 pigsty("keys", "new", "e2e");
+pigsty("keys", "new", "--signing", "e2e-signing");
 writeFileSync(join(dir, "public_keys.txt"), pigsty("keys", "export"));
 
 const config = join(dir, "pig.toml");
@@ -44,27 +53,34 @@ database = "./pig.db"
 public_keys_file = "./public_keys.txt"
 
 [task.stroop]
-parameters = ["participant_id", "session"]
-run_key = ["participant_id", "session"]
+path_parameters = ["participant_id", "session"]
+run_key_parameters = ["participant_id", "session"]
 
 # Small parts, so a modest recording is cut into several.
 [task.voice]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "64K"
 
 # Encrypted in the browser. Small parts, so the recording is cut into several.
 [task.sealed]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 media = true
 max_part_size = "64K"
 encrypt_to = "e2e"
 
+# Only starts runs from signed links. modules is signed text, as Teddy's is.
+[task.signed]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
+signed_parameters = ["participant_id", "modules"]
+signed_by = ["e2e-signing"]
+
 [task.closed]
-parameters = ["participant_id"]
-run_key = ["participant_id"]
+path_parameters = ["participant_id"]
+run_key_parameters = ["participant_id"]
 open = false
 `,
 );

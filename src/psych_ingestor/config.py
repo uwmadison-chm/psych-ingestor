@@ -10,6 +10,7 @@ import re
 import string
 import threading
 import tomllib
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,17 @@ SAFE_VALUE_EXPLANATION = (
     "letters, digits, underscore, and dash (not first), 1 to 64 characters"
 )
 
+# A parameter that's signed but isn't a path parameter, like Teddy's `modules`, is text:
+# kept exactly as it arrives, but never part of a path, so it isn't held to the
+# safe-value rule. The cap keeps it from being anything but a parameter. Provisional,
+# like allowing characters outside ASCII; see issue #44.
+MAX_TEXT_VALUE_LENGTH = 2048
+
+TEXT_VALUE_EXPLANATION = (
+    f"any text up to {MAX_TEXT_VALUE_LENGTH} characters, without control characters "
+    "like tabs or line breaks"
+)
+
 
 # A working copy keeps its configuration, database, and data under `local/`, which is the
 # one path version control ignores. Everything in the file is relative to the file, so
@@ -39,6 +51,17 @@ class ConfigurationError(Exception):
 
 def is_safe_value(value: str) -> bool:
     return bool(SAFE_VALUE.match(value))
+
+
+def is_text_value(value: str) -> bool:
+    """Whether a value is usable as a text parameter: not too long, and nothing in it
+    that can't be written to a file as it is."""
+    return len(value) <= MAX_TEXT_VALUE_LENGTH and not any(
+        # Cc is control characters; Cs is half of a UTF-16 pair, which JSON can carry
+        # but UTF-8 can't write.
+        unicodedata.category(character) in ("Cc", "Cs")
+        for character in value
+    )
 
 
 def parse_size(value: str | int) -> int:
@@ -108,8 +131,11 @@ class TaskDefinition(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    parameters: list[str]
-    run_key: list[str]
+    # Parameters Pig holds to the safe-value rule, so `pigsty organize` can use them in
+    # a path. See docs/configuration.md.
+    path_parameters: list[str]
+    # The path parameters whose values decide whether two runs are repeats of each other.
+    run_key_parameters: list[str]
     open: bool = True
     max_event_size: int = Field(default=1024 * 1024)
     # How long a run may stay open, counted from when it started. After this, the next
@@ -126,11 +152,28 @@ class TaskDefinition(BaseModel):
     # media are encrypted to in the participant's browser. None means the task doesn't
     # encrypt. See docs/configuration.md and issue #10.
     encrypt_to: str | None = None
+    # The parameters a run's signature covers, and the names of the signing keys, from
+    # `public_keys_file`, it may be signed with. Both empty means the task doesn't check
+    # signatures. See docs/configuration.md and issue #15.
+    signed_parameters: list[str] = Field(default_factory=list)
+    signed_by: list[str] = Field(default_factory=list)
 
     # Filled in by load_config, since a task doesn't know its own code, or what its key
-    # name stands for.
+    # names stand for.
     code: str = ""
     public_key: str | None = None
+    signing_keys: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def required_parameters(self) -> list[str]:
+        """Every parameter a run needs: a parameter is required if it's in any list."""
+        return self.path_parameters + [
+            name for name in self.signed_parameters if name not in self.path_parameters
+        ]
+
+    @property
+    def checks_signatures(self) -> bool:
+        return bool(self.signed_by)
 
     @model_validator(mode="before")
     @classmethod
@@ -141,6 +184,12 @@ class TaskDefinition(BaseModel):
             raise ValueError(
                 "abandon_after is now called expires_after. It means the same thing: how "
                 "long a run may stay open, counted from when it started."
+            )
+        if isinstance(raw, dict) and {"parameters", "run_key"} & raw.keys():
+            raise ValueError(
+                "parameters and run_key are now called path_parameters and "
+                "run_key_parameters. They mean the same things: the parameters a run "
+                "needs, which can be used in a path, and which of them identify the run."
             )
         if isinstance(raw, dict) and "path" in raw:
             raise ValueError(
@@ -160,22 +209,57 @@ class TaskDefinition(BaseModel):
 
     @model_validator(mode="after")
     def _check_coherence(self) -> TaskDefinition:
-        for name in self.parameters:
+        for setting in ("path_parameters", "signed_parameters", "signed_by"):
+            listed = getattr(self, setting)
+            repeated = sorted({name for name in listed if listed.count(name) > 1})
+            if repeated:
+                raise ValueError(
+                    f"{setting} lists {', '.join(repeated)} more than once"
+                )
+        for name in self.required_parameters:
             if not name.isidentifier():
                 raise ValueError(
                     f"parameter name {name!r} isn't usable; parameter names should look "
                     "like participant_id"
                 )
 
-        missing = [name for name in self.run_key if name not in self.parameters]
+        missing = [
+            name for name in self.run_key_parameters if name not in self.path_parameters
+        ]
         if missing:
             raise ValueError(
-                f"run_key names {missing} that aren't in parameters. Every part of the "
-                "run key has to be something the link supplies."
+                f"run_key_parameters names {missing} that aren't in path_parameters. "
+                "pigsty organize builds a run's path from its run key, so every part of "
+                "it has to be usable in a path."
             )
-        if not self.run_key:
+        if not self.run_key_parameters:
             raise ValueError(
-                "run_key can't be empty; a run has to be a repeat of something"
+                "run_key_parameters can't be empty; a run has to be a repeat of "
+                "something"
+            )
+
+        if self.signed_parameters and not self.signed_by:
+            raise ValueError(
+                "signed_parameters needs signed_by too: the name of the signing key, "
+                "from public_keys_file, that links for this task are signed with."
+            )
+        if self.signed_by and not self.signed_parameters:
+            raise ValueError(
+                "signed_by needs signed_parameters too: the parameters the signature "
+                "covers."
+            )
+        unsigned = [
+            name
+            for name in self.run_key_parameters
+            if name not in self.signed_parameters
+        ]
+        if self.signed_parameters and unsigned:
+            # Otherwise a participant could change their own ID while everything else
+            # in the link stayed locked.
+            raise ValueError(
+                f"signed_parameters leaves out {', '.join(unsigned)}, from "
+                "run_key_parameters. A task that checks signatures has to sign every "
+                "part of the run key, or a participant could change who they are."
             )
         return self
 
@@ -187,8 +271,9 @@ class Config(BaseModel):
 
     data_root: Path
     database: Path
-    # The public keys tasks can encrypt to, as `pigsty keys export` writes them on the
-    # secure side. Only needed if a task sets `encrypt_to`.
+    # The public keys tasks can encrypt to and check signatures with, as `pigsty keys
+    # export` writes them on the secure side. Only needed if a task sets `encrypt_to` or
+    # `signed_by`.
     public_keys_file: Path | None = None
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
@@ -275,35 +360,55 @@ def load_config(path: Path) -> Config:
 
 
 def _resolve_public_keys(path: Path, config: Config) -> None:
-    """Read the public keys file, and give each task that encrypts its public key."""
+    """Read the public keys file, and give each task that encrypts its public key, and
+    each task that checks signatures its signing keys."""
     # Imported here, because keys.py uses this module's safe-value rule.
-    from .keys import read_public_keys
+    from .keys import is_signing_public_key, read_public_keys
 
-    encrypting = sorted(code for code, task in config.task.items() if task.encrypt_to)
+    using = sorted(
+        code
+        for code, task in config.task.items()
+        if task.encrypt_to or task.checks_signatures
+    )
     if config.public_keys_file is None:
-        if encrypting:
+        if using:
             raise ConfigurationError(
-                f"{path} has a problem: {', '.join(encrypting)} set encrypt_to, but "
-                "there's no public_keys_file to find the key in. Make one on the secure "
-                "side with pigsty keys export, copy it here, and point public_keys_file "
-                "at it."
+                f"{path} has a problem: {', '.join(using)} set encrypt_to or "
+                "signed_by, but there's no public_keys_file to find the keys in. Make "
+                "one on the secure side with pigsty keys export, copy it here, and "
+                "point public_keys_file at it."
             )
         return
     config.public_keys_file = (
         path.parent.resolve() / config.public_keys_file
     ).resolve()
     public_keys = read_public_keys(config.public_keys_file)
-    for code in encrypting:
-        task = config.task[code]
-        if task.encrypt_to not in public_keys:
+
+    def find(code: str, name: str, setting: str, signing: bool) -> str:
+        if name not in public_keys:
             known = ", ".join(sorted(public_keys)) or "none"
             raise ConfigurationError(
-                f"{path} has a problem: task {code!r} encrypts to {task.encrypt_to!r}, "
-                f"and {config.public_keys_file} has no key by that name. It has: "
-                f"{known}. If the key is new, export the public keys again on the "
-                "secure side and copy the file here."
+                f"{path} has a problem: task {code!r} has {name!r} in {setting}, and "
+                f"{config.public_keys_file} has no key by that name. It has: {known}. "
+                "If the key is new, export the public keys again on the secure side "
+                "and copy the file here."
             )
-        task.public_key = public_keys[task.encrypt_to]
+        if is_signing_public_key(public_keys[name]) != signing:
+            wanted = "a signing key" if signing else "an encryption key"
+            found = "an encryption key" if signing else "a signing key"
+            raise ConfigurationError(
+                f"{path} has a problem: task {code!r} has {name!r} in {setting}, and "
+                f"that's {found}. {setting} needs {wanted}."
+            )
+        return public_keys[name]
+
+    for code in using:
+        task = config.task[code]
+        if task.encrypt_to:
+            task.public_key = find(code, task.encrypt_to, "encrypt_to", signing=False)
+        task.signing_keys = {
+            name: find(code, name, "signed_by", signing=True) for name in task.signed_by
+        }
 
 
 class ConfigSource:

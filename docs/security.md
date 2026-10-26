@@ -41,10 +41,10 @@ of Pig, not by the application.
 Not CORS headers and not a content security policy. The real mitigations, in rough order of
 how much they buy you:
 
-- **Parameter signing.** Link parameters carry a signature proving the link came from you,
+- **Parameter signing.** Run parameters carry a signature proving the link came from you,
   so a participant can't change their own participant ID or condition assignment. Off by
   default, per task, because it makes testing considerably harder — you can't type a test
-  URL by hand.
+  URL by hand. See [Parameter signing](#parameter-signing) below.
 - **Closing a task.** A task that isn't collecting data doesn't accept any.
 - **Knowing your participants in advance.** Checking arrivals against a roster, so a run
   can only start for someone you expect. Not built; see `README.md`.
@@ -67,9 +67,23 @@ else, which is the right amount for data that a researcher needs to read with or
 tools.
 
 Two consequences worth stating: the account running Pig needs write access to the data root
-and nothing beyond it, and link parameters that become path components must be checked
+and nothing beyond it, and path parameters, which become path components, must be checked
 before they're used, never sanitized into something safe-looking. See
 [design_assumptions.md](design_assumptions.md).
+
+## Parameter signing
+
+A task with `signed_by` only starts a run from a link whose signed parameters were signed with one of its keys. The signature is Ed25519. The private key is on the secure side, and the web server has only the public key, which can check a signature but not make one. So a web server that's been broken into still can't make links that work, and an attacker who has the web server's configuration has nothing to sign with.
+
+What a signature covers is the task code, the key's name, and the name and value of each signed parameter. Not the link: Pig never sees the address a participant followed, only the parameters a task sends when it starts a run. A link signed for one task can't start another, and a value changed after signing fails.
+
+What it doesn't do:
+
+- **A link that leaks works for whoever has it.** Signing proves you made the link, not who's using it. Anyone with a participant's link can start runs as that participant, as many as they like. Checking arrivals against a roster is the other half of that, and isn't built.
+- **Signatures don't expire.** A participant offline for a whole run would otherwise have their data stuck on their device. The way to stop links working is to take their key out of the task's `signed_by`, which stops all of that key's links at once.
+- **Unsigned parameters stay editable.** Anything not in `signed_parameters`, like a `nextURL`, is the participant's to change. Put anything that matters in the signed list.
+- **It's checked only when a run starts.** After that, the run ID identifies the run, as it does for every task, and it's as secret as the participant keeps it.
+- **The parameters aren't secret.** They're in the link, and the task reads them in plain text. Signing is about whether they were changed, not who can read them.
 
 ## Purging
 

@@ -4,11 +4,12 @@ The web server reads `pig.toml`; the machine where the data ends up reads `pigst
 and no command reads both. That's what lets `pig.toml` sit on a public-facing machine:
 nothing the secure side needs ever has to be in it. See issue #33.
 
-This holds what `pigsty admit`, `pigsty organize`, `pigsty purge` and `pigsty keys`
-need: for each task, where its runs are kept and where its readable tree goes; the
-address of the web server to purge runs from; and the directory of private keys that
-encrypted runs are decrypted with. The keys themselves are never in this file, so it can
-be kept in version control like `pig.toml`.
+This holds what `pigsty admit`, `pigsty organize`, `pigsty purge`, `pigsty sign` and
+`pigsty keys` need: for each task, where its runs are kept, where its readable tree goes,
+and which of its parameters links are signed for; the address of the web server to purge
+runs from; and the directory of private keys that encrypted runs are decrypted with and
+links are signed with. The keys themselves are never in this file, so it can be kept in
+version control like `pig.toml`.
 """
 
 from __future__ import annotations
@@ -20,7 +21,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .config import SAFE_VALUE_EXPLANATION, ConfigurationError, is_safe_value
+from .config import (
+    SAFE_VALUE_EXPLANATION,
+    ConfigurationError,
+    is_safe_value,
+)
 
 DEFAULT_STY_CONFIG = "local/pigsty.toml"
 
@@ -126,6 +131,10 @@ class StyTask(BaseModel):
     # Where `pigsty organize` puts each of this task's runs: a fixed directory, then a
     # pattern. See `split_organized`.
     organized: str
+    # The parameters `pigsty sign` signs for this task. The same list as the task's
+    # `signed_parameters` in pig.toml, which this machine never reads: if the two
+    # differ, links signed here don't start runs there. See issue #15.
+    signed_parameters: list[str] = Field(default_factory=list)
 
     @property
     def organized_root(self) -> Path:
@@ -168,6 +177,16 @@ class StyConfig(BaseModel):
                 split_organized(task.organized)
             except PatternError as error:
                 raise ValueError(f"task {code!r}: {error}") from None
+            for name in task.signed_parameters:
+                if not name.isidentifier():
+                    raise ValueError(
+                        f"task {code!r}: {name!r} in signed_parameters isn't a name "
+                        "pig.toml could have for a parameter."
+                    )
+            if len(set(task.signed_parameters)) != len(task.signed_parameters):
+                raise ValueError(
+                    f"task {code!r}: signed_parameters lists a parameter twice."
+                )
         return self
 
 

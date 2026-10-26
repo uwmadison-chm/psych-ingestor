@@ -50,7 +50,16 @@ export interface ConnectOptions {
 export interface StartOptions {
   /** For tasks with no natural end. See README.md. */
   finalizeWhenAbandoned?: boolean;
+  /** For a task that checks signatures: the link's signature. startForURL() finds it
+   * in the link itself. See README.md. */
+  signature?: string;
+  /** For startForURL(): which of the link's parameters holds the signature. "sig"
+   * unless you say otherwise. */
+  signatureParameter?: string;
 }
+
+/** What a link's signature is called, unless the task says otherwise. */
+export const SIGNATURE_PARAMETER = "sig";
 
 /** Anything with a query string: a URL, a string, or `window.location`. */
 export type URLike = URL | Location | string;
@@ -103,11 +112,16 @@ export async function start(
     throw new PigError("bad-call", "start() needs Pig's address and a task code, like start(\"https://pig.yourlab.edu\", \"stroop\", parameters).");
   }
   checkParameterTypes(parameters);
+  if (options.signature !== undefined && typeof options.signature !== "string") {
+    throw new PigError("bad-call", `A signature has to be a string, and this one is ${JSON.stringify(options.signature)}.`);
+  }
   const c = connected();
   const summary = (await c.call("start", {
     server,
     task,
     parameters: { ...parameters },
+    signature: options.signature ?? null,
+    signatureParameter: options.signatureParameter ?? null,
     finalizeWhenAbandoned: options.finalizeWhenAbandoned ?? false,
     clientInfo: clientInfo(),
     stamp,
@@ -117,7 +131,9 @@ export async function start(
 
 /**
  * Start a run with the parameters in a URL's query string: every one of them, as it
- * is. Usually `startForURL(server, task, window.location)`.
+ * is. Usually `startForURL(server, task, window.location)`. For a task that checks
+ * signatures, the `sig` parameter (or `options.signatureParameter`) is the signature,
+ * and isn't sent as a parameter.
  */
 export function startForURL(server: string, task: string, url: URLike, options: StartOptions = {}): Promise<Run> {
   let search: string;
@@ -126,7 +142,10 @@ export function startForURL(server: string, task: string, url: URLike, options: 
   } catch {
     return Promise.reject(new PigError("bad-call", `startForURL() couldn't read ${JSON.stringify(url)} as a URL.`));
   }
-  return start(server, task, Object.fromEntries(new URLSearchParams(search)), options);
+  return start(server, task, Object.fromEntries(new URLSearchParams(search)), {
+    ...options,
+    signatureParameter: options.signatureParameter ?? SIGNATURE_PARAMETER,
+  });
 }
 
 /**

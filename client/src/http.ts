@@ -31,14 +31,20 @@ export function makeHttp({
   XHR = globalThis.XMLHttpRequest,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }: { fetch?: typeof globalThis.fetch; XHR?: typeof XMLHttpRequest; timeoutMs?: number } = {}) {
-  async function request(method: string, url: string, body?: string | Blob, waitMs = timeoutMs): Promise<Outcome> {
+  async function request(
+    method: string,
+    url: string,
+    body?: string | Blob,
+    waitMs = timeoutMs,
+    headers: Record<string, string> = {},
+  ): Promise<Outcome> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), waitMs);
     let response: Response;
     try {
       response = await fetch(url, {
         method,
-        headers: typeof body === "string" ? { "Content-Type": "application/json" } : {},
+        headers: typeof body === "string" ? { "Content-Type": "application/json", ...headers } : headers,
         body,
         signal: controller.signal,
       });
@@ -102,13 +108,17 @@ export function makeHttp({
       return request("GET", `${base(server)}/task/${encodeURIComponent(task)}`, undefined, waitMs);
     },
 
-    /** POST /task/{task}/run. `waitMs` as for taskSettings. */
-    startRun(server: string, task: string, parameters: TaskParameters, waitMs?: number) {
+    /**
+     * POST /task/{task}/run. The signature, if there is one, goes in a header rather
+     * than among the parameters. `waitMs` as for taskSettings.
+     */
+    startRun(server: string, task: string, parameters: TaskParameters, signature: string | null, waitMs?: number) {
       return request(
         "POST",
         `${base(server)}/task/${encodeURIComponent(task)}/run`,
         JSON.stringify(parameters),
         waitMs,
+        signature === null ? {} : { "Pig-Signature": signature },
       );
     },
 

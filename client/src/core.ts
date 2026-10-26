@@ -49,6 +49,10 @@ export { PigError };
 // offline run with a bad link fails at the start, not after the participant has done
 // the whole task.
 const SAFE_VALUE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
+// A text parameter: anything up to 2048 characters but control characters and half a
+// UTF-16 pair. The same rule as the server's; see docs/configuration.md.
+const MAX_TEXT_LENGTH = 2048;
+const NOT_TEXT = /[\p{Cc}\p{Cs}]/u;
 
 export const DEFAULTS = {
   // Waiting between tries after a failure: doubling from the first, up to the cap, with
@@ -159,6 +163,8 @@ export class Core {
     server,
     task,
     parameters,
+    signature = null,
+    signatureParameter = null,
     finalizeWhenAbandoned = false,
     clientInfo,
     stamp,
@@ -166,6 +172,10 @@ export class Core {
     server: string;
     task: string;
     parameters: TaskParameters;
+    signature?: string | null;
+    /** Where startForURL() found the link's parameters, the one that holds the
+     * signature, if the task checks one. */
+    signatureParameter?: string | null;
     finalizeWhenAbandoned?: boolean;
     clientInfo: ClientInfo;
     stamp: Stamp;
@@ -174,7 +184,14 @@ export class Core {
     if (!settings.open) {
       throw new PigError("task-closed", `The task ${JSON.stringify(task)} isn't accepting new data right now.`);
     }
-    checkParameters(settings, parameters);
+    // Taken out of the link's parameters only for a task that signs. For any other, a
+    // parameter of that name is the task's own, and stays.
+    if (settings.parameter_signing && signature === null && signatureParameter !== null && signatureParameter in parameters) {
+      signature = parameters[signatureParameter];
+      parameters = { ...parameters };
+      delete parameters[signatureParameter];
+    }
+    checkParameters(settings, parameters, signature, signatureParameter);
 
     const id = randomId();
     const now = Date.now();
@@ -183,6 +200,7 @@ export class Core {
       server,
       task,
       parameters,
+      signature,
       settings,
       client_info: clientInfo,
       server_run_id: null,
@@ -595,7 +613,7 @@ export class Core {
   }
 
   async #sendStart(run: RunRecord, op: Op, waitMs?: number): Promise<"done" | "later" | "refused"> {
-    const reply = await this.http.startRun(run.server, run.task, run.parameters, waitMs);
+    const reply = await this.http.startRun(run.server, run.task, run.parameters, run.signature ?? null, waitMs);
     if (reply.ok) {
       await this.store.updateRun(run.id, (r) => {
         r.server_run_id = reply.body.run_id;
@@ -611,7 +629,14 @@ export class Core {
       this.log("debug", `Couldn't start run ${run.id} on the server yet: ${reply.message}`);
       return "later";
     }
-    const code = reply.status === 404 ? "task-unknown" : reply.status === 409 ? "task-closed" : "refused";
+    const code =
+      reply.status === 403
+        ? "bad-signature"
+        : reply.status === 404
+          ? "task-unknown"
+          : reply.status === 409
+            ? "task-closed"
+            : "refused";
     await this.store.updateRun(run.id, (r) => {
       r.failed = { code, message: reply.message };
     });
@@ -1149,7 +1174,12 @@ function takeEventId(run: RunRecord): string {
   return eventId;
 }
 
-function checkParameters(settings: TaskSettings, parameters: TaskParameters): void {
+function checkParameters(
+  settings: TaskSettings,
+  parameters: TaskParameters,
+  signature: string | null,
+  signatureParameter: string | null,
+): void {
   const missing = settings.parameters.filter((name) => !(name in parameters));
   if (missing.length > 0) {
     throw new PigError(
@@ -1157,14 +1187,30 @@ function checkParameters(settings: TaskSettings, parameters: TaskParameters): vo
       `This task needs ${settings.parameters.join(", ")} to start, and ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} missing. Check the link.`,
     );
   }
+  const pathParameters = settings.path_parameters ?? settings.parameters;
   for (const name of settings.parameters) {
     const value = parameters[name];
-    if (typeof value !== "string" || !SAFE_VALUE.test(value)) {
+    if (pathParameters.includes(name)) {
+      if (typeof value !== "string" || !SAFE_VALUE.test(value)) {
+        throw new PigError(
+          "parameters",
+          `${name}=${JSON.stringify(value)} isn't allowed. Values may use letters, digits, underscore, and dash (not first), 1 to 64 characters. Check the link.`,
+        );
+      }
+    } else if (typeof value !== "string" || value.length > MAX_TEXT_LENGTH || NOT_TEXT.test(value)) {
       throw new PigError(
         "parameters",
-        `${name}=${JSON.stringify(value)} isn't allowed. Values may use letters, digits, underscore, and dash (not first), 1 to 64 characters. Check the link.`,
+        `The value for ${name} isn't allowed. It may be any text up to ${MAX_TEXT_LENGTH} characters, without control characters like tabs or line breaks. Check the link.`,
       );
     }
+  }
+  if (settings.parameter_signing && signature === null) {
+    throw new PigError(
+      "bad-signature",
+      signatureParameter === null
+        ? "This task only starts runs from signed links, and start() was given no signature."
+        : `This task only starts runs from signed links, and this link has no ${signatureParameter}. Use the link you were sent, exactly as it is.`,
+    );
   }
 }
 

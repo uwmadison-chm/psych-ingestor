@@ -8,18 +8,20 @@ command you type. See issue #33.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import cyclopts
 
 from . import admit as admit_module
-from . import db, keys, sty
+from . import db, keys, signing, sty
 from . import organize as organize_module
 from . import purge as purge_module
 from .config import ConfigurationError
@@ -62,12 +64,21 @@ CHECK_TIMEOUT_SECONDS = 10
 
 
 def _private_keys(loaded: sty.StyConfig) -> list[keys.PrivateKey]:
-    """Every private key in private_keys_dir, or none if there isn't one. Exits saying
-    what's wrong with a key that can't be used."""
+    """Every private key for decrypting in private_keys_dir, or none if there isn't
+    one. Exits saying what's wrong with a key that can't be used."""
+    return [key for key in _every_key(loaded) if isinstance(key, keys.PrivateKey)]
+
+
+def _signing_keys(loaded: sty.StyConfig) -> list[keys.SigningKey]:
+    """Every signing key in private_keys_dir, or none if there isn't one."""
+    return [key for key in _every_key(loaded) if isinstance(key, keys.SigningKey)]
+
+
+def _every_key(loaded: sty.StyConfig) -> list[keys.PrivateKey | keys.SigningKey]:
     if loaded.private_keys_dir is None:
         return []
     try:
-        return keys.read_private_keys(loaded.private_keys_dir)
+        return keys.read_all_keys(loaded.private_keys_dir)
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
@@ -79,11 +90,13 @@ def check(*, config: StyConfigPath | None = None) -> None:
 
     Also checks every private key in private_keys_dir. With pig_url set, asks the web
     server which public key each task encrypts to, and warns about one that no private
-    key here matches: data encrypted to it couldn't be decrypted. The web server's
-    pig.toml is checked by `pig check`.
+    key here matches: data encrypted to it couldn't be decrypted. And it warns about a
+    task whose signed_parameters differ from the web server's, since links signed here
+    wouldn't start runs there. The web server's pig.toml is checked by `pig check`.
     """
     loaded = _load(config)
     private_keys = _private_keys(loaded)
+    signing_keys = _signing_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
     if loaded.pig_url:
         print(f"Purges runs from {loaded.pig_url}.")
@@ -97,32 +110,42 @@ def check(*, config: StyConfigPath | None = None) -> None:
             f"{loaded.private_keys_dir}: "
             + (", ".join(key.name for key in private_keys) or "none yet")
         )
+        if signing_keys:
+            print(
+                f"Signs with {len(signing_keys)} signing key(s): "
+                + ", ".join(key.name for key in signing_keys)
+            )
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
         print(f"  datastore: {task.datastore_base}")
         print(f"  organized: {task.organized_root}")
         print(f"  pattern:   {task.pattern}")
+        if task.signed_parameters:
+            print(f"  signs:     {', '.join(task.signed_parameters)}")
     if loaded.pig_url:
-        _check_published_keys(loaded.pig_url, sorted(loaded.task), private_keys)
+        _check_web_server(loaded, private_keys)
 
 
-def _check_published_keys(
-    pig_url: str, codes: list[str], private_keys: list[keys.PrivateKey]
+def _check_web_server(
+    loaded: sty.StyConfig, private_keys: list[keys.PrivateKey]
 ) -> None:
     """Warn about any task the web server says encrypts to a public key that no private
-    key here matches. Only ever a warning: an unreachable server isn't this file's
-    problem, and the check is about the web server's configuration, not this one."""
+    key here matches, or signs other parameters than pigsty.toml says. Only ever a
+    warning: an unreachable server isn't this file's problem, and the check is mostly
+    about the web server's configuration, not this one."""
+    pig_url = loaded.pig_url or ""
     have = {key.public_key: key.name for key in private_keys}
     print()
-    for code in codes:
+    for code, task in sorted(loaded.task.items()):
         try:
             settings = _task_settings(pig_url, code)
         except purge_module.Unreachable as error:
-            print(f"Warning: didn't check which keys the web server uses: {error}")
+            print(f"Warning: didn't check the web server's settings: {error}")
             return
         if settings is None:
             print(f"Warning: the web server at {pig_url} has no task {code!r}.")
             continue
+        _check_signed_parameters(code, task, settings)
         encryption = settings.get("encryption")
         if not encryption:
             print(f"{code}: the web server doesn't encrypt it.")
@@ -136,6 +159,35 @@ def _check_published_keys(
                 "private key here matches. Runs encrypted to it couldn't be decrypted. "
                 "Check public_keys_file and encrypt_to in pig.toml."
             )
+
+
+def _check_signed_parameters(
+    code: str, task: sty.StyTask, settings: dict[str, Any]
+) -> None:
+    """Warn if the web server signs other parameters for a task than pigsty.toml says.
+    Links signed here would then never start a run there."""
+    signing_settings = settings.get("parameter_signing") or {}
+    theirs = signing_settings.get("signed_parameters", [])
+    if sorted(theirs) == sorted(task.signed_parameters):
+        return
+    if not theirs:
+        print(
+            f"Warning: {code}: pigsty.toml signs {', '.join(task.signed_parameters)}, "
+            "and the web server doesn't check signatures for this task."
+        )
+    elif not task.signed_parameters:
+        print(
+            f"Warning: {code}: the web server checks signatures over "
+            f"{', '.join(theirs)}, and pigsty.toml has no signed_parameters for it, "
+            "so pigsty sign can't sign links for it."
+        )
+    else:
+        print(
+            f"Warning: {code}: the web server checks signatures over "
+            f"{', '.join(theirs)}, and pigsty.toml signs "
+            f"{', '.join(task.signed_parameters)}. Links signed here won't start runs "
+            "there until the two lists are the same."
+        )
 
 
 def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
@@ -282,30 +334,210 @@ def purge(*, config: StyConfigPath | None = None) -> None:
         raise SystemExit(1)
 
 
+@app.command
+def sign(
+    task: str,
+    *values: str,
+    key: str,
+    csv_file: Annotated[Path | None, cyclopts.Parameter(name="--csv")] = None,
+    signature_name: Annotated[str, cyclopts.Parameter(name="--name")] = (
+        signing.LINK_PARAMETER
+    ),
+    url: str | None = None,
+    config: StyConfigPath | None = None,
+) -> None:
+    """Sign a link's parameters, so a task that checks signatures will start a run
+    from it.
+
+    Signs exactly the parameters the task's signed_parameters in pigsty.toml lists,
+    and prints the signature that goes in the link alongside them, as sig:
+
+        pigsty sign stroop --key lucida/signing participant_id=10351 session=baseline
+
+    With --csv, signs every row of a CSV file instead, and writes it to standard output
+    with a sig column added. The file needs a column named for each signed
+    parameter. Other columns are kept as they are, so a REDCap export can be signed and
+    imported again:
+
+        pigsty sign stroop --key lucida/signing --csv roster.csv > signed.csv
+
+    Signatures don't expire. To stop a key's links working, take it out of the task's
+    signed_by in pig.toml.
+
+    Parameters
+    ----------
+    task
+        The task code, as pigsty.toml and pig.toml name it.
+    values
+        Each signed parameter as name=value. Not used with --csv.
+    key
+        The signing key to sign with, by name, from private_keys_dir.
+    csv_file
+        A CSV file to sign every row of.
+    signature_name
+        What to call the signature: the column it goes in, with --csv, or its
+        parameter in the link, with --url. Only needed if the task reads it from the
+        link under another name.
+    url
+        Print a whole link instead: this address, with the parameters and the
+        signature added. Not used with --csv.
+    """
+    loaded = _load(config)
+    signed_parameters = _signed_parameters(loaded, task)
+    signing_key = _signing_key(loaded, key)
+    if csv_file is not None:
+        if values or url:
+            _fail("With --csv, the values come from the file. Leave out the others.")
+        _sign_csv(csv_file, signature_name, task, signed_parameters, signing_key)
+        return
+
+    given = _parse_values(list(values))
+    missing = [name for name in signed_parameters if name not in given]
+    unsigned = [name for name in given if name not in signed_parameters]
+    if missing:
+        _fail(
+            f"{task} signs {', '.join(signed_parameters)}. Give a value for "
+            f"{', '.join(missing)} too, like {missing[0]}=10351."
+        )
+    if unsigned:
+        _fail(
+            f"{task} doesn't sign {', '.join(unsigned)}; it signs "
+            f"{', '.join(signed_parameters)}. Put anything else in the link unsigned."
+        )
+    signature = signing.sign(signing_key, task, given)
+    if url is None:
+        print(signature)
+        return
+    query = urllib.parse.urlencode(
+        {**given, signature_name: signature}, quote_via=urllib.parse.quote
+    )
+    print(f"{url}{'&' if '?' in url else '?'}{query}")
+
+
+def _signed_parameters(loaded: sty.StyConfig, code: str) -> list[str]:
+    task = loaded.task.get(code)
+    if task is None:
+        _fail(f"pigsty.toml has no task {code!r}.")
+    if not task.signed_parameters:
+        _fail(
+            f"pigsty.toml doesn't say which of {code}'s parameters to sign. Add "
+            "signed_parameters to it, the same list as its signed_parameters in "
+            "pig.toml."
+        )
+    return task.signed_parameters
+
+
+def _signing_key(loaded: sty.StyConfig, name: str) -> keys.SigningKey:
+    signing_keys = _signing_keys(loaded)
+    for signing_key in signing_keys:
+        if signing_key.name == name:
+            return signing_key
+    known = ", ".join(signing_key.name for signing_key in signing_keys)
+    _fail(
+        f"There's no signing key called {name} in private_keys_dir. "
+        + (
+            f"There is: {known}."
+            if known
+            else "Make one with: pigsty keys new --signing NAME"
+        )
+    )
+
+
+def _parse_values(values: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        name, equals, text = value.partition("=")
+        if not equals or not name:
+            _fail(f"{value!r} should be a name and a value, like participant_id=10351.")
+        if name in parsed:
+            _fail(f"{name} is given twice.")
+        parsed[name] = text
+    return parsed
+
+
+def _sign_csv(
+    path: Path,
+    column: str,
+    task: str,
+    signed_parameters: list[str],
+    signing_key: keys.SigningKey,
+) -> None:
+    try:
+        # utf-8-sig, because Excel starts a "CSV UTF-8" file with a byte-order mark.
+        with open(path, newline="", encoding="utf-8-sig") as reading:
+            rows = list(csv.DictReader(reading))
+            columns = list(rows[0].keys()) if rows else []
+    except (OSError, UnicodeDecodeError, csv.Error) as error:
+        _fail(f"Can't read {path}: {error}")
+    if not rows:
+        _fail(f"{path} has no rows to sign.")
+    missing = [name for name in signed_parameters if name not in columns]
+    if missing:
+        _fail(
+            f"{path} has no column for {', '.join(missing)}. {task} signs "
+            f"{', '.join(signed_parameters)}, and needs a column named for each."
+        )
+    if column in columns:
+        _fail(
+            f"{path} already has a {column} column. Take it out to sign the file again."
+        )
+    # Every row is checked before anything is written, so a bad one never leaves half a
+    # file behind. csv.DictReader fills a short row with None, and puts a long row's
+    # extra values under None.
+    for number, row in enumerate(rows, start=1):
+        if None in row or None in row.values():
+            _fail(
+                f"Row {number} of {path}, after the header, doesn't have the same "
+                "number of columns as the header."
+            )
+    writer = csv.DictWriter(sys.stdout, fieldnames=[*columns, column])
+    writer.writeheader()
+    for row in rows:
+        values = {name: row[name] for name in signed_parameters}
+        writer.writerow(
+            {
+                **row,
+                column: signing.sign(signing_key, task, values),
+            }
+        )
+
+
+def _fail(message: str) -> NoReturn:
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
 keys_app = cyclopts.App(
     name="keys",
-    help="Make the private keys encrypted runs are decrypted with, and export their "
+    help="Make the private keys that decrypt runs and sign links, and export their "
     "public keys for the web server.",
 )
 app.command(keys_app)
 
 
 @keys_app.command
-def new(name: str, *, config: StyConfigPath | None = None) -> None:
+def new(
+    name: str, *, signing: bool = False, config: StyConfigPath | None = None
+) -> None:
     """Make a new private key in private_keys_dir.
 
     The key is written to {private_keys_dir}/{name}.key, readable only by you. A name
     can have directories in it, like lucida/2026a. Afterwards, export the public keys,
     copy the file to the web server, and set encrypt_to for the tasks that should use
-    this key.
+    this key, or signed_by for a signing key.
 
     Back the key file up somewhere an administrator can reach, like a 1Password vault.
     Anything encrypted to it that hasn't been admitted yet can't be read without it.
+    A signing key can always be replaced by a new one, but every link signed with it
+    stops working when it's taken out of signed_by.
 
     Parameters
     ----------
     name
         What to call the key, like lucida/2026a.
+    signing
+        Make a key for signing links, for pigsty sign, rather than one for
+        decrypting.
     """
     loaded = _load(config)
     if loaded.private_keys_dir is None:
@@ -315,8 +547,9 @@ def new(name: str, *, config: StyConfigPath | None = None) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
+    make = keys.new_signing_key if signing else keys.new_private_key
     try:
-        made = keys.new_private_key(loaded.private_keys_dir, name, db.now())
+        made = make(loaded.private_keys_dir, name, db.now())
     except ValueError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
@@ -348,10 +581,12 @@ def export(*, config: StyConfigPath | None = None) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    print(
-        keys.public_keys_text(_private_keys(loaded), loaded.private_keys_dir, db.now()),
-        end="",
-    )
+    try:
+        every_key = keys.read_all_keys(loaded.private_keys_dir)
+    except ConfigurationError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1) from error
+    print(keys.public_keys_text(every_key, loaded.private_keys_dir, db.now()), end="")
 
 
 def main() -> None:
