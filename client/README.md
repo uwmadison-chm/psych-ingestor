@@ -350,6 +350,7 @@ npm install
 npm run check        # type-check
 npm test             # the queue and sender, in Node, against a pretend Pig
 npm run build        # dist/
+npx playwright install chromium   # once, for the browser tests
 npm run e2e          # a real browser against a real `pig serve`
 npm run benchmark    # benchmarks/dist/encryption.html
 ```
@@ -358,5 +359,5 @@ The benchmark page times the client's encryption, for events and for recordings,
 
 Node runs the TypeScript sources directly, without compiling them, so the code sticks to
 TypeScript that only adds types: no enums, no namespaces. It needs Node 22.18 or later.
-The browser tests start Pig with `uv run pig`; set `PIG_COMMAND` to run it some other way.
+The browser tests are slow, so CI skips them; run them before you push a change to the client. They start Pig with `uv run pig`; set `PIG_COMMAND` to run it some other way.
 `src/core.ts` has the interesting part, and explains itself at the top.
