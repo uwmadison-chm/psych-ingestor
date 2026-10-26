@@ -31,20 +31,14 @@ export function makeHttp({
   XHR = globalThis.XMLHttpRequest,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 }: { fetch?: typeof globalThis.fetch; XHR?: typeof XMLHttpRequest; timeoutMs?: number } = {}) {
-  async function request(
-    method: string,
-    url: string,
-    body?: string | Blob,
-    waitMs = timeoutMs,
-    headers: Record<string, string> = {},
-  ): Promise<Outcome> {
+  async function request(method: string, url: string, body?: string | Blob, waitMs = timeoutMs): Promise<Outcome> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), waitMs);
     let response: Response;
     try {
       response = await fetch(url, {
         method,
-        headers: typeof body === "string" ? { "Content-Type": "application/json", ...headers } : headers,
+        headers: typeof body === "string" ? { "Content-Type": "application/json" } : {},
         body,
         signal: controller.signal,
       });
@@ -101,7 +95,7 @@ export function makeHttp({
 
   return {
     /**
-     * GET /task/{task}. With `waitMs`, gives up sooner than usual: a participant is
+     * GET /v1/task/{task}. With `waitMs`, gives up sooner than usual: a participant is
      * waiting on this one, and saved settings will do if the network is slow.
      */
     taskSettings(server: string, task: string, waitMs?: number) {
@@ -109,21 +103,20 @@ export function makeHttp({
     },
 
     /**
-     * POST /task/{task}/run. The signature, if there is one, goes in a header rather
-     * than among the parameters. `waitMs` as for taskSettings.
+     * POST /v1/task/{task}/run. The signature, if there is one, goes beside the
+     * parameters rather than among them. `waitMs` as for taskSettings.
      */
     startRun(server: string, task: string, parameters: TaskParameters, signature: string | null, waitMs?: number) {
       return request(
         "POST",
         `${base(server)}/task/${encodeURIComponent(task)}/run`,
-        JSON.stringify(parameters),
+        JSON.stringify(signature === null ? { parameters } : { parameters, signature }),
         waitMs,
-        signature === null ? {} : { "Pig-Signature": signature },
       );
     },
 
     /**
-     * POST /task/{task}/run/{run_id}, with a body already turned into JSON.
+     * POST /v1/task/{task}/run/{run_id}, with a body already turned into JSON.
      * The body is built from the exact strings stored in the queue, so a retry sends
      * the same bytes as the first try did.
      */
@@ -131,12 +124,12 @@ export function makeHttp({
       return request("POST", runUrl(server, task, runId), jsonBody);
     },
 
-    /** POST /task/{task}/run/{run_id}/media, with the body already turned into JSON. */
+    /** POST /v1/task/{task}/run/{run_id}/media, with the body already turned into JSON. */
     startMedia(server: string, task: string, runId: string, jsonBody: string) {
       return request("POST", `${runUrl(server, task, runId)}/media`, jsonBody);
     },
 
-    /** PUT /task/{task}/run/{run_id}/media/{media_id}/{part} */
+    /** PUT /v1/task/{task}/run/{run_id}/media/{media_id}/{part} */
     sendPart(
       server: string,
       task: string,
@@ -149,20 +142,21 @@ export function makeHttp({
       return upload(`${runUrl(server, task, runId)}/media/${mediaId}/${part}`, blob, onProgress);
     },
 
-    /** POST /task/{task}/run/{run_id}/media/{media_id}/finish */
+    /** POST /v1/task/{task}/run/{run_id}/media/{media_id}/finish */
     finishMedia(server: string, task: string, runId: string, mediaId: number, parts: number) {
       return request("POST", `${runUrl(server, task, runId)}/media/${mediaId}/finish`, JSON.stringify({ parts }));
     },
 
-    /** POST /task/{task}/run/{run_id}/finalize */
+    /** POST /v1/task/{task}/run/{run_id}/finalize */
     finalize(server: string, task: string, runId: string) {
       return request("POST", `${runUrl(server, task, runId)}/finalize`);
     },
   };
 }
 
+/** Where this version of the API is on `server`. */
 function base(server: string): string {
-  return server.replace(/\/+$/, "");
+  return `${server.replace(/\/+$/, "")}/v1`;
 }
 
 function runUrl(server: string, task: string, runId: string): string {

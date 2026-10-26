@@ -10,7 +10,7 @@ const PIG = "http://127.0.0.1:8765";
 
 /** What the server says about a run of the voice task. */
 async function serverRun(request, runId) {
-  const reply = await request.get(`${PIG}/task/voice/run/${runId}`);
+  const reply = await request.get(`${PIG}/v1/task/voice/run/${runId}`);
   expect(reply.ok()).toBeTruthy();
   return reply.json();
 }

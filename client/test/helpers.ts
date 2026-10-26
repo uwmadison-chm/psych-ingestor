@@ -17,7 +17,7 @@ interface FakeTask {
   /** The ones held to the safe-value rule, if not all of them. */
   path_parameters?: string[];
   /** The parameters a signature covers, for a task that checks them. The pretend Pig
-   * takes a Pig-Signature header of "good", and no other. */
+   * takes a signature of "good", and no other. */
   signed_parameters?: string[];
   open: boolean;
   max_event_size_bytes: number;
@@ -63,7 +63,6 @@ export class FakePig {
   intercept: ((method: string, path: string, body?: string) => Response | undefined) | null = null;
   /** The body of the request being answered, as bytes, when it was a Blob. */
   #raw: Uint8Array | null = null;
-  #signature: string | null = null;
 
   constructor() {
     this.tasks = {
@@ -77,7 +76,6 @@ export class FakePig {
     const method = init.method ?? "GET";
     const body = init.body instanceof Blob ? await init.body.text() : (init.body as string | undefined);
     this.#raw = init.body instanceof Blob ? new Uint8Array(await init.body.arrayBuffer()) : null;
-    this.#signature = (init.headers as Record<string, string> | undefined)?.["Pig-Signature"] ?? null;
     this.requests.push({ method, path: pathname, body });
     if (this.offline) throw new TypeError("Failed to fetch");
     const intercepted = this.intercept?.(method, pathname, body);
@@ -85,7 +83,10 @@ export class FakePig {
     const forced = this.upcoming.shift();
     if (forced === "network") throw new TypeError("Failed to fetch");
     if (forced) return json(forced.status, forced.body);
-    const answer = this.#route(method, pathname.split("/").filter(Boolean), body);
+    // Like the real one, the pretend Pig answers only under /v1/.
+    const [version, ...parts] = pathname.split("/").filter(Boolean);
+    if (version !== "v1") return json(404, { message: "Not Found" });
+    const answer = this.#route(method, parts, body);
     return json(answer.status, answer.body);
   }
 
@@ -196,10 +197,10 @@ export class FakePig {
     }
     if (method === "POST" && run === "run" && runId === undefined) {
       if (!task.open) return { status: 409, body: { message: "The task isn't accepting new data right now." } };
-      const parameters = JSON.parse(body!);
+      const { parameters, signature } = JSON.parse(body!);
       const missing = task.parameters.filter((p) => !(p in parameters));
       if (missing.length) return { status: 422, body: { message: `Missing ${missing}.` } };
-      if (task.signed_parameters && this.#signature !== "good") {
+      if (task.signed_parameters && signature !== "good") {
         return { status: 403, body: { message: "The signature doesn't match. Use the link you were sent." } };
       }
       const id = `run-${this.runs.size + 1}`;
@@ -219,7 +220,7 @@ export class FakePig {
       return { status: 409, body: { status: record.status, stored: stored(), errors: { run: { message: "Expired.", can_retry: false } } } };
     }
 
-    const submitted: Record<string, { data: unknown }> = JSON.parse(body!);
+    const submitted: Record<string, { data: unknown }> = JSON.parse(body!).events;
     if (record.status !== "in_progress") {
       const errors = Object.fromEntries(Object.keys(submitted).map((id) => [id, { message: "Closed.", can_retry: true }]));
       return { status: 409, body: { status: record.status, stored: stored(), errors } };
@@ -243,7 +244,7 @@ export class FakePig {
 }
 
 function requestKind({ method, path }: Request): string {
-  const parts = path.split("/").filter(Boolean);
+  const parts = path.split("/").filter(Boolean).slice(1); // without the v1
   if (method === "GET") return "settings";
   if (method === "PUT") return "part";
   if (parts[4] === "media") return parts.length === 5 ? "media-start" : "media-finish";

@@ -8,7 +8,7 @@ const PARAMETERS = { participant_id: "10351", session: "baseline" };
 
 /** What the server holds for a run. */
 async function serverRun(request, runId) {
-  const reply = await request.get(`${PIG}/task/stroop/run/${runId}`);
+  const reply = await request.get(`${PIG}/v1/task/stroop/run/${runId}`);
   expect(reply.ok()).toBeTruthy();
   return reply.json();
 }

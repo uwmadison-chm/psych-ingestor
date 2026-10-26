@@ -18,24 +18,27 @@ START = {
 
 
 def start_run(client: TestClient) -> str:
-    return client.post("/task/interview/run", json=PARTICIPANT).json()["run_id"]
+    return client.post(
+        "/v1/task/interview/run", json={"parameters": PARTICIPANT}
+    ).json()["run_id"]
 
 
 def start_media(client: TestClient, run_id: str) -> int:
-    started = client.post(f"/task/interview/run/{run_id}/media", json=START)
+    started = client.post(f"/v1/task/interview/run/{run_id}/media", json=START)
     assert started.status_code == 201
     return started.json()["media_id"]
 
 
 def put_part(client: TestClient, run_id: str, media_id: int, part: int, body: bytes):
     return client.put(
-        f"/task/interview/run/{run_id}/media/{media_id}/{part}", content=body
+        f"/v1/task/interview/run/{run_id}/media/{media_id}/{part}", content=body
     )
 
 
 def finish(client: TestClient, run_id: str, media_id: int, parts: int):
     return client.post(
-        f"/task/interview/run/{run_id}/media/{media_id}/finish", json={"parts": parts}
+        f"/v1/task/interview/run/{run_id}/media/{media_id}/finish",
+        json={"parts": parts},
     )
 
 
@@ -45,7 +48,7 @@ def finish(client: TestClient, run_id: str, media_id: int, parts: int):
 def test_the_worked_example(client: TestClient):
     run_id = start_run(client)
 
-    started = client.post(f"/task/interview/run/{run_id}/media", json=START)
+    started = client.post(f"/v1/task/interview/run/{run_id}/media", json=START)
     assert started.status_code == 201
     assert started.json() == {"media_id": 1, "max_part_size": 1024}
 
@@ -73,7 +76,7 @@ def test_the_worked_example(client: TestClient):
     }
 
     # The run knows about it, both as an event and as a media item.
-    checked = client.get(f"/task/interview/run/{run_id}").json()
+    checked = client.get(f"/v1/task/interview/run/{run_id}").json()
     assert checked["stored"] == ["prompt3_audio"]
     assert checked["media"] == [finished.json()["media"]]
 
@@ -97,7 +100,7 @@ def test_media_ids_count_from_one_within_the_run(client: TestClient):
     run_id = start_run(client)
     assert start_media(client, run_id) == 1
     second = client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "prompt4_audio", "data": {}},
     )
     assert second.json()["media_id"] == 2
@@ -123,7 +126,7 @@ def test_parts_land_in_the_run_directory(pig: Pig, client: TestClient):
 def test_retrying_a_start_gives_the_same_media_id(client: TestClient):
     run_id = start_run(client)
     assert start_media(client, run_id) == 1
-    again = client.post(f"/task/interview/run/{run_id}/media", json=START)
+    again = client.post(f"/v1/task/interview/run/{run_id}/media", json=START)
     assert again.status_code == 200
     assert again.json() == {"media_id": 1, "max_part_size": 1024}
 
@@ -132,7 +135,7 @@ def test_a_start_with_the_same_id_and_different_data_is_refused(client: TestClie
     run_id = start_run(client)
     start_media(client, run_id)
     changed = client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "prompt3_audio", "data": {"prompt": 4}},
     )
     assert changed.status_code == 422
@@ -143,10 +146,10 @@ def test_a_start_with_the_same_id_and_different_data_is_refused(client: TestClie
 def test_an_event_id_already_used_by_a_plain_event_is_refused(client: TestClient):
     run_id = start_run(client)
     client.post(
-        f"/task/interview/run/{run_id}",
-        json={"prompt3_audio": {"data": START["data"]}},
+        f"/v1/task/interview/run/{run_id}",
+        json={"events": {"prompt3_audio": {"data": START["data"]}}},
     )
-    refused = client.post(f"/task/interview/run/{run_id}/media", json=START)
+    refused = client.post(f"/v1/task/interview/run/{run_id}/media", json=START)
     assert refused.status_code == 422
     problem = refused.json()["errors"]["prompt3_audio"]
     assert problem["can_retry"] is False
@@ -262,7 +265,9 @@ def test_a_finish_body_has_to_be_a_count(client: TestClient):
     run_id = start_run(client)
     start_media(client, run_id)
     for body in ({}, {"parts": 0}, {"parts": "3"}, {"parts": True}, {"count": 3}):
-        refused = client.post(f"/task/interview/run/{run_id}/media/1/finish", json=body)
+        refused = client.post(
+            f"/v1/task/interview/run/{run_id}/media/1/finish", json=body
+        )
         assert refused.status_code == 422, body
         assert "parts" in refused.json()["message"]
 
@@ -272,17 +277,18 @@ def test_a_finish_body_has_to_be_a_count(client: TestClient):
 
 def test_a_task_without_media_says_so(client: TestClient):
     run_id = client.post(
-        "/task/stroop/run", json={"participant_id": "10351", "session": "baseline"}
+        "/v1/task/stroop/run",
+        json={"parameters": {"participant_id": "10351", "session": "baseline"}},
     ).json()["run_id"]
-    refused = client.post(f"/task/stroop/run/{run_id}/media", json=START)
+    refused = client.post(f"/v1/task/stroop/run/{run_id}/media", json=START)
     assert refused.status_code == 404
     assert "media = true" in refused.json()["message"]
     assert (
-        client.put(f"/task/stroop/run/{run_id}/media/1/1", content=b"x").status_code
+        client.put(f"/v1/task/stroop/run/{run_id}/media/1/1", content=b"x").status_code
         == 404
     )
     # And a run that doesn't take media doesn't mention it.
-    assert "media" not in client.get(f"/task/stroop/run/{run_id}").json()
+    assert "media" not in client.get(f"/v1/task/stroop/run/{run_id}").json()
 
 
 def test_an_unknown_media_item_is_a_404(client: TestClient):
@@ -318,7 +324,7 @@ def test_a_part_bigger_than_the_task_allows_is_refused_while_streaming(
         for _ in range(3):
             yield b"x" * 500
 
-    refused = client.put(f"/task/interview/run/{run_id}/media/1/1", content=chunks())
+    refused = client.put(f"/v1/task/interview/run/{run_id}/media/1/1", content=chunks())
     assert refused.status_code == 413
     assert refused.json()["errors"]["1"]["can_retry"] is False
     run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
@@ -343,10 +349,10 @@ def test_a_closed_run_refuses_all_three(client: TestClient):
     run_id = start_run(client)
     start_media(client, run_id)
     put_part(client, run_id, 1, 1, b"a")
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
 
     started = client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "prompt4_audio", "data": {}},
     )
     assert started.status_code == 409
@@ -365,7 +371,7 @@ def test_a_closed_run_refuses_all_three(client: TestClient):
 
 def test_a_start_body_is_checked_like_an_event(client: TestClient):
     run_id = start_run(client)
-    url = f"/task/interview/run/{run_id}/media"
+    url = f"/v1/task/interview/run/{run_id}/media"
     assert client.post(url, json=["nope"]).status_code == 422
     assert client.post(url, json={"data": {}}).status_code == 422
     assert client.post(url, json={"event_id": "x"}).status_code == 422
@@ -377,12 +383,12 @@ def test_a_start_body_is_checked_like_an_event(client: TestClient):
     # A numeric event ID is what JavaScript sends for a counter; it's kept as text.
     numeric = client.post(url, json={"event_id": 12, "data": {}})
     assert numeric.status_code == 201
-    assert client.get(f"/task/interview/run/{run_id}").json()["stored"] == ["12"]
+    assert client.get(f"/v1/task/interview/run/{run_id}").json()["stored"] == ["12"]
 
 
 def test_a_browser_can_preflight_a_part_upload(client: TestClient):
     preflight = client.options(
-        "/task/interview/run/some-run/media/1/1",
+        "/v1/task/interview/run/some-run/media/1/1",
         headers={
             "Origin": "https://tasks.example.edu",
             "Access-Control-Request-Method": "PUT",
@@ -409,11 +415,11 @@ def test_the_manifest_carries_the_media_and_hashes_every_part(
     finish(client, run_id, 1, 2)
     # A second item the task never finished.
     client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "prompt4_audio", "data": {}},
     )
     put_part(client, run_id, 2, 1, b"only")
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
@@ -447,7 +453,7 @@ def test_the_sweep_removes_scratch_files_an_upload_left_behind(
     run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
     stray = run_dir / "media" / "00001" / "000002.part.deadbeef.partial"
     stray.write_bytes(b"half of a part")
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
@@ -465,7 +471,7 @@ def test_a_run_whose_part_vanished_is_reported_not_finished(
     start_media(client, run_id)
     put_part(client, run_id, 1, 1, b"a")
     put_part(client, run_id, 1, 2, b"b")
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
     run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
     storage.part_path(run_dir, 1, 2).unlink()
 

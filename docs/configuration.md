@@ -309,7 +309,7 @@ A link for this task looks like this, with the signature as one more parameter, 
 https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&sig=lucida/signing.Xk3…
 ```
 
-`sig` is the client's name for it, not Pig's. The client takes it out of the link and sends it to Pig in a header of its own (see [api.md](api.md#signed-links)), so a task can still have a parameter called `sig`, and can have the client read the signature from another name instead.
+`sig` is the client's name for it, not Pig's. The client takes it out of the link and sends it to Pig beside the parameters (see [api.md](api.md#signed-links)), so a task can still have a parameter called `sig`, and can have the client read the signature from another name instead.
 
 Every signed parameter is required, and the signature covers exactly those. Anything else in the link, like a `nextURL`, is an extra parameter as usual: recorded, unsigned, free to vary.
 
@@ -334,12 +334,12 @@ task. Permissive by default; see
 ## The task code
 
 The short name for the task — `stroop`, `balloons`, `dd_game`. It's the key of the task's
-configuration entry, it appears in every URL the task calls (`POST /task/stroop/run`), and
+configuration entry, it appears in every URL the task calls (`POST /v1/task/stroop/run`), and
 it's the directory the task's runs live in under `done/`.
 
-Task codes live under `/task/` rather than at the root of the URL space, so they can never
+Task codes live under `/v1/task/` rather than at the root of the URL space, so they can never
 collide with the service's own routes. A task code of `health` is just
-`/task/health/run`, and `GET /health` is unaffected. Nothing needs a list of reserved
+`/v1/task/health/run`, and `GET /health` is unaffected. Nothing needs a list of reserved
 names.
 
 A task code must be a safe value, below, and lowercase. It becomes a directory name on

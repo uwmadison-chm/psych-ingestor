@@ -88,7 +88,7 @@ def test_a_media_start_arriving_as_the_run_closes_is_refused(
     pig: Pig, client: TestClient, monkeypatch
 ):
     run_id = client.post(
-        "/task/interview/run", json={"participant_id": "10351"}
+        "/v1/task/interview/run", json={"parameters": {"participant_id": "10351"}}
     ).json()["run_id"]
 
     real = service._as_media_start
@@ -99,7 +99,7 @@ def test_a_media_start_arriving_as_the_run_closes_is_refused(
 
     monkeypatch.setattr(service, "_as_media_start", sweep_first)
     started = client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "audio", "data": {"content_type": "audio/webm"}},
     )
 
@@ -115,14 +115,14 @@ def test_parts_are_written_outside_the_run_and_the_sweep_clears_them(
     pig: Pig, client: TestClient
 ):
     run_id = client.post(
-        "/task/interview/run", json={"participant_id": "10351"}
+        "/v1/task/interview/run", json={"parameters": {"participant_id": "10351"}}
     ).json()["run_id"]
     client.post(
-        f"/task/interview/run/{run_id}/media",
+        f"/v1/task/interview/run/{run_id}/media",
         json={"event_id": "audio", "data": {"content_type": "audio/webm"}},
     )
     assert client.put(
-        f"/task/interview/run/{run_id}/media/1/1", content=b"a"
+        f"/v1/task/interview/run/{run_id}/media/1/1", content=b"a"
     ).is_success
 
     # What an upload cut off partway leaves behind, for this run and another.
@@ -132,7 +132,7 @@ def test_parts_are_written_outside_the_run_and_the_sweep_clears_them(
     someone_else = storage.scratch_path(uploading, "another-run", 1, 1)
     someone_else.write_bytes(b"still arriving")
 
-    client.post(f"/task/interview/run/{run_id}/finalize")
+    client.post(f"/v1/task/interview/run/{run_id}/finalize")
     report = sweep.sweep(pig.config, pig.connection)
 
     assert report.finished == [run_id]

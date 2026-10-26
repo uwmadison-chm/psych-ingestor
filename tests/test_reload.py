@@ -25,16 +25,22 @@ def rewrite(path: Path, old: str, new: str) -> None:
 def test_closing_a_task_takes_effect_without_a_restart(
     client: TestClient, config_path: Path
 ):
-    assert client.post("/task/stroop/run", json=BASELINE).status_code == 201
+    assert (
+        client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).status_code
+        == 201
+    )
 
     rewrite(config_path, 'expires_after = "24h"', 'expires_after = "24h"\nopen = false')
 
-    refused = client.post("/task/stroop/run", json=BASELINE)
+    refused = client.post("/v1/task/stroop/run", json={"parameters": BASELINE})
     assert refused.status_code == 409
 
 
 def test_a_new_task_appears_without_a_restart(client: TestClient, config_path: Path):
-    assert client.post("/task/dd_game/run", json=BASELINE).status_code == 404
+    assert (
+        client.post("/v1/task/dd_game/run", json={"parameters": BASELINE}).status_code
+        == 404
+    )
 
     with open(config_path, "a") as handle:
         handle.write(
@@ -43,7 +49,9 @@ def test_a_new_task_appears_without_a_restart(client: TestClient, config_path: P
             'run_key_parameters = ["participant_id"]\n'
         )
 
-    started = client.post("/task/dd_game/run", json={"participant_id": "10351"})
+    started = client.post(
+        "/v1/task/dd_game/run", json={"parameters": {"participant_id": "10351"}}
+    )
     assert started.status_code == 201
 
 
@@ -51,14 +59,21 @@ def test_a_broken_file_keeps_the_last_good_one_serving(
     client: TestClient, config_path: Path
 ):
     """A typo in a text editor must not stop data collection for someone mid-task."""
-    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
 
     rewrite(config_path, "[task.stroop]", "[task.stroop")  # a real typo
 
     # Everything keeps working on the configuration that last loaded.
-    sent = client.post(f"/task/stroop/run/{run_id}", json={"1": {"data": {"t": 1}}})
+    sent = client.post(
+        f"/v1/task/stroop/run/{run_id}", json={"events": {"1": {"data": {"t": 1}}}}
+    )
     assert sent.status_code == 201
-    assert client.post("/task/stroop/run", json=BASELINE).status_code == 201
+    assert (
+        client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).status_code
+        == 201
+    )
 
     # ...and the health check is where you find out.
     health = client.get("/health")
@@ -80,7 +95,10 @@ def test_a_deleted_file_keeps_the_last_good_one_serving(
     client: TestClient, config_path: Path
 ):
     config_path.unlink()
-    assert client.post("/task/stroop/run", json=BASELINE).status_code == 201
+    assert (
+        client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).status_code
+        == 201
+    )
     assert client.get("/health").status_code == 503
 
 

@@ -6,54 +6,63 @@ BASELINE = {"participant_id": "10351", "session": "baseline"}
 
 
 def test_the_worked_example_from_the_docs(client: TestClient):
-    started = client.post("/task/stroop/run", json=BASELINE)
+    started = client.post("/v1/task/stroop/run", json={"parameters": BASELINE})
     assert started.status_code == 201
     run_id = started.json()["run_id"]
     assert started.json()["run_number"] == 1
 
     sent = client.post(
-        f"/task/stroop/run/{run_id}",
+        f"/v1/task/stroop/run/{run_id}",
         json={
-            "1": {
-                "data": {
-                    "timestamp": "2026-07-26T18:25:43.511-05:00",
-                    "type": "task_start",
-                    "ts": 0,
-                }
-            },
-            "2": {
-                "data": {
-                    "timestamp": "2026-07-26T18:25:47.204-05:00",
-                    "type": "trial",
-                    "word": "GREEN",
-                    "rt": 843,
-                }
-            },
+            "events": {
+                "1": {
+                    "data": {
+                        "timestamp": "2026-07-26T18:25:43.511-05:00",
+                        "type": "task_start",
+                        "ts": 0,
+                    }
+                },
+                "2": {
+                    "data": {
+                        "timestamp": "2026-07-26T18:25:47.204-05:00",
+                        "type": "trial",
+                        "word": "GREEN",
+                        "rt": 843,
+                    }
+                },
+            }
         },
     )
     assert sent.status_code == 201
     assert sent.json() == {"status": "in_progress", "stored": ["1", "2"]}
 
-    finalized = client.post(f"/task/stroop/run/{run_id}/finalize")
+    finalized = client.post(f"/v1/task/stroop/run/{run_id}/finalize")
     assert finalized.status_code == 200
     assert finalized.json()["status"] == "finalizing"
 
 
 def test_checking_on_a_run(client: TestClient):
-    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
-    client.post(f"/task/stroop/run/{run_id}", json={"1": {"data": {"trial": 1}}})
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
+    client.post(
+        f"/v1/task/stroop/run/{run_id}", json={"events": {"1": {"data": {"trial": 1}}}}
+    )
 
-    checked = client.get(f"/task/stroop/run/{run_id}")
+    checked = client.get(f"/v1/task/stroop/run/{run_id}")
     assert checked.status_code == 200
     assert checked.json() == {"status": "in_progress", "stored": ["1"]}
 
 
 def test_an_unknown_task_is_a_404(client: TestClient):
-    assert client.post("/task/nope/run", json=BASELINE).status_code == 404
+    assert (
+        client.post("/v1/task/nope/run", json={"parameters": BASELINE}).status_code
+        == 404
+    )
 
 
 def test_reading_a_tasks_settings(client: TestClient):
-    described = client.get("/task/stroop")
+    described = client.get("/v1/task/stroop")
     assert described.status_code == 200
     assert described.json() == {
         "task_code": "stroop",
@@ -69,38 +78,50 @@ def test_reading_a_tasks_settings(client: TestClient):
 
 
 def test_a_media_tasks_settings_give_its_part_size(client: TestClient):
-    described = client.get("/task/interview").json()
+    described = client.get("/v1/task/interview").json()
     assert described["media"] == {"max_part_size_bytes": 1024}
 
 
 def test_a_closed_task_gives_its_settings_too(client: TestClient):
     """Closing refuses new runs only. The runs still going need the rest."""
-    described = client.get("/task/balloons")
+    described = client.get("/v1/task/balloons")
     assert described.status_code == 200
     assert described.json()["open"] is False
     assert described.json()["parameters"] == ["participant_id"]
 
 
 def test_settings_for_an_unknown_task_are_a_404(client: TestClient):
-    assert client.get("/task/nope").status_code == 404
+    assert client.get("/v1/task/nope").status_code == 404
 
 
 def test_an_unknown_run_is_a_404(client: TestClient):
-    assert client.get("/task/stroop/run/no-such-run").status_code == 404
+    assert client.get("/v1/task/stroop/run/no-such-run").status_code == 404
 
 
 def test_a_retry_is_a_200(client: TestClient):
-    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
     batch = {"1": {"data": {"trial": 1}}}
-    assert client.post(f"/task/stroop/run/{run_id}", json=batch).status_code == 201
-    assert client.post(f"/task/stroop/run/{run_id}", json=batch).status_code == 200
+    assert (
+        client.post(f"/v1/task/stroop/run/{run_id}", json={"events": batch}).status_code
+        == 201
+    )
+    assert (
+        client.post(f"/v1/task/stroop/run/{run_id}", json={"events": batch}).status_code
+        == 200
+    )
 
 
 def test_a_repeated_id_with_new_content_is_a_422(client: TestClient):
-    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
-    client.post(f"/task/stroop/run/{run_id}", json={"1": {"data": {"trial": 1}}})
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
+    client.post(
+        f"/v1/task/stroop/run/{run_id}", json={"events": {"1": {"data": {"trial": 1}}}}
+    )
     collision = client.post(
-        f"/task/stroop/run/{run_id}", json={"1": {"data": {"trial": 9}}}
+        f"/v1/task/stroop/run/{run_id}", json={"events": {"1": {"data": {"trial": 9}}}}
     )
 
     assert collision.status_code == 422
@@ -110,10 +131,14 @@ def test_a_repeated_id_with_new_content_is_a_422(client: TestClient):
 def test_a_field_outside_data_is_refused(client: TestClient):
     """Pig stores only `data`. A top-level `timestamp` — the shape from before issue #3 —
     would be dropped silently otherwise, and the task would never know."""
-    run_id = client.post("/task/stroop/run", json=BASELINE).json()["run_id"]
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
     refused = client.post(
-        f"/task/stroop/run/{run_id}",
-        json={"1": {"timestamp": "2026-07-26T18:25:43.511-05:00", "data": {}}},
+        f"/v1/task/stroop/run/{run_id}",
+        json={
+            "events": {"1": {"timestamp": "2026-07-26T18:25:43.511-05:00", "data": {}}}
+        },
     )
     assert refused.status_code == 422
     assert refused.json()["stored"] == []
@@ -123,7 +148,8 @@ def test_a_field_outside_data_is_refused(client: TestClient):
 
 def test_a_bad_parameter_says_what_is_allowed(client: TestClient):
     refused = client.post(
-        "/task/stroop/run", json={"participant_id": "10 351", "session": "baseline"}
+        "/v1/task/stroop/run",
+        json={"parameters": {"participant_id": "10 351", "session": "baseline"}},
     )
     assert refused.status_code == 422
     assert "letters, digits" in refused.json()["message"]
@@ -131,8 +157,8 @@ def test_a_bad_parameter_says_what_is_allowed(client: TestClient):
 
 def test_cross_origin_requests_are_allowed(client: TestClient):
     replied = client.post(
-        "/task/stroop/run",
-        json=BASELINE,
+        "/v1/task/stroop/run",
+        json={"parameters": BASELINE},
         headers={"Origin": "https://tasks.example.edu"},
     )
     assert replied.headers["access-control-allow-origin"] == "*"
@@ -145,7 +171,7 @@ def test_a_public_task_page_can_preflight_a_localhost_pig(client: TestClient):
     unless we answer it — see docs/security.md.
     """
     preflight = client.options(
-        "/task/stroop/run",
+        "/v1/task/stroop/run",
         headers={
             "Origin": "https://tasks.example.edu",
             "Access-Control-Request-Method": "POST",
@@ -163,3 +189,43 @@ def test_health_reports_each_task(client: TestClient):
     assert report["tasks"]["stroop"]["open"] is True
     assert report["tasks"]["balloons"]["open"] is False
     assert report["tasks"]["stroop"]["runs"]["in_progress"] == 0
+
+
+def test_the_api_is_under_v1_but_health_isnt(client: TestClient):
+    assert client.get("/task/stroop").status_code == 404
+    assert client.post("/task/stroop/run", json=BASELINE).status_code == 404
+    assert client.get("/health").status_code == 200
+    assert client.get("/v1/health").status_code == 404
+
+
+def test_bare_parameters_or_events_are_refused(client: TestClient):
+    """The shapes from before v1. Refused, so a task still sending them finds out."""
+    refused = client.post("/v1/task/stroop/run", json=BASELINE)
+    assert refused.status_code == 422
+    assert "'parameters'" in refused.json()["message"]
+
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
+    refused = client.post(
+        f"/v1/task/stroop/run/{run_id}", json={"1": {"data": {"trial": 1}}}
+    )
+    assert refused.status_code == 422
+    assert "'events'" in refused.json()["message"]
+
+
+def test_a_field_beside_parameters_or_events_is_refused(client: TestClient):
+    refused = client.post(
+        "/v1/task/stroop/run", json={"parameters": BASELINE, "utm_source": "email"}
+    )
+    assert refused.status_code == 422
+    assert "'utm_source'" in refused.json()["message"]
+
+    run_id = client.post("/v1/task/stroop/run", json={"parameters": BASELINE}).json()[
+        "run_id"
+    ]
+    refused = client.post(
+        f"/v1/task/stroop/run/{run_id}", json={"events": {}, "2": {"data": {}}}
+    )
+    assert refused.status_code == 422
+    assert "belong inside 'events'" in refused.json()["message"]

@@ -662,7 +662,7 @@ export class Core {
   }
 
   async #sendEvents(run: RunRecord, batch: EventOp[]): Promise<Attempt> {
-    const body = `{${batch.map((op) => `${JSON.stringify(op.event_id)}:${op.json}`).join(",")}}`;
+    const body = `{"events":{${batch.map((op) => `${JSON.stringify(op.event_id)}:${op.json}`).join(",")}}}`;
     const reply = await this.http.sendEvents(run.server, run.task, run.server_run_id!, body);
     if (!reply.ok && reply.retry) return "later";
     if (reply.status === 413) return "too-big";

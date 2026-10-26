@@ -43,13 +43,13 @@ Four URLs, and you only need the first three. All of them take and return JSON.
 
 | URL | What it does |
 | --- | --- |
-| `POST /task/{task_code}/run` | Start a run. Send the parameters from the participant's link; get back a run ID. |
-| `POST /task/{task_code}/run/{run_id}` | Send events. One JSON object per event, keyed by an event ID you make up. |
-| `POST /task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig finishes up from there. |
-| `GET /task/{task_code}/run/{run_id}` | Check on a run -- its status and which events Pig has. |
+| `POST /v1/task/{task_code}/run` | Start a run. Send the parameters from the participant's link; get back a run ID. |
+| `POST /v1/task/{task_code}/run/{run_id}` | Send events. One JSON object per event, keyed by an event ID you make up. |
+| `POST /v1/task/{task_code}/run/{run_id}/finalize` | Say you're done. Pig finishes up from there. |
+| `GET /v1/task/{task_code}/run/{run_id}` | Check on a run -- its status and which events Pig has. |
 
 A task that records audio, video, or anything else too big for an event has three more,
-under `/task/{task_code}/run/{run_id}/media`: start a media item (which is an ordinary
+under `/v1/task/{task_code}/run/{run_id}/media`: start a media item (which is an ordinary
 event, with a media ID handed back), send its bytes in numbered parts, and say how many
 parts you sent. It's off unless a task's configuration turns it on.
 
