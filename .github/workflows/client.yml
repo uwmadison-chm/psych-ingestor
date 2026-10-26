@@ -3,7 +3,7 @@
 #
 # Every push and pull request that touches the client runs its tests and builds it; the
 # built files are attached to the run as an artifact called "pig-client". Pushing a tag
-# like v0.3.0 also attaches them to a GitHub release of that name, and publishes
+# like v0.3.0 (`just release` makes and pushes it) also attaches them to a GitHub release of that name, and publishes
 # that version to npm.
 #
 # Publishing uses npm's trusted publishing, so there's no npm token stored here. It has to
@@ -60,9 +60,10 @@ jobs:
             client/dist/pig.script.js
             client/dist/pig-worker.js
 
+  # After publish, so a tag that doesn't match package.json makes no release either.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test-and-build
+    needs: [test-and-build, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
