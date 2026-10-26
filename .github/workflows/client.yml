@@ -3,8 +3,8 @@
 #
 # Every push and pull request that touches the client runs its tests and builds it; the
 # built files are attached to the run as an artifact called "pig-client". Pushing a tag
-# like v0.3.0 (`just release` makes and pushes it) also attaches them to a GitHub release of that name, and publishes
-# that version to npm.
+# like v0.3.0 publishes that version to npm, and then attaches the files to a GitHub
+# release of that name. `just release` makes and pushes the tag.
 #
 # Publishing uses npm's trusted publishing, so there's no npm token stored here. It has to
 # be turned on once, on npmjs.com, in the package's settings: trusted publisher GitHub
