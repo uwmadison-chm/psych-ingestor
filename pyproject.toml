@@ -32,3 +32,7 @@ dev = [
 [tool.ty.environment]
 # Stubs for pyrage, which ships none.
 extra-paths = ["typings"]
+
+[tool.pytest.ini_options]
+# contrib/ holds separate projects with their own tests and dependencies.
+testpaths = ["tests"]

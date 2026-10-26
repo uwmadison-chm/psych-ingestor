@@ -1,0 +1,28 @@
+# The server: lint it, typecheck it, and run its tests, the same way `just check test`
+# does on your own machine.
+#
+# Every push to main and every pull request that touches the Python code runs it.
+
+name: server
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/**", "tests/**", "typings/**", "pyproject.toml", "uv.lock", ".python-version", ".github/workflows/server.yml"]
+  pull_request:
+    paths: ["src/**", "tests/**", "typings/**", "pyproject.toml", "uv.lock", ".python-version", ".github/workflows/server.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the Python version from .python-version.
+      - uses: astral-sh/setup-uv@v6
+
+      - run: uv sync --locked
+      - run: uv run just check test
