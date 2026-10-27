@@ -1,5 +1,8 @@
 # Everything you'd do before committing.
-default: format check test
+default: sync format check test
+
+sync:
+    uv sync
 
 format:
     ruff format src tests

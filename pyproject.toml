@@ -1,6 +1,6 @@
 [project]
 name = "psych-ingestor"
-version = "1.0.0-pre.2"
+version = "1.0.0-pre.3"
 description = "An HTTP API for ingesting, routing, and storing data from online behavioral-research tasks"
 readme = "README.md"
 license = "MIT"

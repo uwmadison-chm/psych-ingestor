@@ -1,6 +1,6 @@
 {
   "name": "@uwmadison-chm/pig-client",
-  "version": "1.0.0-pre.2",
+  "version": "1.0.0-pre.3",
   "description": "Send a task's data to Psych Ingestor (Pig), durably, online or off.",
   "license": "MIT",
   "repository": {
