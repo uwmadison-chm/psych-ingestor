@@ -11,7 +11,7 @@ check:
     ty check src
 
 test:
-    pytest -q
+    pytest -q -n auto # one worker per core, with pytest-xdist
 
 # Run the service against ./local/pig.toml.
 serve:
