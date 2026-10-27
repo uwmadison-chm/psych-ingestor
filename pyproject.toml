@@ -2,6 +2,10 @@
 name = "psych-ingestor"
 version = "1.0.0-pre.2"
 description = "An HTTP API for ingesting, routing, and storing data from online behavioral-research tasks"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nate Vack", email = "njvack@wisc.edu" }]
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=44",
@@ -11,6 +15,11 @@ dependencies = [
     "pyrage>=1.2",
     "uvicorn>=0.32",
 ]
+
+[project.urls]
+Homepage = "https://github.com/uwmadison-chm/psych-ingestor"
+Documentation = "https://github.com/uwmadison-chm/psych-ingestor/tree/main/docs"
+Issues = "https://github.com/uwmadison-chm/psych-ingestor/issues"
 
 [project.scripts]
 pig = "psych_ingestor.cli:main"
@@ -24,6 +33,7 @@ build-backend = "uv_build"
 dev = [
     "httpx2>=2.9.1",
     "pytest>=8.3",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.16.0",
     "rust-just>=1.57.0",
     "ty>=0.0.63",

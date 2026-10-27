@@ -11,7 +11,7 @@ check:
     ty check src
 
 test:
-    pytest -q
+    pytest -q -n auto # one worker per core, with pytest-xdist
 
 # Run the service against ./local/pig.toml.
 serve:
@@ -33,9 +33,9 @@ version VERSION:
     cd client && npm version --no-git-tag-version --allow-same-version {{VERSION}}
     sed -i.bak 's/CLIENT_VERSION = ".*"/CLIENT_VERSION = "{{VERSION}}"/' client/src/version.ts && rm client/src/version.ts.bak
 
-# Tag the version in pyproject.toml and push the tag, which releases it (see
-# .github/workflows/client.yml). Only from a clean main that matches GitHub's, and only
-# when all three version numbers agree.
+# Tag the version in pyproject.toml and push the tag, which releases it: the server to
+# PyPI (see .github/workflows/server.yml), the client to npm (client.yml). Only from a
+# clean main that matches GitHub's, and only when all three version numbers agree.
 release:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -57,4 +57,4 @@ release:
     fi
     git tag "v$server"
     git push origin "v$server"
-    echo "Pushed v$server. GitHub Actions publishes it."
+    echo "Pushed v$server. GitHub Actions publishes it to PyPI and npm."
