@@ -1,13 +1,21 @@
 # The server: lint it, typecheck it, and run its tests, the same way `just check test`
 # does on your own machine.
 #
-# Every push to main and every pull request that touches the Python code runs it.
+# Every push to main and every pull request that touches the Python code runs it. Pushing
+# a tag like v0.3.0 (`just release` makes and pushes it) also publishes that version to
+# PyPI.
+#
+# Publishing uses PyPI's trusted publishing, so there's no PyPI token stored here. It has
+# to be set up once, on pypi.org: a trusted publisher for GitHub Actions, repository
+# uwmadison-chm/psych-ingestor, workflow server.yml. PyPI allows that before the project
+# exists (a "pending publisher"), so the first version can come from here too.
 
 name: server
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
     paths: ["src/**", "tests/**", "typings/**", "pyproject.toml", "uv.lock", ".python-version", ".github/workflows/server.yml"]
   pull_request:
     paths: ["src/**", "tests/**", "typings/**", "pyproject.toml", "uv.lock", ".python-version", ".github/workflows/server.yml"]
@@ -26,3 +34,26 @@ jobs:
 
       - run: uv sync --locked
       - run: uv run just check test
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # what trusted publishing signs in with
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: The tag matches pyproject.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "The tag is ${GITHUB_REF_NAME}, but pyproject.toml says ${version}."
+            exit 1
+          fi
+
+      - run: uv build
+      - run: uv publish --trusted-publishing always
