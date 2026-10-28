@@ -103,7 +103,7 @@ pre {
   </div>
 
   <h2>Report</h2>
-  <p class="muted">The same numbers as text, with the browser's own description of the device.</p>
+  <p class="muted">The same numbers as JSON, with the browser's own description of the device. Each run's report is one line, so reports from many devices can go together in one file, one per line.</p>
   <pre id="report">Run the benchmark to fill this in.</pre>
 </main>
 
@@ -143,22 +143,29 @@ function showVideo() {
   const rate = megabytesPerSecond(results.part8.size, results.part8.ms);
   for (const [id, mbit] of [["video2", 2.5], ["video5", 5]]) {
     const share = (100 * mbit / 8) / rate;
+    results[id] = { mbit_per_s: mbit, core_percent: share };
     fill(id, [share.toFixed(share < 10 ? 1 : 0) + "%"], share < 25 ? "ok" : share < 60 ? "warn" : "bad");
   }
 }
 
+// Sizes are in bytes and times in milliseconds, unrounded. Fields the browser doesn't
+// report are null.
 function writeReport() {
-  const lines = [
-    "Pig encryption benchmark",
-    "Device: " + navigator.userAgent,
-    "Cores reported: " + (navigator.hardwareConcurrency ?? "unknown") +
-      (navigator.deviceMemory ? ", memory: " + navigator.deviceMemory + " GB" : ""),
-  ];
-  for (const row of document.querySelectorAll("tbody tr")) {
-    const cells = [...row.querySelectorAll("td")].map((td) => td.textContent.trim());
-    lines.push(cells[0] + ": " + cells.slice(1).filter(Boolean).join(", "));
+  const report = {
+    benchmark: "pig-encryption",
+    finished_at: new Date().toISOString(),
+    user_agent: navigator.userAgent,
+    cores: navigator.hardwareConcurrency ?? null,
+    memory_gb: navigator.deviceMemory ?? null,
+    results: {},
+  };
+  for (const id of ["smallest", "typical", "large", "part1", "part8"]) {
+    const { size, ms } = results[id];
+    report.results[id] = { bytes: size, ms, mb_per_s: megabytesPerSecond(size, ms) };
   }
-  reportText = lines.join("\n");
+  report.results.video2 = results.video2;
+  report.results.video5 = results.video5;
+  reportText = JSON.stringify(report);
   $("report").textContent = reportText;
   $("copy").disabled = false;
 }
