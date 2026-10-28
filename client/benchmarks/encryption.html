@@ -139,22 +139,39 @@ function showResult(id, size, ms) {
   fill(id, [describeSize(size), describeMs(ms), megabytesPerSecond(size, ms).toFixed(1) + " MB/s"]);
 }
 
+// Both rates are in bytes per second: a megabit is a million bits, while the parts are
+// sized in units of 1024 bytes.
 function showVideo() {
-  const rate = megabytesPerSecond(results.part8.size, results.part8.ms);
+  const encryptedPerSecond = results.part8.size / (results.part8.ms / 1000);
   for (const [id, mbit] of [["video2", 2.5], ["video5", 5]]) {
-    const share = (100 * mbit / 8) / rate;
+    const recordedPerSecond = mbit * 1_000_000 / 8;
+    const share = 100 * recordedPerSecond / encryptedPerSecond;
     results[id] = { mbit_per_s: mbit, core_percent: share };
     fill(id, [share.toFixed(share < 10 ? 1 : 0) + "%"], share < 25 ? "ok" : share < 60 ? "warn" : "bad");
   }
 }
 
+// What Chromium browsers will say about the device beyond the user agent string. Other
+// browsers don't have navigator.userAgentData, and report null.
+async function describeDevice() {
+  if (!navigator.userAgentData) return null;
+  try {
+    return await navigator.userAgentData.getHighEntropyValues([
+      "architecture", "bitness", "formFactors", "fullVersionList", "model", "platformVersion",
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 // Sizes are in bytes and times in milliseconds, unrounded. Fields the browser doesn't
 // report are null.
-function writeReport() {
+async function writeReport() {
   const report = {
     benchmark: "pig-encryption",
     finished_at: new Date().toISOString(),
     user_agent: navigator.userAgent,
+    user_agent_data: await describeDevice(),
     cores: navigator.hardwareConcurrency ?? null,
     memory_gb: navigator.deviceMemory ?? null,
     results: {},
@@ -200,7 +217,7 @@ function run() {
     if (data.started) $("status").textContent = labels[data.started];
     else if (data.finished) showResult(data.finished, data.size, data.ms);
     else if (data.error) { finish("Failed: " + data.error); worker.terminate(); }
-    else if (data.done) { showVideo(); writeReport(); finish("Done."); worker.terminate(); }
+    else if (data.done) { worker.terminate(); showVideo(); writeReport().then(() => finish("Done.")); }
   };
   worker.postMessage("go");
 }
