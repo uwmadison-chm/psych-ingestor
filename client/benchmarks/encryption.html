@@ -151,13 +151,27 @@ function showVideo() {
   }
 }
 
+// What Chromium browsers will say about the device beyond the user agent string. Other
+// browsers don't have navigator.userAgentData, and report null.
+async function describeDevice() {
+  if (!navigator.userAgentData) return null;
+  try {
+    return await navigator.userAgentData.getHighEntropyValues([
+      "architecture", "bitness", "formFactors", "fullVersionList", "model", "platformVersion",
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 // Sizes are in bytes and times in milliseconds, unrounded. Fields the browser doesn't
 // report are null.
-function writeReport() {
+async function writeReport() {
   const report = {
     benchmark: "pig-encryption",
     finished_at: new Date().toISOString(),
     user_agent: navigator.userAgent,
+    user_agent_data: await describeDevice(),
     cores: navigator.hardwareConcurrency ?? null,
     memory_gb: navigator.deviceMemory ?? null,
     results: {},
@@ -203,7 +217,7 @@ function run() {
     if (data.started) $("status").textContent = labels[data.started];
     else if (data.finished) showResult(data.finished, data.size, data.ms);
     else if (data.error) { finish("Failed: " + data.error); worker.terminate(); }
-    else if (data.done) { showVideo(); writeReport(); finish("Done."); worker.terminate(); }
+    else if (data.done) { worker.terminate(); showVideo(); writeReport().then(() => finish("Done.")); }
   };
   worker.postMessage("go");
 }
