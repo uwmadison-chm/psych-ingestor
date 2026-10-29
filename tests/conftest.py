@@ -1,3 +1,7 @@
+import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 import pytest
@@ -47,3 +51,37 @@ def pig(config_path: Path) -> Pig:
 @pytest.fixture
 def client(config_path: Path) -> TestClient:
     return TestClient(create_app(config_path))
+
+
+@contextmanager
+def _locked_by_another_process(path: Path) -> Iterator[None]:
+    # A POSIX lock is held per process, so the other holder has to be another one. It
+    # takes the lock with plain `lockf` rather than Pig's helper, the way a job running
+    # some other version of Pig, or on another machine, would.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, sys; lock = open(sys.argv[1], 'a'); "
+                "fcntl.lockf(lock, fcntl.LOCK_EX); print('locked', flush=True); "
+                "sys.stdin.read()"
+            ),
+            str(path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline() == "locked\n"
+        yield
+    finally:
+        holder.communicate("")
+
+
+@pytest.fixture
+def locked_elsewhere() -> Callable[[Path], AbstractContextManager[None]]:
+    """`with locked_elsewhere(path):` holds a lock on `path` from another process."""
+    return _locked_by_another_process

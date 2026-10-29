@@ -3,8 +3,6 @@
 
 import json
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -235,30 +233,12 @@ def test_a_datastore_with_no_incoming_directory_is_a_problem(tmp_path: Path):
     assert "no incoming directory" in only_problem(admit("stroop", tmp_path))
 
 
-def test_two_admits_cant_work_on_one_datastore_at_once(pig: Pig, tmp_path: Path):
+def test_two_admits_cant_work_on_one_datastore_at_once(
+    pig: Pig, tmp_path: Path, locked_elsewhere
+):
     downloaded_run(pig, tmp_path)
-    # A POSIX lock is held per process, so the other admit has to be another one.
-    holder = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import fcntl, sys; lock = open(sys.argv[1], 'a'); "
-                "fcntl.lockf(lock, fcntl.LOCK_EX); print('locked', flush=True); "
-                "sys.stdin.read()"
-            ),
-            str(tmp_path / LOCK_FILE),
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline() == "locked\n"
+    with locked_elsewhere(tmp_path / LOCK_FILE):
         report = admit("stroop", tmp_path)
-    finally:
-        holder.communicate("")
 
     assert "another pigsty admit" in only_problem(report)
     assert len(admit("stroop", tmp_path).admitted) == 1

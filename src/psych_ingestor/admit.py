@@ -33,7 +33,6 @@ itself as runs are purged from the web server and drop out of the bucket.
 from __future__ import annotations
 
 import base64
-import fcntl
 import hashlib
 import json
 import os
@@ -45,6 +44,7 @@ from typing import Any, Literal
 
 from . import storage
 from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
+from .lock import LockHeld, hold_lock
 
 INCOMING_DIRECTORY = "incoming"
 RUNS_DIRECTORY = "runs"
@@ -147,44 +147,39 @@ def admit(
         return report
     runs.mkdir(parents=True, exist_ok=True)
 
-    with open(datastore / LOCK_FILE, "a") as lock:
-        # A POSIX lock, rather than flock, because that's the kind an SMB or NFS mount
-        # passes on to the server, where another machine's admit would see it.
-        try:
-            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            report.problems[str(datastore)] = (
-                "another pigsty admit is working on this task. Nothing was admitted. "
-                "Run this again once it's finished."
-            )
-            return report
-
-        admitted = set(_directories_in(runs))
-        new = []
-        for run_id in _directories_in(incoming):
-            if run_id in admitted:
-                report.already_admitted += 1
-            else:
-                new.append(run_id)
-
-        with ThreadPoolExecutor(WORKERS) as pool:
-            outcomes = pool.map(
-                lambda run_id: _admit_one(
-                    task_code,
-                    incoming / run_id,
-                    runs,
-                    private_keys or [],
-                    copy_ciphertext_to,
-                ),
-                new,
-            )
-            for run_id, outcome in zip(new, outcomes, strict=True):
-                if outcome.status == "admitted":
-                    report.admitted.append(run_id)
-                elif outcome.status == "arriving":
-                    report.arriving.append(run_id)
+    try:
+        with hold_lock(datastore / LOCK_FILE):
+            admitted = set(_directories_in(runs))
+            new = []
+            for run_id in _directories_in(incoming):
+                if run_id in admitted:
+                    report.already_admitted += 1
                 else:
-                    report.problems[str(incoming / run_id)] = outcome.why
+                    new.append(run_id)
+
+            with ThreadPoolExecutor(WORKERS) as pool:
+                outcomes = pool.map(
+                    lambda run_id: _admit_one(
+                        task_code,
+                        incoming / run_id,
+                        runs,
+                        private_keys or [],
+                        copy_ciphertext_to,
+                    ),
+                    new,
+                )
+                for run_id, outcome in zip(new, outcomes, strict=True):
+                    if outcome.status == "admitted":
+                        report.admitted.append(run_id)
+                    elif outcome.status == "arriving":
+                        report.arriving.append(run_id)
+                    else:
+                        report.problems[str(incoming / run_id)] = outcome.why
+    except LockHeld:
+        report.problems[str(datastore)] = (
+            "another pigsty admit is working on this task. Nothing was admitted. "
+            "Run this again once it's finished."
+        )
     return report
 
 

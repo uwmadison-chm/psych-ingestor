@@ -3,8 +3,6 @@
 
 import json
 import shutil
-import subprocess
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -429,32 +427,12 @@ def test_full_with_no_runs_left_removes_the_record(
 
 
 def test_two_organizes_cant_work_on_one_tree_at_once(
-    pig: Pig, datastore: Path, tree: Path
+    pig: Pig, datastore: Path, tree: Path, locked_elsewhere
 ):
     admitted_run(pig, datastore)
     tree.mkdir(parents=True)
-    # A POSIX lock is held per process, so the other organize has to be another one.
-    holder = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import fcntl, sys; lock = open(sys.argv[1], 'a'); "
-                "fcntl.lockf(lock, fcntl.LOCK_EX); print('locked', flush=True); "
-                "sys.stdin.read()"
-            ),
-            str(tree / LOCK_FILE),
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert holder.stdout is not None
-        assert holder.stdout.readline() == "locked\n"
+    with locked_elsewhere(tree / LOCK_FILE):
         report = organize("stroop", datastore, tree, PATTERN)
-    finally:
-        holder.communicate("")
 
     assert "another pigsty organize" in only_error(report)
     assert report.placed == []

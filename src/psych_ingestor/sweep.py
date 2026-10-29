@@ -8,13 +8,13 @@ second finds the first one's lock and stops without doing anything.
 
 from __future__ import annotations
 
-import fcntl
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import db, media, purge, runs, storage
 from .config import Config
+from .lock import LockHeld, hold_lock
 from .runs import Disposition
 
 
@@ -54,18 +54,13 @@ def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
     started by a timer and another started by `touch_after_finalizing` can easily meet.
     """
     report = SweepReport()
-    with open(lock_path(config), "a") as lock:
-        # A POSIX lock, like organize's and admit's. The operating system lets go of it
-        # when the process ends, however it ends, so a crashed sweep leaves nothing to
-        # clean up.
-        try:
-            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            report.busy = True
-            return report
-        expire_runs(config, connection, report)
-        finish_closed_runs(config, connection, report)
-        finish_purges(config, connection, report)
+    try:
+        with hold_lock(lock_path(config)):
+            expire_runs(config, connection, report)
+            finish_closed_runs(config, connection, report)
+            finish_purges(config, connection, report)
+    except LockHeld:
+        report.busy = True
     return report
 
 

@@ -25,7 +25,6 @@ the task gave it. They aren't checked against hashes: admit did that, and nothin
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import shutil
@@ -37,6 +36,7 @@ from typing import Any, BinaryIO, Literal
 from . import storage
 from .admit import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, RUNS_DIRECTORY
 from .config import SAFE_VALUE_EXPLANATION, is_safe_value
+from .lock import LockHeld, hold_lock
 from .sty import BUILT_IN_NAMES, PLACEHOLDER
 
 # What a run is copied into before it's renamed into place, so a tree never holds half
@@ -128,19 +128,16 @@ def organize(
     if dry_run:
         return _organize(task_code, datastore, root, pattern, dry_run, full)
     root.mkdir(parents=True, exist_ok=True)
-    with open(root / LOCK_FILE, "a") as lock:
-        # A POSIX lock, rather than flock, because that's the kind an SMB or NFS mount
-        # passes on to the server, where another machine's organize would see it.
-        try:
-            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            report = OrganizeReport()
-            report.errors[str(root)] = (
-                "another pigsty organize is working on this tree. Nothing was placed. "
-                "Run this again once it's finished."
-            )
-            return report
-        return _organize(task_code, datastore, root, pattern, dry_run, full)
+    try:
+        with hold_lock(root / LOCK_FILE):
+            return _organize(task_code, datastore, root, pattern, dry_run, full)
+    except LockHeld:
+        report = OrganizeReport()
+        report.errors[str(root)] = (
+            "another pigsty organize is working on this tree. Nothing was placed. "
+            "Run this again once it's finished."
+        )
+        return report
 
 
 def _organize(
