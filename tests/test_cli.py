@@ -4,6 +4,7 @@ import stat
 
 import pytest
 
+from psych_ingestor import db
 from psych_ingestor.cli import app as pig
 from psych_ingestor.cli import health_command
 from psych_ingestor.sty_cli import app as pigsty
@@ -64,18 +65,24 @@ def test_pig_check_lists_directories_that_arent_there(config_path, capsys):
     pig(["check", "--config", str(config_path)], result_action="return_value")
 
     out = capsys.readouterr().out
-    assert f"Not there yet:\n  {config_path.parent / 'data'}\n" in out
+    assert (
+        f"Not there yet:\n  {config_path.parent / 'data'}\n"
+        f"  {config_path.parent / 'pig.db'}\n"
+    ) in out
     assert not (config_path.parent / "data").exists()
+    assert not (config_path.parent / "pig.db").exists()
 
 
-def test_pig_check_fix_makes_the_data_directory(config_path, capsys):
+def test_pig_check_fix_makes_the_data_directory_and_the_database(config_path, capsys):
     pig(["check", "--config", str(config_path), "--fix"], result_action="return_value")
 
     out = capsys.readouterr().out
     assert f"Made {config_path.parent / 'data'}" in out
+    assert f"Made {config_path.parent / 'pig.db'}" in out
     assert "Not there yet" not in out
     assert (config_path.parent / "data").is_dir()
-    assert not (config_path.parent / "pig.db").exists()
+    connection = db.connect(config_path.parent / "pig.db")
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
 
 
 def test_pigsty_check_refuses_a_missing_private_keys_dir_and_says_how_to_fix_it(

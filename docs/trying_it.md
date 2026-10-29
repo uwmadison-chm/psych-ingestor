@@ -140,7 +140,7 @@ origins (every task currently allows any origin). See
 
 | Command | What it does |
 | --- | --- |
-| `pig check` | Validate the configuration and print what each task will do. `--fix` makes the data and database directories if they aren't there yet. |
+| `pig check` | Validate the configuration and print what each task will do. `--fix` makes the data directory and the database if they aren't there yet. |
 | `pig serve` | Run the web service. |
 | `pig sweep` | Finish closed runs; expire runs that have been open too long. |
 | `pig runs` | List runs. `--task` and `--status` narrow it. |
