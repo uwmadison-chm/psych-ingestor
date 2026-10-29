@@ -381,7 +381,7 @@ def load_config(path: Path) -> Config:
     for task in config.task.values():
         task.source = path.resolve()
     config.public_keys_file = _resolve_public_keys(
-        path, config.public_keys_file, config.task
+        path, base, config.public_keys_file, config.task
     )
     config.key_files = [config.public_keys_file] if config.public_keys_file else []
 
@@ -408,8 +408,11 @@ def load_config(path: Path) -> Config:
                     )
                 defined_in[code] = file
                 task.source = file
+            # Relative to where the file really is, so a study's file can be linked
+            # in from its repository, the way nginx's sites-enabled links to
+            # sites-available, and still find the keys file next to it.
             keys_file = _resolve_public_keys(
-                file, included.public_keys_file, included.task
+                file, file.resolve().parent, included.public_keys_file, included.task
             )
             if keys_file:
                 config.key_files.append(keys_file)
@@ -459,12 +462,16 @@ def _pigsty_hint(raw: dict[str, Any]) -> str:
 
 
 def _resolve_public_keys(
-    path: Path, public_keys_file: Path | None, tasks: dict[str, TaskDefinition]
+    path: Path,
+    base: Path,
+    public_keys_file: Path | None,
+    tasks: dict[str, TaskDefinition],
 ) -> Path | None:
     """Read the public keys file a file names, and give each of that file's tasks that
     encrypts its public key, and each that checks signatures its signing keys. A task
     only ever uses the keys named in its own file, so one study's task can't encrypt to
-    another study's key by mistake. Returns where the keys file is."""
+    another study's key by mistake. `public_keys_file` is relative to `base`. Returns
+    where the keys file is."""
     # Imported here, because keys.py uses this module's safe-value rule.
     from .keys import is_signing_public_key, read_public_keys
 
@@ -483,7 +490,7 @@ def _resolve_public_keys(
                 "point public_keys_file at it."
             )
         return None
-    public_keys_file = (path.parent.resolve() / public_keys_file).resolve()
+    public_keys_file = (base / public_keys_file).resolve()
     public_keys = read_public_keys(public_keys_file)
 
     def find(code: str, name: str, setting: str, signing: bool) -> str:

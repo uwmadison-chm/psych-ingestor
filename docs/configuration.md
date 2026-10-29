@@ -122,7 +122,7 @@ database = "/srv/pig/pig.db"
 include = ["studies"]
 ```
 
-Every `.toml` file directly inside an included directory is read, in order by name. Hidden files are skipped, and so are directories inside it, so what's live is what `ls` shows. Directories in `include` are relative to the main file, like everything else in it, and there can be several. A study that keeps its configuration in a repository can have its checkout's directory listed in `include` directly, so its tasks and its keys arrive with a `git pull`.
+Every `.toml` file directly inside an included directory is read, in order by name. Hidden files are skipped, and so are directories inside it, so what's live is what `ls` shows. Directories in `include` are relative to the main file, like everything else in it, and there can be several. A study that keeps its configuration in a repository can have its checkout's directory listed in `include` directly, so its tasks and its keys arrive with a `git pull`. Or, like nginx's `sites-enabled`, an include directory can hold links to study files kept elsewhere: enabling a study is `ln -s`, and disabling it is `rm`.
 
 An included file holds tasks, and a `public_keys_file` for them:
 
@@ -138,7 +138,7 @@ encrypt_to = "lucida/2026a"
 
 Nothing else: `data_root`, `database`, and `include` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
 
-**A task uses only the keys its own file names.** `public_keys_file` in an included file is relative to that file, and only that file's tasks can encrypt to its keys or check signatures with them. The main file's `public_keys_file` is for the main file's tasks. That's what lets each study run its own secure side: the study's `pigsty keys export` writes just that study's keys, the file is copied in next to the study's tasks, and a typo can't send one study's data to a key another study holds. Key names only have to be unique within a file.
+**A task uses only the keys its own file names.** Only an included file's tasks can encrypt to the keys in its `public_keys_file` or check signatures with them, and the main file's `public_keys_file` is for the main file's tasks. The path is relative to the included file or, when that's a link, to the file it links to, so a linked study file finds its keys next to it in its repository. That's what lets each study run its own secure side: the study's `pigsty keys export` writes just that study's keys, the file is copied in next to the study's tasks, and a typo can't send one study's data to a key another study holds. Key names only have to be unique within a file.
 
 **Files don't override each other.** A task code defined in two files is an error naming both, the same as defining it twice in one file would be. Task codes are unique across the whole deployment, so which file wins is never a question, and the order files are read in doesn't change what loads.
 

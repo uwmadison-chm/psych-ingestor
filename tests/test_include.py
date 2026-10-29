@@ -199,3 +199,25 @@ def test_a_new_copy_of_an_included_keys_file_takes_effect(main: Path, tmp_path: 
     touch(tmp_path / "studies" / "public_keys.txt")
     after = source.current().task["teddy"].public_key
     assert after and after != before
+
+
+def test_a_linked_study_file_finds_its_keys_where_it_really_is(
+    main: Path, tmp_path: Path
+):
+    """Like nginx's sites-enabled: the study's file and keys stay in its repository, and
+    a link in the include directory turns it on."""
+    studies = tmp_path / "studies"
+    repository = tmp_path / "lucida-repo"
+    repository.mkdir()
+    (studies / "lucida.toml").rename(repository / "lucida.toml")
+    (studies / "public_keys.txt").rename(repository / "public_keys.txt")
+    (studies / "lucida.toml").symlink_to(repository / "lucida.toml")
+
+    config = load_config(main)
+    assert config.task["teddy"].public_key
+    assert config.key_files == [(repository / "public_keys.txt").resolve()]
+
+    source = ConfigSource(main)
+    assert "teddy" in source.current().task
+    (studies / "lucida.toml").unlink()
+    assert "teddy" not in source.current().task
