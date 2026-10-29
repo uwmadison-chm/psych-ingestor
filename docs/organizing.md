@@ -102,7 +102,7 @@ pigsty keys new lucida/2026a
 pigsty keys export > public_keys.txt
 ```
 
-The first makes `lucida/2026a.key`, readable only by you. The second writes every key's public half to `public_keys.txt`. Copy that file to the web server, point `public_keys_file` in `pig.toml` at it, and set `encrypt_to = "lucida/2026a"` for each task that should use the key. See [configuration.md](configuration.md#encryption). A public key isn't secret; the private key never leaves this machine, except to be backed up.
+The first makes `lucida/2026a.key`, readable only by you. The second writes every key's public half to `public_keys.txt`. Copy that file to the web server, point `public_keys_file` at it, in `pig.toml` or in the study's own file of tasks (see [configuration.md](configuration.md#one-file-per-study)), and set `encrypt_to = "lucida/2026a"` for each task that should use the key. See [configuration.md](configuration.md#encryption). A public key isn't secret; the private key never leaves this machine, except to be backed up.
 
 Back the key file up somewhere an administrator can reach, like a shared 1Password vault. Anything encrypted to it that hasn't been admitted yet can't be read without it. [security.md](security.md#keeping-the-private-key) says more.
 

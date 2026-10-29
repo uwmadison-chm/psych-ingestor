@@ -22,9 +22,9 @@ so the two kinds can't be mistaken for each other.
   signing key is the same but for its prefix. A key's name is its path inside the
   directory without `.key`, so `lucida/2026a.key` is `lucida/2026a`. `pigsty keys new`
   makes one of either kind; `pigsty keys export` writes the public keys file, with both.
-- **Web side.** `public_keys_file` in `pig.toml` is that exported file, copied over
-  whole. A task's `encrypt_to` names one of its encryption keys, and its `signed_by`
-  names signing keys.
+- **Web side.** `public_keys_file` in `pig.toml`, or in a study's file in one of its
+  include directories, is that exported file, copied over whole. A task's `encrypt_to`
+  names one of its encryption keys, and its `signed_by` names signing keys.
 
 Nothing here reads either configuration file. The callers say which files to read.
 """

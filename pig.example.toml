@@ -7,6 +7,11 @@
 data_root = "./data"
 database = "./pig.db"
 
+# More task definitions, from every .toml file in these directories: a file or a few per
+# study, each with its own public_keys_file. See docs/configuration.md.
+#
+# include = ["./studies"]
+
 # Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
 # manifest describing it. A readable layout built from the parameters is `pigsty organize`'s
 # job, later and elsewhere, so nothing here says where data lands.

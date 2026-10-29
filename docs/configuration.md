@@ -9,7 +9,7 @@ Each task your lab runs gets an entry in your configuration. The entry answers a
 questions: how participants are identified, how long a run may stay open, and whether the
 task is accepting data.
 
-One Pig deployment serves all of your lab's tasks, so this file grows as you add tasks.
+One Pig deployment serves all of your lab's tasks, so this file grows as you add tasks. It can be split into a file per study; see [One file per study](#one-file-per-study).
 
 ## Where configuration lives
 
@@ -87,7 +87,8 @@ and a rename only works that way within a filesystem. See [deployment.md](deploy
 
 **The service re-reads this file whenever it changes.** Edit a definition and the next
 request uses it — no restart, no signal. It checks the file's modification time on each
-request and only re-reads when that changed, so the cost is one `stat` per request.
+request and only re-reads when that changed, so the cost is one `stat` per request, plus
+one per included file.
 
 Two things follow, and both are deliberate:
 
@@ -109,6 +110,39 @@ gets its runs finished.
 `pig check` validates the file and prints what each task is set up to do. Worth running
 after an edit, since the service won't complain to you directly — it just keeps serving the
 last good version and reports the problem on `/health`.
+
+## One file per study
+
+*Built, and provisional: see issue #36.* One web server can serve many studies, and a file holding every study's tasks gets awkward fast. `include` names directories of more task definitions, so each study can keep its own file, in its own repository if it likes:
+
+```toml
+# /etc/pig/pig.toml
+data_root = "/srv/pig/data"
+database = "/srv/pig/pig.db"
+include = ["studies"]
+```
+
+Every `.toml` file directly inside an included directory is read, in order by name. Hidden files are skipped, and so are directories inside it, so what's live is what `ls` shows. Directories in `include` are relative to the main file, like everything else in it, and there can be several. A study that keeps its configuration in a repository can have its checkout's directory listed in `include` directly, so its tasks and its keys arrive with a `git pull`.
+
+An included file holds tasks, and a `public_keys_file` for them:
+
+```toml
+# /etc/pig/studies/lucida.toml
+public_keys_file = "lucida_public_keys.txt"
+
+[task.teddy]
+path_parameters = ["id", "event"]
+run_key_parameters = ["id", "event"]
+encrypt_to = "lucida/2026a"
+```
+
+Nothing else: `data_root`, `database`, and `include` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
+
+**A task uses only the keys its own file names.** `public_keys_file` in an included file is relative to that file, and only that file's tasks can encrypt to its keys or check signatures with them. The main file's `public_keys_file` is for the main file's tasks. That's what lets each study run its own secure side: the study's `pigsty keys export` writes just that study's keys, the file is copied in next to the study's tasks, and a typo can't send one study's data to a key another study holds. Key names only have to be unique within a file.
+
+**Files don't override each other.** A task code defined in two files is an error naming both, the same as defining it twice in one file would be. Task codes are unique across the whole deployment, so which file wins is never a question, and the order files are read in doesn't change what loads.
+
+Splitting the configuration up doesn't change how the service reads it. Adding a file, removing one, editing one, or copying a new keys file over takes effect on the next request, and a file that won't load keeps the last good configuration serving, whichever file it is. Removing a study's file removes its tasks, which is the same as deleting their entries: runs in progress are still finished by the sweep.
 
 ## What a task entry covers
 
@@ -271,7 +305,7 @@ encrypt_to = "lucida/2026a"
 
 `public_keys_file` is a list of public keys by name. You don't write it: it's made on the secure side, where the matching private keys are, by `pigsty keys export`, and you copy it here whole. See [organizing.md](organizing.md#encrypted-runs). A task without `encrypt_to` doesn't encrypt.
 
-`pig check` refuses an `encrypt_to` that names a key the file doesn't have. Copying a new `public_keys_file` over the old one takes effect without a restart, the same as editing `pig.toml`.
+`pig check` refuses an `encrypt_to` that names a key the file doesn't have. Copying a new `public_keys_file` over the old one takes effect without a restart, the same as editing `pig.toml`. A study with its own file of tasks has its own `public_keys_file` too; see [One file per study](#one-file-per-study).
 
 Whether a run is encrypted is settled when it starts. Turning encryption on or off changes new runs only; a run already going stays as it began. An encrypted run refuses events and media parts that aren't encrypted. That mostly happens when a participant's browser saved this task's settings before encryption was turned on and is offline, and it's why the change is best made between waves of participants. See [api.md](api.md#encrypted-tasks).
 
@@ -417,5 +451,5 @@ paths differ only in case; see [organizing.md](organizing.md).
 
 *Built.* `pig check` reads the file, reports every problem it can describe, and prints each
 task: whether it's open, what parameters it expects, which of them make up the run key,
-how long its runs may stay open, whether it takes media, and what it signs. It exits non-zero on a bad file, so a deployment can
+how long its runs may stay open, whether it takes media, what it signs, and, when there are included files, which file it's in. It exits non-zero on a bad file, so a deployment can
 gate a restart on it.
