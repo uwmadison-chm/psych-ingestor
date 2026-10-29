@@ -140,7 +140,7 @@ origins (every task currently allows any origin). See
 
 | Command | What it does |
 | --- | --- |
-| `pig check` | Validate the configuration and print what each task will do. |
+| `pig check` | Validate the configuration and print what each task will do. `--fix` makes the data directory and the database if they aren't there yet. |
 | `pig serve` | Run the web service. |
 | `pig sweep` | Finish closed runs; expire runs that have been open too long. |
 | `pig runs` | List runs. `--task` and `--status` narrow it. |
@@ -152,7 +152,7 @@ The secure side's commands are a separate command, `pigsty`, which reads `pigsty
 
 | Command | What it does |
 | --- | --- |
-| `pigsty check` | Validate `pigsty.toml` and print what each task will do. |
+| `pigsty check` | Validate `pigsty.toml` and print what each task will do. `--fix` makes the directories it needs if they aren't there yet. |
 | `pigsty admit` | Move downloaded runs into place once they match their manifests. See [organizing.md](organizing.md). |
 | `pigsty organize` | Copy admitted runs into a readable tree. See [organizing.md](organizing.md). |
 

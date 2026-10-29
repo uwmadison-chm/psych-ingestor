@@ -33,14 +33,14 @@ organized = "/some/mount/mystudy/intermediate_data/pig/stroop/{session}/{partici
 
 A task with no entry is never admitted or organized. Two tasks can't share a `datastore_base`, and neither can share where they're organized; see [Patterns](#patterns).
 
-The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`.
+The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`, and lists the directories it names that aren't there yet. `pigsty check --fix` makes them: `private_keys_dir`, readable only by you, and each task's `incoming/`, `runs/`, and the directory its tree goes in. It never makes a key, and never changes the permissions of anything already there. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`.
 
 ## Trying it on a laptop
 
 `pigsty.example.toml` in the repository is a starting point. Copy it to `local/pigsty.toml`, where its paths are under `local/`. Then copy your local Pig's finished stroop runs to where the bucket's copy would put them, and admit and organize them:
 
 ```
-mkdir -p local/stroop-data/incoming
+pigsty check --fix
 cp -R local/data/done/stroop/* local/stroop-data/incoming/
 pigsty admit
 pigsty organize

@@ -109,7 +109,9 @@ gets its runs finished.
 
 `pig check` validates the file and prints what each task is set up to do. Worth running
 after an edit, since the service won't complain to you directly — it just keeps serving the
-last good version and reports the problem on `/health`.
+last good version and reports the problem on `/health`. It also lists `data_root`, the
+database, and the database's directory if they aren't there yet. The service makes them
+when it first needs them; `pig check --fix` makes them now.
 
 ## One file per study
 
