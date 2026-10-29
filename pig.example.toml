@@ -12,6 +12,11 @@ database = "./pig.db"
 #
 # include = ["./studies"]
 
+# A file Pig touches each time a run is finalized, so something watching it can start a
+# sweep without waiting for the timer. See docs/deployment.md.
+#
+# touch_after_finalizing = "/run/pig/sweep-due"
+
 # Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
 # manifest describing it. A readable layout built from the parameters is `pigsty organize`'s
 # job, later and elsewhere, so nothing here says where data lands.

@@ -1,6 +1,8 @@
 """Finishing closed runs and expiring runs that have been open too long."""
 
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -187,6 +189,42 @@ def test_sweeping_twice_is_safe(pig: Pig):
     second = sweep.sweep(pig.config, pig.connection)
     assert second.finished == []
     assert second.failed == {}
+
+
+def test_a_sweep_does_nothing_while_another_one_is_running(pig: Pig):
+    run_id = pig.start_run("stroop", BASELINE)["run_id"]
+    pig.store_events("stroop", run_id, {"1": event(1)})
+    pig.finalize_run("stroop", run_id)
+
+    # A POSIX lock is held per process, so the other sweep has to be another one.
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, sys; lock = open(sys.argv[1], 'a'); "
+                "fcntl.lockf(lock, fcntl.LOCK_EX); print('locked', flush=True); "
+                "sys.stdin.read()"
+            ),
+            str(sweep.lock_path(pig.config)),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline() == "locked\n"
+        report = sweep.sweep(pig.config, pig.connection)
+    finally:
+        holder.communicate("")
+
+    assert report.busy
+    assert report.finished == []
+    assert in_progress(pig, run_id).is_dir()
+
+    # Once the other one is done, the next sweep does the work.
+    assert sweep.sweep(pig.config, pig.connection).finished == [run_id]
 
 
 def test_sweeping_with_nothing_to_do_is_fine(pig: Pig):

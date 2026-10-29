@@ -7,6 +7,7 @@ turns a request into a call on them.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import uuid
 from collections.abc import AsyncIterator
@@ -26,6 +27,8 @@ from .media import MediaItem
 from .runs import Disposition, Phase, RequestProblem, Run
 
 MAX_EVENT_ID_LENGTH = 256
+
+log = logging.getLogger(__name__)
 
 # What a task gets for any run that isn't taking events, whichever way it closed. The
 # task's next move is the same in every case — start a new run — so one code is enough,
@@ -300,6 +303,7 @@ class Pig:
 
         if run.accepting_data:
             if runs.mark_closed(self.connection, run, Disposition.FINALIZED, db.now()):
+                self._signal_sweep()
                 return StoreResult(200, "finalizing", self._stored_ids(run_id))
             # The sweep expired it between our read and our update. Answer for the run
             # as it is now, not as we found it.
@@ -322,6 +326,21 @@ class Pig:
                 )
             },
         )
+
+    def _signal_sweep(self) -> None:
+        """Touch `touch_after_finalizing`, if it's set, so a sweep can start now.
+
+        This is a hint, not part of storing anything. The run is already `finalizing` and
+        its events are on disk, so a touch that fails is logged and the task still hears
+        that its run was finalized. The scheduled sweep finishes the run either way.
+        """
+        path = self.config.touch_after_finalizing
+        if path is None:
+            return
+        try:
+            storage.touch(path)
+        except OSError as error:
+            log.warning("Couldn't touch %s to start a sweep: %s", path, error)
 
     def describe_run(self, task_code: str, run_id: str) -> dict[str, Any]:
         run = self._run_for_task(task_code, run_id)

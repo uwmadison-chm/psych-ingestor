@@ -2,13 +2,16 @@
 
 Finishing closed runs, expiring runs that have been open too long, and finishing purges
 that were interrupted. Run from the CLI, by a systemd timer in production or by hand on a
-laptop. Safe to run twice at once, and safe to run when there's nothing to do.
+laptop. Safe to run when there's nothing to do. Two sweeps never work at once: the
+second finds the first one's lock and stops without doing anything.
 """
 
 from __future__ import annotations
 
+import fcntl
 import sqlite3
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import db, media, purge, runs, storage
 from .config import Config
@@ -28,6 +31,8 @@ class SweepReport:
     its own.
     """
 
+    # True when another sweep held the lock, so this one did nothing.
+    busy: bool = False
     finished: list[str] = field(default_factory=list)
     expired: list[str] = field(default_factory=list)
     purged: list[str] = field(default_factory=list)
@@ -35,11 +40,32 @@ class SweepReport:
     refused: dict[str, str] = field(default_factory=dict)
 
 
+def lock_path(config: Config) -> Path:
+    """The sweep's lock file, beside the database. Not under the data root: `done/` is
+    what gets copied offsite, and `in_progress/` is the service's."""
+    return config.database.with_name(config.database.name + ".sweep-lock")
+
+
 def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
+    """Do everything the sweep does, unless another sweep is already doing it.
+
+    Two sweeps finishing the same run at once would write the same scratch manifest and
+    could change a manifest already in `done/`, so the second one stops instead. A sweep
+    started by a timer and another started by `touch_after_finalizing` can easily meet.
+    """
     report = SweepReport()
-    expire_runs(config, connection, report)
-    finish_closed_runs(config, connection, report)
-    finish_purges(config, connection, report)
+    with open(lock_path(config), "a") as lock:
+        # A POSIX lock, like organize's and admit's. The operating system lets go of it
+        # when the process ends, however it ends, so a crashed sweep leaves nothing to
+        # clean up.
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            report.busy = True
+            return report
+        expire_runs(config, connection, report)
+        finish_closed_runs(config, connection, report)
+        finish_purges(config, connection, report)
     return report
 
 

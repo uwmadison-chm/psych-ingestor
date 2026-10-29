@@ -265,6 +265,18 @@ def create_empty_file(path: Path) -> None:
     fsync_directory(path.parent)
 
 
+def touch(path: Path) -> None:
+    """Open a file for writing and close it, then set its modification time to now.
+
+    Both, so that whatever is watching sees it: a systemd path unit or inotify sees the
+    close, and something that compares modification times sees the time. Nothing is
+    written, and nothing is fsynced, because nothing here is data.
+    """
+    with open(path, "a", encoding="utf-8"):
+        pass
+    os.utime(path)
+
+
 def read_lines(path: Path) -> list[dict[str, Any]]:
     """Read an events file. A line that isn't JSON is dropped: it's a line an interrupted
     append cut short, which is the one thing a crash can leave behind. `append_lines`
