@@ -14,18 +14,21 @@ version control like `pig.toml`.
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .config import (
     SAFE_VALUE_EXPLANATION,
     ConfigurationError,
+    TaskDefinition,
     check_run_as,
     is_safe_value,
+    os_error_reason,
 )
 
 DEFAULT_STY_CONFIG = "local/pigsty.toml"
@@ -194,20 +197,164 @@ class StyConfig(BaseModel):
         return self
 
 
+# ------------------------------------------------------- saying what's wrong
+#
+# Pydantic's own messages name Python types, quote dictionaries back at you, and link to
+# its website. These say which table a problem is in and what to write instead.
+
+# What each setting is for, and what one looks like.
+SETTINGS = {
+    "pig_url": ("the web server's address", '"https://pig.example.edu"'),
+    "private_keys_dir": ("the directory of private keys", '"./private_keys"'),
+    "run_as": ("the user every pigsty command has to run as", '"pigsty"'),
+    "datastore_base": ("the directory this task's runs are kept in", '"./stroop-data"'),
+    "organized": (
+        "where pigsty organize puts each run",
+        '"./organized/stroop/{session}/{participant_id}_{run_number}"',
+    ),
+    "signed_parameters": (
+        "the parameters pigsty sign signs",
+        '["participant_id", "session"]',
+    ),
+}
+
+# A task's settings in pig.toml, so a task copied from there can be called that. The
+# fields load_config fills in itself aren't settings anyone writes.
+PIG_TASK_SETTINGS = set(TaskDefinition.model_fields) - {
+    "code",
+    "source",
+    "public_key",
+    "signing_keys",
+}
+
+
+def describe_problems(error: ValidationError, raw: dict[str, Any]) -> list[str]:
+    """Everything wrong with pigsty.toml, one sentence each, top-level problems first
+    and then each task's."""
+    by_table: dict[str | None, list[str]] = {}
+    pig_settings: dict[str, list[str]] = {}
+    unknown_settings: dict[str | None, list[str]] = {}
+
+    for problem in error.errors():
+        location = [str(part) for part in problem["loc"]]
+        if problem["type"] == "value_error":
+            # From StyConfig._check, which already says it plainly.
+            by_table.setdefault(None, []).append(str(problem["ctx"]["error"]))
+            continue
+        if location == ["task"]:
+            by_table.setdefault(None, []).append(
+                "task should be a table for each task, like [task.stroop], with that "
+                "task's settings under it."
+            )
+            continue
+        if location[0] == "task" and len(location) == 2:
+            code = location[1]
+            by_table.setdefault(code, []).append(
+                f"task.{code} should be a table, like {_table(code)}, with the task's "
+                "settings under it."
+            )
+            continue
+
+        if location[0] == "task":
+            code, setting = location[1], location[2]
+            value = raw["task"][code].get(setting)
+            prefix = f"In {_table(code)}, "
+        else:
+            code, setting = None, location[0]
+            value = raw.get(setting)
+            prefix = ""
+
+        if problem["type"] == "extra_forbidden":
+            if code is not None and setting in PIG_TASK_SETTINGS:
+                pig_settings.setdefault(code, []).append(setting)
+            else:
+                unknown_settings.setdefault(code, []).append(setting)
+        elif problem["type"] == "missing":
+            purpose, example = SETTINGS[setting]
+            where = _table(code) if code is not None else "pigsty.toml"
+            by_table.setdefault(code, []).append(
+                f"{where} needs {setting}, {purpose}, like {setting} = {example}."
+            )
+        elif setting in SETTINGS:
+            _, example = SETTINGS[setting]
+            by_table.setdefault(code, []).append(
+                f"{prefix}{setting} is {_as_toml(value)}. It should look like "
+                f"{setting} = {example}."
+            )
+        else:
+            by_table.setdefault(code, []).append(f"{prefix}{setting}: {problem['msg']}")
+
+    for code, names in pig_settings.items():
+        by_table.setdefault(code, []).append(
+            f"In {_table(code)}, {_listed(names)} "
+            + ("is a pig.toml setting" if len(names) == 1 else "are pig.toml settings")
+            + ", for the web server. pigsty.toml doesn't use "
+            + ("it." if len(names) == 1 else "them.")
+        )
+    for code, names in unknown_settings.items():
+        where = f"In {_table(code)}, " if code is not None else ""
+        by_table.setdefault(code, []).append(
+            f"{where}{_listed(names)} "
+            + ("isn't a setting" if len(names) == 1 else "aren't settings")
+            + " pigsty knows."
+        )
+    for code in pig_settings.keys() | unknown_settings.keys():
+        if code is None:
+            by_table[code].append(
+                "pigsty.toml can have pig_url, private_keys_dir, run_as, and a "
+                "[task.…] table for each task. See pigsty.example.toml."
+            )
+        else:
+            by_table[code].append(
+                f"A task in pigsty.toml can have {_listed(list(StyTask.model_fields))}."
+                " See pigsty.example.toml."
+            )
+
+    problems = []
+    for code in sorted(by_table, key=lambda code: (code is not None, code or "")):
+        for line in by_table[code]:
+            if line not in problems:
+                problems.append(line)
+    return problems
+
+
+def _table(code: str) -> str:
+    """A task's table header, as it'd be written in pigsty.toml."""
+    if re.fullmatch(r"[A-Za-z0-9_-]+", code):
+        return f"[task.{code}]"
+    return f"[task.{json.dumps(code)}]"
+
+
+def _as_toml(value: Any) -> str:
+    """A value about the way it was written in pigsty.toml. JSON is close enough."""
+    return json.dumps(value, default=str)
+
+
+def _listed(names: list[str]) -> str:
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
 def load_sty_config(path: Path) -> StyConfig:
     """Read and check `pigsty.toml`, or raise ConfigurationError saying why."""
     raw = _read_toml(path)
     try:
         config = StyConfig.model_validate(raw)
-    except Exception as error:
-        # Pydantic refuses pig.toml anyway, but by listing keys it doesn't know.
+    except ValidationError as error:
+        problems = "\n".join(
+            f"  {problem}" for problem in describe_problems(error, raw)
+        )
+        # Refused anyway, but saying so is quicker than reading what's wrong with it.
         hint = ""
         if {"data_root", "database"} & raw.keys():
             hint = (
                 "\nThis looks like pig.toml, the web server's configuration, which pig "
                 "reads. pigsty reads the secure side's pigsty.toml."
             )
-        raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
+        raise ConfigurationError(f"{path} has a problem:\n{problems}{hint}") from error
 
     check_run_as(path, config.run_as)
 
@@ -247,7 +394,9 @@ def _read_toml(path: Path) -> dict[str, Any]:
     try:
         text = path.read_bytes()
     except OSError as error:
-        raise ConfigurationError(f"Can't read {path}: {error}") from error
+        raise ConfigurationError(
+            f"Can't read {path}: {os_error_reason(error, path)}."
+        ) from error
     try:
         return tomllib.loads(text.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:

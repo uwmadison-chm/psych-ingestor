@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import admit, db, runs, storage
+from .config import os_error_reason
 
 # Plain text with nothing to escape, so a purge hash can be checked by hand:
 #     { printf 'pig-purge:'; cat events.jsonl; } | sha256sum
@@ -190,8 +191,13 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
             continue
         try:
             hashes = purge_hashes(incoming / run_id)
-        except (PurgeProblem, OSError) as problem:
+        except PurgeProblem as problem:
             report.problems[str(incoming / run_id)] = f"couldn't hash it: {problem}"
+            continue
+        except OSError as error:
+            report.problems[str(incoming / run_id)] = (
+                f"couldn't hash it: {os_error_reason(error)}."
+            )
             continue
         path = f"/v1/task/{task_code}/run/{urllib.parse.quote(run_id, safe='')}/purge"
         try:
@@ -252,6 +258,8 @@ def http_sender(pig_url: str) -> Sender:
             return error.code, _json_or_empty(error.read())
         except (urllib.error.URLError, TimeoutError) as error:
             reason = getattr(error, "reason", error)
+            if isinstance(reason, OSError):
+                reason = os_error_reason(reason)
             raise Unreachable(f"couldn't reach Pig at {pig_url}: {reason}.") from error
 
     return send

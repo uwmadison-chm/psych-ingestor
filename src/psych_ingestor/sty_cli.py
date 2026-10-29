@@ -24,7 +24,7 @@ from . import admit as admit_module
 from . import db, keys, signing, sty
 from . import organize as organize_module
 from . import purge as purge_module
-from .config import ConfigurationError, user_name, wrong_user
+from .config import ConfigurationError, os_error_reason, user_name, wrong_user
 
 app = cyclopts.App(
     name="pigsty",
@@ -172,7 +172,7 @@ def _make_directory(directory: Path, mode: int) -> None:
     try:
         directory.mkdir(mode=mode, parents=True, exist_ok=True)
     except OSError as error:
-        _fail(f"Couldn't make {directory}: {error}")
+        _fail(f"Couldn't make {directory}: {os_error_reason(error, directory)}.")
     print(f"Made {directory}")
 
 
@@ -255,6 +255,8 @@ def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
         ) from error
     except (urllib.error.URLError, TimeoutError, ValueError) as error:
         reason = getattr(error, "reason", error)
+        if isinstance(reason, OSError):
+            reason = os_error_reason(reason)
         raise purge_module.Unreachable(
             f"couldn't reach Pig at {pig_url}: {reason}."
         ) from error
@@ -517,7 +519,9 @@ def _sign_csv(
         with open(path, newline="", encoding="utf-8-sig") as reading:
             rows = list(csv.DictReader(reading))
             columns = list(rows[0].keys()) if rows else []
-    except (OSError, UnicodeDecodeError, csv.Error) as error:
+    except OSError as error:
+        _fail(f"Can't read {path}: {os_error_reason(error, path)}.")
+    except (UnicodeDecodeError, csv.Error) as error:
         _fail(f"Can't read {path}: {error}")
     if not rows:
         _fail(f"{path} has no rows to sign.")
@@ -640,5 +644,20 @@ def export(*, config: StyConfigPath | None = None) -> None:
     print(keys.public_keys_text(every_key, loaded.private_keys_dir, db.now()), end="")
 
 
-def main() -> None:
-    app()
+def main(tokens: list[str] | None = None) -> None:
+    try:
+        app(tokens)
+    except OSError as error:
+        # Each command reports a run it couldn't handle and goes on to the next. This is
+        # for something that stops a whole command, like a directory it can't write to.
+        _fail(_stopped_by(error))
+
+
+def _stopped_by(error: OSError) -> str:
+    message = f"pigsty stopped: {os_error_reason(error)}."
+    if isinstance(error, PermissionError) and error.filename is not None:
+        message += (
+            f" It's running as {user_name(os.getuid())}, who needs to be able to read "
+            "and write there."
+        )
+    return message

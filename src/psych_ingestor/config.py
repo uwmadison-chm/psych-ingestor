@@ -51,6 +51,18 @@ class ConfigurationError(Exception):
     """The configuration file is wrong in a way we can describe."""
 
 
+def os_error_reason(error: OSError, path: Path | None = None) -> str:
+    """What went wrong, like "permission denied (/srv/stroop/runs)", without the
+    "[Errno 13]" Python adds. The path is left out if it's `path`, which the message
+    around it already names."""
+    if not error.strerror:
+        return str(error)
+    reason = error.strerror.lower()
+    if error.filename is not None and str(error.filename) != str(path):
+        reason += f" ({error.filename})"
+    return reason
+
+
 def is_safe_value(value: str) -> bool:
     return bool(SAFE_VALUE.match(value))
 

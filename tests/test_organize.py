@@ -577,6 +577,50 @@ def test_pigsty_says_when_its_handed_pig_toml(config_path: Path):
         load_sty_config(config_path)
 
 
+def test_pigsty_says_when_a_task_is_copied_from_pig_toml(tmp_path: Path):
+    # Issue #100.
+    path = tmp_path / "pigsty.toml"
+    path.write_text(
+        "[task.stroop]\n"
+        'path_parameters = ["participant_id", "session"]\n'
+        'run_key_parameters = ["participant_id"]\n'
+        "media = true\n"
+    )
+
+    with pytest.raises(ConfigurationError) as refused:
+        load_sty_config(path)
+
+    message = str(refused.value)
+    assert "[task.stroop] needs datastore_base" in message
+    assert "[task.stroop] needs organized" in message
+    assert (
+        "path_parameters, run_key_parameters, and media are pig.toml settings"
+        in message
+    )
+    assert "pydantic" not in message
+
+
+def test_pigsty_says_what_a_setting_should_look_like(tmp_path: Path):
+    path = tmp_path / "pigsty.toml"
+    path.write_text(STY + 'signed_parameters = "participant_id"\n')
+
+    with pytest.raises(ConfigurationError) as refused:
+        load_sty_config(path)
+
+    assert (
+        'In [task.stroop], signed_parameters is "participant_id". It should look '
+        'like signed_parameters = ["participant_id", "session"].'
+    ) in str(refused.value)
+
+
+def test_pigsty_says_when_it_doesnt_know_a_setting(tmp_path: Path):
+    path = tmp_path / "pigsty.toml"
+    path.write_text('pig_ulr = "https://pig.example.edu"\n' + STY)
+
+    with pytest.raises(ConfigurationError, match="pig_ulr isn't a setting pigsty"):
+        load_sty_config(path)
+
+
 # ------------------------------------------------------------------- the CLI
 
 

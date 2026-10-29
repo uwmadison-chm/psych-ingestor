@@ -23,6 +23,7 @@ from psych_ingestor.organize import organize
 from psych_ingestor.runs import RequestProblem
 from psych_ingestor.service import Pig
 from psych_ingestor.sty_cli import app as pigsty
+from psych_ingestor.sty_cli import main
 
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 MODULES = "questions:1,2,3|reels:03,22|sentences:05,52|videolog:1,2"
@@ -510,3 +511,23 @@ def test_migrating_gives_old_runs_their_path_parameters(tmp_path: Path):
     )
     assert json.loads(row[0]) == ["participant_id", "session"]
     assert json.loads(row[1]) == []
+
+
+def test_pigsty_says_why_it_stopped_rather_than_crashing(
+    tmp_path: Path, capsys, monkeypatch
+):
+    path = tmp_path / "pigsty.toml"
+    path.write_text('private_keys_dir = "./keys"\n')
+
+    def refused(*_: object) -> None:
+        raise PermissionError(13, "Permission denied", str(tmp_path / "keys"))
+
+    monkeypatch.setattr(keys, "new_private_key", refused)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["keys", "new", "lucida/2026a", "--config", str(path)])
+
+    assert stopped.value.code == 1
+    err = capsys.readouterr().err
+    assert f"pigsty stopped: permission denied ({tmp_path / 'keys'})." in err
+    assert "Traceback" not in err
