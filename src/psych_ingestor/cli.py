@@ -247,6 +247,10 @@ def sweep(*, config: ConfigPath | None = None) -> None:
     """
     loaded, connection = _open(config)
     report = sweep_module.sweep(loaded, connection)
+    if report.busy:
+        # Not a failure: the sweep that's running is doing this one's work.
+        print("Another pig sweep is running, so this one did nothing.")
+        return
     # Refusals and failures are counted separately because they ask for different
     # things: a failure is usually one problem behind several runs, and the next sweep
     # finishes them once it's fixed. A refusal is that run's data to account for, and

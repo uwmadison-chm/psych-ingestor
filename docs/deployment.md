@@ -21,13 +21,12 @@ never finishes any of it — runs pile up in `finalizing`, which is not data los
 finished either.
 
 How often to run it is a judgment call. Every few minutes is plenty; the only thing waiting
-on it is somebody who wants to read a finished dataset. It must be safe to run twice at
-once, or to run while nothing needs doing, because a timer will do both.
+on it is somebody who wants to read a finished dataset. It's safe to run while nothing needs doing. If one sweep starts while another is still running, the second says so and does nothing, so a slow sweep and a short timer can't step on each other. The lock it checks is a file next to the database, named after it: `pig.db.sweep-lock` for `pig.db`.
 
 Trying Pig out on a laptop, you can skip the timer and run the command by hand when you want
 to see a run reach `complete`.
 
-To have finalized runs finish sooner than the timer gets to them, set `touch_after_finalizing` (see [configuration.md](configuration.md#finishing-a-run)) and start the sweep when the file changes: a systemd `.path` unit with `PathChanged=` on that file, naming the same service the timer starts. systemd won't start that service again while it's already running, and the sweep is safe to run twice at once anyway. Keep the timer. On a Mac, launchd's `WatchPaths` does the same job.
+To have finalized runs finish sooner than the timer gets to them, set `touch_after_finalizing` (see [configuration.md](configuration.md#finishing-a-run)) and start the sweep when the file changes: a systemd `.path` unit with `PathChanged=` on that file, naming the same service the timer starts. systemd won't start that service again while it's already running, and a sweep started any other way while one is running does nothing. Keep the timer. On a Mac, launchd's `WatchPaths` does the same job.
 
 ## The data root is one filesystem
 
