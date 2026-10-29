@@ -1,5 +1,7 @@
 """The command lines' own shape, apart from what each command does."""
 
+import os
+import pwd
 import stat
 
 import pytest
@@ -152,3 +154,108 @@ def test_pigsty_check_fix_leaves_what_is_there_alone(tmp_path, capsys):
     assert "chmod 600" in capsys.readouterr().err
     assert stat.S_IMODE(keys_dir.stat().st_mode) == 0o755
     assert stat.S_IMODE(key.stat().st_mode) == 0o644
+
+
+# ------------------------------------------------------------------- run_as
+
+ME = pwd.getpwuid(os.geteuid()).pw_name
+
+
+def run_as(config_path, name=ME):
+    config_path.write_text(f'run_as = "{name}"\n' + config_path.read_text())
+
+
+@pytest.fixture
+def someone_else(monkeypatch):
+    """Pretend to be a user other than the one run_as names: the next ID up."""
+    real = os.geteuid()
+    monkeypatch.setattr(os, "geteuid", lambda: real + 1)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["check"], ["check", "--fix"], ["sweep"], ["runs"], ["migrate"], ["health"]],
+)
+def test_pig_refuses_every_command_as_the_wrong_user(
+    config_path, someone_else, capsys, command
+):
+    """Reading commands too: opening the database in WAL mode can make files."""
+    run_as(config_path)
+
+    with pytest.raises(SystemExit) as exited:
+        pig([*command, "--config", str(config_path)], result_action="return_value")
+
+    assert exited.value.code == 1
+    assert f"run pig as {ME}" in capsys.readouterr().err
+    assert not (config_path.parent / "data").exists()
+    assert not (config_path.parent / "pig.db").exists()
+
+
+def test_pig_serve_refuses_the_wrong_user_before_listening(
+    config_path, someone_else, capsys
+):
+    run_as(config_path)
+
+    with pytest.raises(SystemExit):
+        pig(["serve", "--config", str(config_path)], result_action="return_value")
+
+    assert f"sudo -u {ME} pig" in capsys.readouterr().err
+
+
+def test_pig_runs_as_the_user_run_as_names(config_path, capsys):
+    run_as(config_path)
+
+    pig(["check", "--config", str(config_path)], result_action="return_value")
+
+    assert f"  run by:    {ME}\n" in capsys.readouterr().out
+
+
+def test_pig_check_says_who_ran_it_without_run_as(config_path, capsys):
+    pig(["check", "--config", str(config_path)], result_action="return_value")
+
+    assert f"  run by:    {ME}\n" in capsys.readouterr().out
+
+
+def test_run_as_a_user_that_doesnt_exist_is_a_configuration_error(config_path, capsys):
+    run_as(config_path, "no-such-user-here")
+
+    with pytest.raises(SystemExit):
+        pig(["check", "--config", str(config_path)], result_action="return_value")
+
+    assert "no user by that name" in capsys.readouterr().err
+
+
+def test_run_as_belongs_in_the_main_file(config_path, capsys):
+    studies = config_path.parent / "studies"
+    studies.mkdir()
+    (studies / "study.toml").write_text(f'run_as = "{ME}"\n')
+    config_path.write_text('include = ["studies"]\n' + config_path.read_text())
+
+    with pytest.raises(SystemExit):
+        pig(["check", "--config", str(config_path)], result_action="return_value")
+
+    assert "run_as belong in the main pig.toml" in capsys.readouterr().err
+
+
+def test_pigsty_refuses_the_wrong_user_and_makes_nothing(
+    tmp_path, someone_else, capsys
+):
+    sty = tmp_path / "pigsty.toml"
+    sty.write_text(f'run_as = "{ME}"\n' + STY)
+
+    with pytest.raises(SystemExit) as exited:
+        pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+
+    assert exited.value.code == 1
+    assert f"sudo -u {ME} pigsty" in capsys.readouterr().err
+    assert not (tmp_path / "private_keys").exists()
+    assert not (tmp_path / "mount").exists()
+
+
+def test_pigsty_check_says_who_ran_it(tmp_path, capsys):
+    sty = tmp_path / "pigsty.toml"
+    sty.write_text(f'run_as = "{ME}"\n' + STY)
+
+    pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+
+    assert f"Run by {ME}.\n" in capsys.readouterr().out

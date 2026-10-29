@@ -6,6 +6,8 @@ and the database never holds a second opinion about a task definition.
 
 from __future__ import annotations
 
+import os
+import pwd
 import re
 import string
 import threading
@@ -284,6 +286,9 @@ class Config(BaseModel):
     # a systemd path unit, say — can start a sweep without waiting for the timer. Only a
     # hint: the timer still runs, and a touch that fails doesn't fail the finalize.
     touch_after_finalizing: Path | None = None
+    # The user every pig command has to run as, so nothing it makes is owned by someone
+    # the service can't write as. Unset means anyone. See issue #95.
+    run_as: str | None = None
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
     # Filled in by load_config: every public keys file it read, from this file and the
@@ -377,6 +382,8 @@ def load_config(path: Path) -> Config:
             f"{path} has a problem:\n{error}{_pigsty_hint(raw)}"
         ) from error
 
+    check_run_as(path, config.run_as)
+
     # Paths in the file are relative to the file, so a checkout can move without editing.
     base = path.parent.resolve()
     config.data_root = (base / config.data_root).resolve()
@@ -431,11 +438,18 @@ def _load_task_file(path: Path) -> TaskFile:
         included = TaskFile.model_validate(raw)
     except Exception as error:
         hint = _pigsty_hint(raw)
-        if {"data_root", "database", "include", "touch_after_finalizing"} & raw.keys():
+        main_only = {
+            "data_root",
+            "database",
+            "include",
+            "touch_after_finalizing",
+            "run_as",
+        }
+        if main_only & raw.keys():
             hint += (
                 "\nIt's in an include directory, so it can only hold tasks and a "
-                "public_keys_file. data_root, database, include, and "
-                "touch_after_finalizing belong in the main pig.toml."
+                "public_keys_file. data_root, database, include, "
+                "touch_after_finalizing, and run_as belong in the main pig.toml."
             )
         raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
 
@@ -448,6 +462,45 @@ def _load_task_file(path: Path) -> TaskFile:
         path, path.resolve().parent, included.public_keys_file, included.task
     )
     return included
+
+
+def check_run_as(path: Path, run_as: str | None) -> None:
+    """Raise ConfigurationError if run_as names a user this machine doesn't have."""
+    if run_as is None:
+        return
+    try:
+        pwd.getpwnam(run_as)
+    except KeyError:
+        raise ConfigurationError(
+            f"{path} has a problem: run_as is {run_as!r}, and there's no user by that "
+            "name on this machine."
+        ) from None
+
+
+def user_name(uid: int) -> str:
+    """The name of the user with this ID, or the ID itself if it has no name."""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"user {uid}"
+
+
+def wrong_user(path: Path, run_as: str | None, command: str) -> str | None:
+    """Why this process isn't allowed to run, or None if it is.
+
+    Compared by user ID, not by name, because two names can share an ID. The effective
+    ID, because that's who owns what the command makes.
+    """
+    if run_as is None:
+        return None
+    if os.geteuid() == pwd.getpwnam(run_as).pw_uid:
+        return None
+    running = user_name(os.geteuid())
+    return (
+        f"{path} says to run {command} as {run_as}, and this is {running}. Anything "
+        f"it made would belong to {running}, and {run_as} might not be able to use it. "
+        f"Run it as {run_as}: sudo -u {run_as} {command} ..."
+    )
 
 
 def _read_toml(path: Path) -> dict[str, Any]:

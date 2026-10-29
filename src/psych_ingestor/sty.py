@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .config import (
     SAFE_VALUE_EXPLANATION,
     ConfigurationError,
+    check_run_as,
     is_safe_value,
 )
 
@@ -156,6 +157,9 @@ class StyConfig(BaseModel):
     # The private keys encrypted runs are decrypted with, one `.key` file each. See
     # `keys.py`. Not needed until a task encrypts.
     private_keys_dir: Path | None = None
+    # The user every pigsty command has to run as, so nothing it makes is owned by
+    # someone else. Unset means anyone. See issue #95.
+    run_as: str | None = None
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -204,6 +208,8 @@ def load_sty_config(path: Path) -> StyConfig:
                 "reads. pigsty reads the secure side's pigsty.toml."
             )
         raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
+
+    check_run_as(path, config.run_as)
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()

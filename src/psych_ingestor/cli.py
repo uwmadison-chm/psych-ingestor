@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import sqlite3
 import sys
 from pathlib import Path
@@ -27,6 +26,8 @@ from .config import (
     describe_duration,
     describe_size,
     load_config,
+    user_name,
+    wrong_user,
 )
 from .runs import API_STATUSES, Phase
 
@@ -66,10 +67,15 @@ def _load(path: Path | None) -> Config:
             )
         raise SystemExit(1)
     try:
-        return load_config(chosen)
+        loaded = load_config(chosen)
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
+    refusal = wrong_user(chosen, loaded.run_as, "pig")
+    if refusal:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
+    return loaded
 
 
 def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
@@ -128,7 +134,8 @@ def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     # Checked as whoever is running this, because that's the only answer the operating
     # system gives without guessing. The user is named so the answer isn't mistaken for
     # the service's.
-    user = pwd.getpwuid(os.getuid()).pw_name
+    user = user_name(os.getuid())
+    print(f"  run by:    {user}")
     unwritable = False
     if signal is not None:
         print(f"  touches:   {signal}, after each finalize")

@@ -17,6 +17,11 @@ database = "./pig.db"
 #
 # touch_after_finalizing = "/run/pig/sweep-due"
 
+# The user every pig command has to run as, so nothing it makes belongs to someone
+# else. Unset, anyone can run it. See docs/configuration.md.
+#
+# run_as = "pig"
+
 # Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
 # manifest describing it. A readable layout built from the parameters is `pigsty organize`'s
 # job, later and elsewhere, so nothing here says where data lands.
