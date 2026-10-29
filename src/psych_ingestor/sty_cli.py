@@ -39,8 +39,19 @@ StyConfigPath = Annotated[
     ),
 ]
 
+IgnorePerms = Annotated[
+    bool,
+    cyclopts.Parameter(
+        name="--ignore-perms",
+        negative="",
+        help="Read private key files even if their permissions say other people can. "
+        "For a filesystem that reports permissions it doesn't enforce, like some "
+        "network shares.",
+    ),
+]
 
-def _load(path: Path | None) -> sty.StyConfig:
+
+def _load(path: Path | None, ignore_perms: bool) -> sty.StyConfig:
     chosen = path or Path(os.environ.get("PIGSTY_CONFIG", sty.DEFAULT_STY_CONFIG))
     if not chosen.exists():
         print(f"There's no configuration file at {chosen}.", file=sys.stderr)
@@ -61,6 +72,12 @@ def _load(path: Path | None) -> sty.StyConfig:
     if refusal:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
+    if ignore_perms:
+        print(
+            "Warning: --ignore-perms, so private key files are read whoever the "
+            "filesystem says can read them. Make sure only you can.",
+            file=sys.stderr,
+        )
     return loaded
 
 
@@ -68,29 +85,40 @@ def _load(path: Path | None) -> sty.StyConfig:
 CHECK_TIMEOUT_SECONDS = 10
 
 
-def _private_keys(loaded: sty.StyConfig) -> list[keys.PrivateKey]:
+def _private_keys(loaded: sty.StyConfig, ignore_perms: bool) -> list[keys.PrivateKey]:
     """Every private key for decrypting in private_keys_dir, or none if there isn't
     one. Exits saying what's wrong with a key that can't be used."""
-    return [key for key in _every_key(loaded) if isinstance(key, keys.PrivateKey)]
+    every_key = _every_key(loaded, ignore_perms)
+    return [key for key in every_key if isinstance(key, keys.PrivateKey)]
 
 
-def _signing_keys(loaded: sty.StyConfig) -> list[keys.SigningKey]:
+def _signing_keys(loaded: sty.StyConfig, ignore_perms: bool) -> list[keys.SigningKey]:
     """Every signing key in private_keys_dir, or none if there isn't one."""
-    return [key for key in _every_key(loaded) if isinstance(key, keys.SigningKey)]
+    every_key = _every_key(loaded, ignore_perms)
+    return [key for key in every_key if isinstance(key, keys.SigningKey)]
 
 
-def _every_key(loaded: sty.StyConfig) -> list[keys.PrivateKey | keys.SigningKey]:
+def _every_key(
+    loaded: sty.StyConfig, ignore_perms: bool
+) -> list[keys.PrivateKey | keys.SigningKey]:
     if loaded.private_keys_dir is None:
         return []
     try:
-        return keys.read_all_keys(loaded.private_keys_dir)
+        return keys.read_all_keys(
+            loaded.private_keys_dir, check_permissions=not ignore_perms
+        )
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
 
 
 @app.command
-def check(*, config: StyConfigPath | None = None, fix: bool = False) -> None:
+def check(
+    *,
+    config: StyConfigPath | None = None,
+    fix: bool = False,
+    ignore_perms: IgnorePerms = False,
+) -> None:
     """Check pigsty.toml, and say what each task is set up to do.
 
     Also checks every private key in private_keys_dir. With pig_url set, asks the web
@@ -104,7 +132,7 @@ def check(*, config: StyConfigPath | None = None, fix: bool = False) -> None:
     directories and the directory its tree goes in. It never makes a key, and never
     changes anything that's already there.
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     missing = _missing_directories(loaded)
     if fix:
         for directory, mode in missing:
@@ -117,8 +145,8 @@ def check(*, config: StyConfigPath | None = None, fix: bool = False) -> None:
             f"private_keys_dir is {loaded.private_keys_dir}, and there's no directory "
             "there. pigsty check --fix makes it, readable only by you."
         )
-    private_keys = _private_keys(loaded)
-    signing_keys = _signing_keys(loaded)
+    private_keys = _private_keys(loaded, ignore_perms)
+    signing_keys = _signing_keys(loaded, ignore_perms)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
     print(f"Run by {user_name(os.getuid())}.")
     if loaded.pig_url:
@@ -262,7 +290,10 @@ def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
 
 @app.command
 def admit(
-    *, config: StyConfigPath | None = None, copy_ciphertext_to: Path | None = None
+    *,
+    config: StyConfigPath | None = None,
+    copy_ciphertext_to: Path | None = None,
+    ignore_perms: IgnorePerms = False,
 ) -> None:
     """Check downloaded runs against their manifests, and move the ones that are whole
     into place.
@@ -280,8 +311,8 @@ def admit(
         Also keep each encrypted run as it arrived, with its manifest, in
         {this}/{task_code}/{run_id}/. It's the only copy the manifest's hashes describe.
     """
-    loaded = _load(config)
-    private_keys = _private_keys(loaded)
+    loaded = _load(config, ignore_perms)
+    private_keys = _private_keys(loaded, ignore_perms)
     problems = False
     for code, task in sorted(loaded.task.items()):
         report = admit_module.admit(
@@ -312,6 +343,7 @@ def organize(
     config: StyConfigPath | None = None,
     dry_run: bool = False,
     full: bool = False,
+    ignore_perms: IgnorePerms = False,
 ) -> None:
     """Copy each task's admitted runs into a readable tree, named for their parameters.
 
@@ -324,7 +356,7 @@ def organize(
     --full, checks every run against the tree rather than trusting the record, and
     writes the record again.
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     problems = False
     verb = "would place" if dry_run else "placed"
     for code, task in sorted(loaded.task.items()):
@@ -350,7 +382,9 @@ def organize(
 
 
 @app.command
-def purge(*, config: StyConfigPath | None = None) -> None:
+def purge(
+    *, config: StyConfigPath | None = None, ignore_perms: IgnorePerms = False
+) -> None:
     """Ask the web server to delete each run that's been admitted here.
 
     For each task in pigsty.toml, looks at the runs that are in both its datastore's
@@ -360,7 +394,7 @@ def purge(*, config: StyConfigPath | None = None) -> None:
     exits with an error. Once Pig has deleted a run, the copies to and from the bucket
     take it out of incoming/.
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     if not loaded.pig_url:
         print(
             "pigsty.toml has no pig_url, so there's nowhere to purge runs from. Add the "
@@ -395,6 +429,7 @@ def sign(
     ),
     url: str | None = None,
     config: StyConfigPath | None = None,
+    ignore_perms: IgnorePerms = False,
 ) -> None:
     """Sign a link's parameters, so a task that checks signatures will start a run
     from it.
@@ -432,9 +467,9 @@ def sign(
         Print a whole link instead: this address, with the parameters and the
         signature added. Not used with --csv.
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     signed_parameters = _signed_parameters(loaded, task)
-    signing_key = _signing_key(loaded, key)
+    signing_key = _signing_key(loaded, key, ignore_perms)
     if csv_file is not None:
         if values or url:
             _fail("With --csv, the values come from the file. Leave out the others.")
@@ -477,8 +512,10 @@ def _signed_parameters(loaded: sty.StyConfig, code: str) -> list[str]:
     return task.signed_parameters
 
 
-def _signing_key(loaded: sty.StyConfig, name: str) -> keys.SigningKey:
-    signing_keys = _signing_keys(loaded)
+def _signing_key(
+    loaded: sty.StyConfig, name: str, ignore_perms: bool
+) -> keys.SigningKey:
+    signing_keys = _signing_keys(loaded, ignore_perms)
     for signing_key in signing_keys:
         if signing_key.name == name:
             return signing_key
@@ -567,7 +604,11 @@ app.command(keys_app)
 
 @keys_app.command
 def new(
-    name: str, *, signing: bool = False, config: StyConfigPath | None = None
+    name: str,
+    *,
+    signing: bool = False,
+    config: StyConfigPath | None = None,
+    ignore_perms: IgnorePerms = False,
 ) -> None:
     """Make a new private key in private_keys_dir.
 
@@ -589,7 +630,7 @@ def new(
         Make a key for signing links, for pigsty sign, rather than one for
         decrypting.
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     if loaded.private_keys_dir is None:
         print(
             "pigsty.toml has no private_keys_dir to put the key in. Add one, like "
@@ -616,7 +657,9 @@ def new(
 
 
 @keys_app.command
-def export(*, config: StyConfigPath | None = None) -> None:
+def export(
+    *, config: StyConfigPath | None = None, ignore_perms: IgnorePerms = False
+) -> None:
     """Print the public keys file for the web server.
 
     One line per private key in private_keys_dir: its name and its public key. Save it,
@@ -625,7 +668,7 @@ def export(*, config: StyConfigPath | None = None) -> None:
 
         pigsty keys export > public_keys.txt
     """
-    loaded = _load(config)
+    loaded = _load(config, ignore_perms)
     if loaded.private_keys_dir is None:
         print(
             "pigsty.toml has no private_keys_dir, so there are no keys to export.",
@@ -633,7 +676,9 @@ def export(*, config: StyConfigPath | None = None) -> None:
         )
         raise SystemExit(1)
     try:
-        every_key = keys.read_all_keys(loaded.private_keys_dir)
+        every_key = keys.read_all_keys(
+            loaded.private_keys_dir, check_permissions=not ignore_perms
+        )
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error

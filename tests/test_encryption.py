@@ -228,6 +228,38 @@ def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
         keys.read_private_keys(private_key.path.parent.parent)
 
 
+def test_ignore_perms_reads_a_key_others_can_read(tmp_path: Path, capsys):
+    path = tmp_path / "pigsty.toml"
+    path.write_text('private_keys_dir = "./keys"\n')
+    made = keys.new_private_key(tmp_path / "keys", "lucida/2026a", NOW)
+    made.path.chmod(0o644)
+
+    with pytest.raises(SystemExit):
+        pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
+    assert "chmod 600" in capsys.readouterr().err
+
+    pigsty(
+        ["keys", "export", "--config", str(path), "--ignore-perms"],
+        result_action="return_value",
+    )
+    output = capsys.readouterr()
+    assert "lucida/2026a" in output.out
+    assert "--ignore-perms" in output.err
+
+
+def test_every_pigsty_command_takes_ignore_perms(capsys):
+    from psych_ingestor.sty_cli import keys_app
+
+    commands = [
+        [name] for name in pigsty if not name.startswith("-") and name != "keys"
+    ]
+    commands += [["keys", name] for name in keys_app if not name.startswith("-")]
+    assert len(commands) == 7
+    for command in commands:
+        pigsty([*command, "--help"], result_action="return_value")
+        assert "--ignore-perms" in capsys.readouterr().out, command
+
+
 def test_export_lists_every_key_by_name(private_keys_dir: Path):
     keys.new_private_key(private_keys_dir, "other", NOW)
     exported = keys.public_keys_text(

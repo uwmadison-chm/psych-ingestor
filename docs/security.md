@@ -131,3 +131,5 @@ Once a year, decrypt a real run with the backed-up copy on a machine that isn't 
 
 A key is never replaced and needn't ever be deleted. To change keys, make a new one and point tasks at it. Old ones stay in `private_keys_dir`, so a run encrypted with an old one, from a browser that saved its settings a while ago, still decrypts.
 
+`pigsty` refuses a key file anyone but its owner can read. `--ignore-perms` turns that check off, for a filesystem whose permissions don't mean what they say; then the filesystem's own access controls are what keep the keys private. See [organizing.md](organizing.md#encrypted-runs).
+
