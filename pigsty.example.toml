@@ -21,6 +21,13 @@ pig_url = "http://127.0.0.1:8000"
 #
 # run_as = "pigsty"
 
+# pigsty refuses a private key file anyone but its owner can read. On a filesystem that
+# reports permissions it doesn't enforce, like some network shares, every file looks
+# that way; set this to read them anyway. Keeping the keys private is then up to the
+# filesystem's own access controls. See docs/organizing.md.
+#
+# ignore_permissions = true
+
 [task.stroop]
 # Where this task's runs are kept. Runs copied from the bucket arrive in incoming/, and
 # pigsty admit puts them in runs/ once they check out.

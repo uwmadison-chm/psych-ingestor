@@ -113,7 +113,7 @@ The first makes `lucida/2026a.key`, readable only by you. The second writes ever
 
 Back the key file up somewhere an administrator can reach, like a shared 1Password vault. Anything encrypted to it that hasn't been admitted yet can't be read without it. [security.md](security.md#keeping-the-private-key) says more.
 
-`pigsty check` refuses a key file anyone but its owner can read, and so does every command that reads keys. Some filesystems, like some network shares, report permissions they don't enforce, so every file looks readable by everyone. There, give any `pigsty` command `--ignore-perms` and it reads the key files anyway, with a warning. It skips only that check: symbolic links, `run_as`, and everything `admit` and `organize` check are checked as usual. Keeping the keys private is then up to the share's own access controls.
+`pigsty check` refuses a key file anyone but its owner can read, and so does every command that reads keys. Some filesystems, like some network shares, report permissions they don't enforce, so every file looks readable by everyone. There, set `ignore_permissions = true` in `pigsty.toml`, or give any `pigsty` command `--ignore-permissions`, and it reads the key files anyway, with a warning. It skips only that check: symbolic links, `run_as`, and everything `admit` and `organize` check are checked as usual. Keeping the keys private is then up to the share's own access controls.
 
 With `pig_url` set, `pigsty check` also asks the web server which public key each task encrypts to, and warns if no private key here matches. A task encrypting to a key nobody has would collect data no one can ever read, so run `pigsty check` after changing keys on either side.
 

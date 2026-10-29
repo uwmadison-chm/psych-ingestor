@@ -228,7 +228,7 @@ def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
         keys.read_private_keys(private_key.path.parent.parent)
 
 
-def test_ignore_perms_reads_a_key_others_can_read(tmp_path: Path, capsys):
+def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
     path.write_text('private_keys_dir = "./keys"\n')
     made = keys.new_private_key(tmp_path / "keys", "lucida/2026a", NOW)
@@ -239,15 +239,21 @@ def test_ignore_perms_reads_a_key_others_can_read(tmp_path: Path, capsys):
     assert "chmod 600" in capsys.readouterr().err
 
     pigsty(
-        ["keys", "export", "--config", str(path), "--ignore-perms"],
+        ["keys", "export", "--config", str(path), "--ignore-permissions"],
         result_action="return_value",
     )
     output = capsys.readouterr()
     assert "lucida/2026a" in output.out
-    assert "--ignore-perms" in output.err
+    assert "ignoring permissions" in output.err
+
+    path.write_text('private_keys_dir = "./keys"\nignore_permissions = true\n')
+    pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
+    output = capsys.readouterr()
+    assert "lucida/2026a" in output.out
+    assert "ignoring permissions" in output.err
 
 
-def test_every_pigsty_command_takes_ignore_perms(capsys):
+def test_every_pigsty_command_takes_ignore_permissions(capsys):
     from psych_ingestor.sty_cli import keys_app
 
     commands = [
@@ -257,7 +263,7 @@ def test_every_pigsty_command_takes_ignore_perms(capsys):
     assert len(commands) == 7
     for command in commands:
         pigsty([*command, "--help"], result_action="return_value")
-        assert "--ignore-perms" in capsys.readouterr().out, command
+        assert "--ignore-permissions" in capsys.readouterr().out, command
 
 
 def test_export_lists_every_key_by_name(private_keys_dir: Path):
