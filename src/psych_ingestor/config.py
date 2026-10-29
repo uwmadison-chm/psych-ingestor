@@ -158,9 +158,10 @@ class TaskDefinition(BaseModel):
     signed_parameters: list[str] = Field(default_factory=list)
     signed_by: list[str] = Field(default_factory=list)
 
-    # Filled in by load_config, since a task doesn't know its own code, or what its key
-    # names stand for.
+    # Filled in by load_config, since a task doesn't know its own code, which file it's
+    # in, or what its key names stand for.
     code: str = ""
+    source: Path | None = None
     public_key: str | None = None
     signing_keys: dict[str, str] = Field(default_factory=dict)
 
@@ -275,7 +276,15 @@ class Config(BaseModel):
     # export` writes them on the secure side. Only needed if a task sets `encrypt_to` or
     # `signed_by`.
     public_keys_file: Path | None = None
+    # Directories of more task definitions, one file or a few per study, so each study's
+    # tasks can live in that study's own repository. See docs/configuration.md and
+    # issue #36.
+    include: list[Path] = Field(default_factory=list)
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
+
+    # Filled in by load_config: every public keys file it read, from this file and the
+    # included ones, so the service notices a new copy of any of them.
+    key_files: list[Path] = Field(default_factory=list)
 
     # Two trees under the data root, and a run directory moves from one to the other
     # exactly once, by a rename. A purged run makes one more rename, out of `done/` and
@@ -309,87 +318,187 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:
-        for code, task in self.task.items():
-            if code != code.lower():
-                raise ValueError(
-                    f"task code {code!r} has capital letters; task codes are lowercase"
-                )
-            if not is_safe_value(code):
-                raise ValueError(
-                    f"task code {code!r} isn't usable as a directory name: "
-                    f"{SAFE_VALUE_EXPLANATION}"
-                )
-            task.code = code
+        _check_task_codes(self.task)
         return self
 
 
+class TaskFile(BaseModel):
+    """One file in an `include` directory: task definitions, and the public keys file
+    those tasks use. Everything else is the main file's to say."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    public_keys_file: Path | None = None
+    task: dict[str, TaskDefinition] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_task_codes(self) -> TaskFile:
+        _check_task_codes(self.task)
+        return self
+
+
+def _check_task_codes(tasks: dict[str, TaskDefinition]) -> None:
+    for code, task in tasks.items():
+        if code != code.lower():
+            raise ValueError(
+                f"task code {code!r} has capital letters; task codes are lowercase"
+            )
+        if not is_safe_value(code):
+            raise ValueError(
+                f"task code {code!r} isn't usable as a directory name: "
+                f"{SAFE_VALUE_EXPLANATION}"
+            )
+        task.code = code
+
+
+def task_files(directory: Path) -> list[Path]:
+    """The files in an `include` directory that hold tasks, in the order they're read:
+    every `.toml` file directly inside it, except hidden ones. Not the directories
+    inside it, so what's live is what `ls` shows."""
+    return sorted(
+        entry
+        for entry in directory.iterdir()
+        if entry.name.endswith(".toml") and not entry.name.startswith(".")
+    )
+
+
 def load_config(path: Path) -> Config:
-    """Read and check a configuration file, or raise ConfigurationError saying why."""
+    """Read and check a configuration file, and the files it includes, or raise
+    ConfigurationError saying why."""
+    raw = _read_toml(path)
+    try:
+        config = Config.model_validate(raw)
+    except Exception as error:
+        raise ConfigurationError(
+            f"{path} has a problem:\n{error}{_pigsty_hint(raw)}"
+        ) from error
+
+    # Paths in the file are relative to the file, so a checkout can move without editing.
+    base = path.parent.resolve()
+    config.data_root = (base / config.data_root).resolve()
+    config.database = (base / config.database).resolve()
+    config.include = [(base / directory).resolve() for directory in config.include]
+    for task in config.task.values():
+        task.source = path.resolve()
+    config.public_keys_file = _resolve_public_keys(
+        path, base, config.public_keys_file, config.task
+    )
+    config.key_files = [config.public_keys_file] if config.public_keys_file else []
+
+    defined_in = {code: path.resolve() for code in config.task}
+    for directory in config.include:
+        if config.include.count(directory) > 1:
+            raise ConfigurationError(
+                f"{path} has a problem: {directory} is in include more than once."
+            )
+        try:
+            files = task_files(directory)
+        except OSError as error:
+            raise ConfigurationError(
+                f"{path} has a problem: it includes {directory}, and that can't be "
+                f"read: {error}"
+            ) from error
+        for file in files:
+            included = _load_task_file(file)
+            for code, task in included.task.items():
+                if code in defined_in:
+                    raise ConfigurationError(
+                        f"Task {code!r} is defined twice: in {defined_in[code]} and in "
+                        f"{file}. A task code can only be used once, across every file."
+                    )
+                defined_in[code] = file
+                task.source = file
+            # Relative to where the file really is, so a study's file can be linked
+            # in from its repository, the way nginx's sites-enabled links to
+            # sites-available, and still find the keys file next to it.
+            keys_file = _resolve_public_keys(
+                file, file.resolve().parent, included.public_keys_file, included.task
+            )
+            if keys_file:
+                config.key_files.append(keys_file)
+            config.task.update(included.task)
+    return config
+
+
+def _load_task_file(path: Path) -> TaskFile:
+    raw = _read_toml(path)
+    try:
+        return TaskFile.model_validate(raw)
+    except Exception as error:
+        hint = _pigsty_hint(raw)
+        if {"data_root", "database", "include"} & raw.keys():
+            hint += (
+                "\nIt's in an include directory, so it can only hold tasks and a "
+                "public_keys_file. data_root, database, and include belong in the main "
+                "pig.toml."
+            )
+        raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
+
+
+def _read_toml(path: Path) -> dict[str, Any]:
     try:
         text = path.read_bytes()
     except OSError as error:
         raise ConfigurationError(f"Can't read {path}: {error}") from error
 
     try:
-        raw = tomllib.loads(text.decode("utf-8"))
+        return tomllib.loads(text.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         raise ConfigurationError(f"{path} isn't valid TOML: {error}") from error
 
-    try:
-        config = Config.model_validate(raw)
-    except Exception as error:
-        # Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know.
-        hint = ""
-        tasks = raw.get("task") if isinstance(raw, dict) else None
-        if isinstance(tasks, dict) and any(
-            isinstance(task, dict) and {"datastore_base", "organized"} & task.keys()
-            for task in tasks.values()
-        ):
-            hint = (
-                "\nThis looks like pigsty.toml, the secure side's configuration, which "
-                "pigsty reads. pig reads the web server's pig.toml."
-            )
-        raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
 
-    # Paths in the file are relative to the file, so a checkout can move without editing.
-    base = path.parent.resolve()
-    config.data_root = (base / config.data_root).resolve()
-    config.database = (base / config.database).resolve()
-    _resolve_public_keys(path, config)
-    return config
+def _pigsty_hint(raw: dict[str, Any]) -> str:
+    """Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know."""
+    tasks = raw.get("task")
+    if isinstance(tasks, dict) and any(
+        isinstance(task, dict) and {"datastore_base", "organized"} & task.keys()
+        for task in tasks.values()
+    ):
+        return (
+            "\nThis looks like pigsty.toml, the secure side's configuration, which "
+            "pigsty reads. pig reads the web server's pig.toml."
+        )
+    return ""
 
 
-def _resolve_public_keys(path: Path, config: Config) -> None:
-    """Read the public keys file, and give each task that encrypts its public key, and
-    each task that checks signatures its signing keys."""
+def _resolve_public_keys(
+    path: Path,
+    base: Path,
+    public_keys_file: Path | None,
+    tasks: dict[str, TaskDefinition],
+) -> Path | None:
+    """Read the public keys file a file names, and give each of that file's tasks that
+    encrypts its public key, and each that checks signatures its signing keys. A task
+    only ever uses the keys named in its own file, so one study's task can't encrypt to
+    another study's key by mistake. `public_keys_file` is relative to `base`. Returns
+    where the keys file is."""
     # Imported here, because keys.py uses this module's safe-value rule.
     from .keys import is_signing_public_key, read_public_keys
 
     using = sorted(
         code
-        for code, task in config.task.items()
+        for code, task in tasks.items()
         if task.encrypt_to or task.checks_signatures
     )
-    if config.public_keys_file is None:
+    if public_keys_file is None:
         if using:
             raise ConfigurationError(
                 f"{path} has a problem: {', '.join(using)} set encrypt_to or "
-                "signed_by, but there's no public_keys_file to find the keys in. Make "
+                "signed_by, but there's no public_keys_file in this file to find the "
+                "keys in. A task uses the public keys file named in its own file. Make "
                 "one on the secure side with pigsty keys export, copy it here, and "
                 "point public_keys_file at it."
             )
-        return
-    config.public_keys_file = (
-        path.parent.resolve() / config.public_keys_file
-    ).resolve()
-    public_keys = read_public_keys(config.public_keys_file)
+        return None
+    public_keys_file = (base / public_keys_file).resolve()
+    public_keys = read_public_keys(public_keys_file)
 
     def find(code: str, name: str, setting: str, signing: bool) -> str:
         if name not in public_keys:
             known = ", ".join(sorted(public_keys)) or "none"
             raise ConfigurationError(
                 f"{path} has a problem: task {code!r} has {name!r} in {setting}, and "
-                f"{config.public_keys_file} has no key by that name. It has: {known}. "
+                f"{public_keys_file} has no key by that name. It has: {known}. "
                 "If the key is new, export the public keys again on the secure side "
                 "and copy the file here."
             )
@@ -403,34 +512,37 @@ def _resolve_public_keys(path: Path, config: Config) -> None:
         return public_keys[name]
 
     for code in using:
-        task = config.task[code]
+        task = tasks[code]
         if task.encrypt_to:
             task.public_key = find(code, task.encrypt_to, "encrypt_to", signing=False)
         task.signing_keys = {
             name: find(code, name, "signed_by", signing=True) for name in task.signed_by
         }
+    return public_keys_file
 
 
 class ConfigSource:
-    """The configuration file, re-read whenever it changes on disk.
+    """The configuration file, and the files it includes, re-read whenever one of them
+        changes on disk.
 
-    The service asks for the current configuration on every request, so editing a task
-    definition takes effect without a restart or a signal. Reading the file every time
-    would be wasteful, so this remembers what it read and checks the file's modification
-    time — one `stat` per request, which is nothing next to the work of the request.
+        The service asks for the current configuration on every request, so editing a task
+        definition takes effect without a restart or a signal. Reading the file every time
+        would be wasteful, so this remembers what it read and checks the file's modification
+        time — one `stat` per file per request, and a listing of each include directory, which
+    is nothing next to the work of the request.
 
-    **A file that won't load doesn't take the service down.** The last configuration that
-    did load keeps serving, the problem is reported by the health check, and the next
-    good save picks up from there. Refusing every request instead would mean a typo in a
-    text editor stops data collection for participants who are mid-task, and losing their
-    data is far worse than running for a few minutes on a definition someone is editing.
+        **A file that won't load doesn't take the service down.** The last configuration that
+        did load keeps serving, the problem is reported by the health check, and the next
+        good save picks up from there. Refusing every request instead would mean a typo in a
+        text editor stops data collection for participants who are mid-task, and losing their
+        data is far worse than running for a few minutes on a definition someone is editing.
     """
 
     def __init__(self, path: Path):
         self.path = path
         self._lock = threading.Lock()
         self._config: Config | None = None
-        self._fingerprint: tuple[tuple[int, int, int] | None, ...] | None = None
+        self._fingerprint: tuple[object, ...] | None = None
         self.problem: str | None = None
 
     def current(self) -> Config:
@@ -447,9 +559,10 @@ class ConfigSource:
                 raise ConfigurationError(self.problem or f"Can't read {self.path}.")
             return self._config
 
-    def _read_fingerprint(self) -> tuple[tuple[int, int, int] | None, ...] | None:
-        """Enough of the file's identity to notice an edit: when, how big, which file.
-        And the same for the public keys file it names, so copying a new one over takes
+    def _read_fingerprint(self) -> tuple[object, ...] | None:
+        """Enough of each file's identity to notice an edit: when, how big, which file.
+        That's the main file, every file in its include directories, and the public keys
+        files they name, so adding a study's file, or copying a new keys file over, takes
         effect the way editing pig.toml does."""
         try:
             stat = self.path.stat()
@@ -457,17 +570,21 @@ class ConfigSource:
             # The file went away. Keep serving what we have and say so.
             self.problem = f"Can't read {self.path}: {error}"
             return None
-        keys = None
-        if self._config is not None and self._config.public_keys_file is not None:
-            try:
-                keys_stat = self._config.public_keys_file.stat()
-                keys = (keys_stat.st_mtime_ns, keys_stat.st_size, keys_stat.st_ino)
-            except OSError:
-                # Reloading will say what's wrong with it.
-                pass
-        return ((stat.st_mtime_ns, stat.st_size, stat.st_ino), keys)
+        watched: list[Path] = []
+        if self._config is not None:
+            for directory in self._config.include:
+                try:
+                    watched.extend(task_files(directory))
+                except OSError:
+                    # Reloading will say what's wrong with it.
+                    watched.append(directory)
+            watched.extend(self._config.key_files)
+        return (
+            (stat.st_mtime_ns, stat.st_size, stat.st_ino),
+            tuple((str(path), _identity(path)) for path in watched),
+        )
 
-    def _reload(self, fingerprint: tuple[tuple[int, int, int] | None, ...]) -> None:
+    def _reload(self, fingerprint: tuple[object, ...]) -> None:
         try:
             self._config = load_config(self.path)
         except ConfigurationError as error:
@@ -475,8 +592,17 @@ class ConfigSource:
             return
         # Only remember the fingerprint of a file that actually loaded, so a broken one
         # is retried on the next request rather than being treated as read. When this
-        # load named a public keys file the last one didn't, the fingerprint didn't
-        # cover it, so the next request loads once more. That's cheaper than the
-        # alternative, which can miss an edit made while this one was loading.
+        # load read a file the last one didn't, the fingerprint didn't cover it, so the
+        # next request loads once more. That's cheaper than the alternative, which can
+        # miss an edit made while this one was loading.
         self._fingerprint = fingerprint
         self.problem = None
+
+
+def _identity(path: Path) -> tuple[int, int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        # Reloading will say what's wrong with it.
+        return None
+    return (stat.st_mtime_ns, stat.st_size, stat.st_ino)

@@ -570,7 +570,8 @@ def export(*, config: StyConfigPath | None = None) -> None:
     """Print the public keys file for the web server.
 
     One line per private key in private_keys_dir: its name and its public key. Save it,
-    copy it to the web server, and point public_keys_file in pig.toml at it:
+    copy it to the web server, and point public_keys_file at it, in pig.toml or in the
+    study's file of tasks:
 
         pigsty keys export > public_keys.txt
     """

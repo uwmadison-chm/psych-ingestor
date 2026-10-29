@@ -91,9 +91,13 @@ def check(*, config: ConfigPath | None = None) -> None:
     print(f"Configuration looks good: {len(loaded.task)} task(s).")
     print(f"  data root: {loaded.data_root}")
     print(f"  database:  {loaded.database}")
+    for directory in loaded.include:
+        print(f"  includes:  {directory}")
     for code, task in sorted(loaded.task.items()):
         state = "open" if task.open else "closed"
         print(f"\n{code} ({state})")
+        if loaded.include:
+            print(f"  defined in:  {task.source}")
         print(f"  expects:     {', '.join(task.required_parameters)}")
         text = [
             name
