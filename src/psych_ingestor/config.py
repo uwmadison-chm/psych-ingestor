@@ -385,45 +385,44 @@ def load_config(path: Path) -> Config:
     )
     config.key_files = [config.public_keys_file] if config.public_keys_file else []
 
-    defined_in = {code: path.resolve() for code in config.task}
-    for directory in config.include:
-        if config.include.count(directory) > 1:
+    for file in _included_files(path, config.include):
+        included = _load_task_file(file)
+        twice = sorted(config.task.keys() & included.task.keys())
+        if twice:
+            code = twice[0]
+            raise ConfigurationError(
+                f"Task {code!r} is defined twice: in {config.task[code].source} and "
+                f"in {file}. A task code can only be used once, across every file."
+            )
+        config.task.update(included.task)
+        if included.public_keys_file:
+            config.key_files.append(included.public_keys_file)
+    return config
+
+
+def _included_files(path: Path, include: list[Path]) -> list[Path]:
+    """Every file the include directories hold tasks in, directory by directory."""
+    files = []
+    for directory in include:
+        if include.count(directory) > 1:
             raise ConfigurationError(
                 f"{path} has a problem: {directory} is in include more than once."
             )
         try:
-            files = task_files(directory)
+            files.extend(task_files(directory))
         except OSError as error:
             raise ConfigurationError(
                 f"{path} has a problem: it includes {directory}, and that can't be "
                 f"read: {error}"
             ) from error
-        for file in files:
-            included = _load_task_file(file)
-            for code, task in included.task.items():
-                if code in defined_in:
-                    raise ConfigurationError(
-                        f"Task {code!r} is defined twice: in {defined_in[code]} and in "
-                        f"{file}. A task code can only be used once, across every file."
-                    )
-                defined_in[code] = file
-                task.source = file
-            # Relative to where the file really is, so a study's file can be linked
-            # in from its repository, the way nginx's sites-enabled links to
-            # sites-available, and still find the keys file next to it.
-            keys_file = _resolve_public_keys(
-                file, file.resolve().parent, included.public_keys_file, included.task
-            )
-            if keys_file:
-                config.key_files.append(keys_file)
-            config.task.update(included.task)
-    return config
+    return files
 
 
 def _load_task_file(path: Path) -> TaskFile:
+    """Read and check one included file, and find the keys its tasks use."""
     raw = _read_toml(path)
     try:
-        return TaskFile.model_validate(raw)
+        included = TaskFile.model_validate(raw)
     except Exception as error:
         hint = _pigsty_hint(raw)
         if {"data_root", "database", "include"} & raw.keys():
@@ -433,6 +432,16 @@ def _load_task_file(path: Path) -> TaskFile:
                 "pig.toml."
             )
         raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
+
+    for task in included.task.values():
+        task.source = path
+    # Relative to where the file really is, so a study's file can be linked in from
+    # its repository, the way nginx's sites-enabled links to sites-available, and
+    # still find the keys file next to it.
+    included.public_keys_file = _resolve_public_keys(
+        path, path.resolve().parent, included.public_keys_file, included.task
+    )
+    return included
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
