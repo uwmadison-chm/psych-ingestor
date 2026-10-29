@@ -237,9 +237,16 @@ def read_signing_keys(directory: Path) -> list[SigningKey]:
     return [key for key in read_all_keys(directory) if isinstance(key, SigningKey)]
 
 
-def read_all_keys(directory: Path) -> list[PrivateKey | SigningKey]:
+def read_all_keys(
+    directory: Path, *, check_permissions: bool = True
+) -> list[PrivateKey | SigningKey]:
     """Every private key in a directory, of both kinds, sorted by name. Raises
-    ConfigurationError as `read_private_keys` does."""
+    ConfigurationError as `read_private_keys` does.
+
+    With check_permissions false, a key file other people can read is read anyway. That's
+    for a filesystem that reports modes it doesn't enforce, like some network shares,
+    where every file looks readable by everyone.
+    """
     if not directory.is_dir():
         raise ConfigurationError(
             f"private_keys_dir is {directory}, and there's no directory there."
@@ -259,7 +266,8 @@ def read_all_keys(directory: Path) -> list[PrivateKey | SigningKey]:
             check_key_name(name)
         except ValueError as error:
             raise ConfigurationError(f"{path}: {error}") from None
-        _check_permissions(path)
+        if check_permissions:
+            _check_permissions(path)
         keys.append(_read_key_file(name, path))
     return keys
 

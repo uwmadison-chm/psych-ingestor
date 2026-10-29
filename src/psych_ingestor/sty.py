@@ -160,6 +160,10 @@ class StyConfig(BaseModel):
     # The user every pigsty command has to run as, so nothing it makes is owned by
     # someone else. Unset means anyone. See issue #95.
     run_as: str | None = None
+    # Read private key files even if their permissions say other people can, for a
+    # filesystem that reports permissions it doesn't enforce. `--ignore-permissions`
+    # does the same for one command.
+    ignore_permissions: bool = False
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
