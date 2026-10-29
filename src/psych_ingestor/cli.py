@@ -82,12 +82,31 @@ def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
 
 
 @app.command
-def check(*, config: ConfigPath | None = None) -> None:
+def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     """Check pig.toml, and say what each task is set up to do.
+
+    Also lists the directories Pig needs that aren't there yet: data_root, and the one
+    the database goes in. The service makes them itself when it first needs them; with
+    --fix, this makes them now, so they're there to set owners and permissions on. It
+    never makes the database, and never changes anything that's already there.
 
     The secure side's pigsty.toml is checked by `pigsty check`.
     """
     loaded = _load(config)
+    missing = [
+        directory
+        for directory in dict.fromkeys([loaded.data_root, loaded.database.parent])
+        if not directory.is_dir()
+    ]
+    if fix:
+        for directory in missing:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                print(f"Couldn't make {directory}: {error}", file=sys.stderr)
+                raise SystemExit(1) from error
+            print(f"Made {directory}")
+        missing = []
     print(f"Configuration looks good: {len(loaded.task)} task(s).")
     print(f"  data root: {loaded.data_root}")
     print(f"  database:  {loaded.database}")
@@ -128,6 +147,11 @@ def check(*, config: ConfigPath | None = None) -> None:
             f"allow request bodies of {describe_size(largest)} or more. See "
             "docs/deployment.md."
         )
+    if missing:
+        print("\nNot there yet:")
+        for directory in missing:
+            print(f"  {directory}")
+        print("Pig makes them when it needs them, or pig check --fix makes them now.")
 
 
 # The first file descriptor systemd passes to a service it started from a socket unit.

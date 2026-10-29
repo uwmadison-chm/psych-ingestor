@@ -25,8 +25,8 @@ local-setup:
     mkdir -p local
     cp -n pig.example.toml local/pig.toml
     cp -n pigsty.example.toml local/pigsty.toml
-    pig check
-    pigsty check
+    pig check --fix
+    pigsty check --fix
 
 # The server and the client always share a version number; the client's tests check.
 # Set the version of both, e.g. `just version 0.3.0`.

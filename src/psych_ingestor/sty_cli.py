@@ -85,7 +85,7 @@ def _every_key(loaded: sty.StyConfig) -> list[keys.PrivateKey | keys.SigningKey]
 
 
 @app.command
-def check(*, config: StyConfigPath | None = None) -> None:
+def check(*, config: StyConfigPath | None = None, fix: bool = False) -> None:
     """Check pigsty.toml, and say what each task is set up to do.
 
     Also checks every private key in private_keys_dir. With pig_url set, asks the web
@@ -93,8 +93,25 @@ def check(*, config: StyConfigPath | None = None) -> None:
     key here matches: data encrypted to it couldn't be decrypted. And it warns about a
     task whose signed_parameters differ from the web server's, since links signed here
     wouldn't start runs there. The web server's pig.toml is checked by `pig check`.
+
+    Lists the directories pigsty needs that aren't there yet. With --fix, makes them:
+    private_keys_dir, readable only by you, and each task's incoming/ and runs/
+    directories and the directory its tree goes in. It never makes a key, and never
+    changes anything that's already there.
     """
     loaded = _load(config)
+    missing = _missing_directories(loaded)
+    if fix:
+        for directory, mode in missing:
+            _make_directory(directory, mode)
+        missing = []
+    if loaded.private_keys_dir is not None and any(
+        directory == loaded.private_keys_dir for directory, _ in missing
+    ):
+        _fail(
+            f"private_keys_dir is {loaded.private_keys_dir}, and there's no directory "
+            "there. pigsty check --fix makes it, readable only by you."
+        )
     private_keys = _private_keys(loaded)
     signing_keys = _signing_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
@@ -122,8 +139,35 @@ def check(*, config: StyConfigPath | None = None) -> None:
         print(f"  pattern:   {task.pattern}")
         if task.signed_parameters:
             print(f"  signs:     {', '.join(task.signed_parameters)}")
+    if missing:
+        print("\nNot there yet:")
+        for directory, _ in missing:
+            print(f"  {directory}")
+        print("pigsty check --fix makes them.")
     if loaded.pig_url:
         _check_web_server(loaded, private_keys)
+
+
+def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
+    """The directories pigsty.toml names that aren't there, each with the mode to make
+    it with. Only private_keys_dir is kept from everyone else; the data directories get
+    whatever the umask gives them, like everything admit and organize write."""
+    wanted = []
+    if loaded.private_keys_dir is not None:
+        wanted.append((loaded.private_keys_dir, 0o700))
+    for _, task in sorted(loaded.task.items()):
+        wanted.append((task.datastore_base / admit_module.INCOMING_DIRECTORY, 0o777))
+        wanted.append((task.datastore_base / admit_module.RUNS_DIRECTORY, 0o777))
+        wanted.append((task.organized_root, 0o777))
+    return [(directory, mode) for directory, mode in wanted if not directory.is_dir()]
+
+
+def _make_directory(directory: Path, mode: int) -> None:
+    try:
+        directory.mkdir(mode=mode, parents=True, exist_ok=True)
+    except OSError as error:
+        _fail(f"Couldn't make {directory}: {error}")
+    print(f"Made {directory}")
 
 
 def _check_web_server(
