@@ -94,7 +94,9 @@ def test_an_included_file_cant_set_it(tmp_path):
 
     with pytest.raises(ConfigurationError) as raised:
         load_config(path)
-    assert "touch_after_finalizing belong in the main pig.toml" in str(raised.value)
+    assert "touch_after_finalizing, and run_as belong in the main pig.toml" in str(
+        raised.value
+    )
 
 
 # ---------------------------------------------------------------------- pig check

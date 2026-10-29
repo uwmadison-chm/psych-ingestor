@@ -35,6 +35,13 @@ A task with no entry is never admitted or organized. Two tasks can't share a `da
 
 The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`, and lists the directories it names that aren't there yet. `pigsty check --fix` makes them: `private_keys_dir`, readable only by you, and each task's `incoming/`, `runs/`, and the directory its tree goes in. It never makes a key, and never changes the permissions of anything already there. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG`.
 
+`run_as` works as it does in `pig.toml` (see [configuration.md](configuration.md#running-as-one-user)): when it's set, every `pigsty` command refuses to run as any other user, so `admit`, `organize`, and `keys new` never make files that belong to someone else.
+
+```toml
+# pigsty.toml
+run_as = "pigsty"
+```
+
 ## Trying it on a laptop
 
 `pigsty.example.toml` in the repository is a starting point. Copy it to `local/pigsty.toml`, where its paths are under `local/`. Then copy your local Pig's finished stroop runs to where the bucket's copy would put them, and admit and organize them:

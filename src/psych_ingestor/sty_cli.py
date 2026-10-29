@@ -24,7 +24,7 @@ from . import admit as admit_module
 from . import db, keys, signing, sty
 from . import organize as organize_module
 from . import purge as purge_module
-from .config import ConfigurationError
+from .config import ConfigurationError, user_name, wrong_user
 
 app = cyclopts.App(
     name="pigsty",
@@ -53,10 +53,15 @@ def _load(path: Path | None) -> sty.StyConfig:
             )
         raise SystemExit(1)
     try:
-        return sty.load_sty_config(chosen)
+        loaded = sty.load_sty_config(chosen)
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
+    refusal = wrong_user(chosen, loaded.run_as, "pigsty")
+    if refusal:
+        print(refusal, file=sys.stderr)
+        raise SystemExit(1)
+    return loaded
 
 
 # How long pigsty check waits for the web server. It's only asking for settings.
@@ -115,6 +120,7 @@ def check(*, config: StyConfigPath | None = None, fix: bool = False) -> None:
     private_keys = _private_keys(loaded)
     signing_keys = _signing_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
+    print(f"Run by {user_name(os.getuid())}.")
     if loaded.pig_url:
         print(f"Purges runs from {loaded.pig_url}.")
     else:

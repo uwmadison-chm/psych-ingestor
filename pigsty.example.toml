@@ -16,6 +16,11 @@ pig_url = "http://127.0.0.1:8000"
 # `pigsty keys new --signing lucida/signing`. See docs/organizing.md.
 # private_keys_dir = "./private_keys"
 
+# The user every pigsty command has to run as, so nothing it makes belongs to someone
+# else. Unset, anyone can run it. See docs/configuration.md.
+#
+# run_as = "pigsty"
+
 [task.stroop]
 # Where this task's runs are kept. Runs copied from the bucket arrive in incoming/, and
 # pigsty admit puts them in runs/ once they check out.

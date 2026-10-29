@@ -113,6 +113,17 @@ last good version and reports the problem on `/health`. It also lists `data_root
 database, and the database's directory if they aren't there yet. The service makes them
 when it first needs them; `pig check --fix` makes them now.
 
+### Running as one user
+
+*Built, and provisional: see issue #95.* Files belong to whoever made them, so a command run as the wrong user can leave things the service can't write: `sudo pig check --fix` makes a data root that belongs to root, and since the database is in WAL mode, even `sudo pig runs` can leave root's files beside it. `run_as` names the one user every `pig` command has to run as:
+
+```toml
+# /etc/pig/pig.toml
+run_as = "pig"
+```
+
+Every `pig` command, `serve` included, refuses to start as anyone else, and says how to run it: `sudo -u pig pig check`. Root is anyone else too. There's no flag to get around it; to run as someone else on purpose, comment the setting out. A name that isn't a user on this machine is a configuration error. Leave it unset on a laptop, and anyone can run anything, which is how it worked before. `pig check` says which user it ran as either way. `run_as` is only ever in the main file.
+
 ## One file per study
 
 *Built, and provisional: see issue #36.* One web server can serve many studies, and a file holding every study's tasks gets awkward fast. `include` names directories of more task definitions, so each study can keep its own file, in its own repository if it likes:
@@ -138,7 +149,7 @@ run_key_parameters = ["id", "event"]
 encrypt_to = "lucida/2026a"
 ```
 
-Nothing else: `data_root`, `database`, and `include` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
+Nothing else: `data_root`, `database`, `include`, `touch_after_finalizing`, and `run_as` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
 
 **A task uses only the keys its own file names.** Only an included file's tasks can encrypt to the keys in its `public_keys_file` or check signatures with them, and the main file's `public_keys_file` is for the main file's tasks. The path is relative to the included file or, when that's a link, to the file it links to, so a linked study file finds its keys next to it in its repository. That's what lets each study run its own secure side: the study's `pigsty keys export` writes just that study's keys, the file is copied in next to the study's tasks, and a typo can't send one study's data to a key another study holds. Key names only have to be unique within a file.
 
