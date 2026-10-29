@@ -62,7 +62,7 @@ max_part_size = "8M"       # optional, defaults to 8M
 `data_root` and `database` are relative to the configuration file, so a checkout can move
 without editing anything. A working copy keeps the whole lot — file, database, and data —
 under `local/`, which is the one directory version control ignores; the commands default
-to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that. A real deployment
+to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that (see [Environment variables](#environment-variables)). A real deployment
 puts the file wherever its configuration belongs and points `data_root` at real storage.
 
 Under the data root, Pig keeps two directories, and every run is a directory named for
@@ -475,3 +475,26 @@ paths differ only in case; see [organizing.md](organizing.md).
 task: whether it's open, what parameters it expects, which of them make up the run key,
 how long its runs may stay open, whether it takes media, what it signs, and, when there are included files, which file it's in. It exits non-zero on a bad file, so a deployment can
 gate a restart on it.
+
+## Environment variables
+
+*Built.* Pig takes almost nothing from the environment. Every setting a task or a deployment needs is in `pig.toml` or `pigsty.toml`, and there's no environment variable that overrides one. These are all of them:
+
+| Variable | Read by | What it does |
+| --- | --- | --- |
+| `PIG_CONFIG` | every `pig` command, and the web app | The configuration file, when `--config` isn't given. Defaults to `./local/pig.toml`. `pig serve` sets it for the web app, so you only set it yourself to start the app some other way, such as `uvicorn psych_ingestor.app:app --factory`. |
+| `PIGSTY_CONFIG` | every `pigsty` command | The secure side's configuration file, when `--config` isn't given. Defaults to `./local/pigsty.toml`. See [organizing.md](organizing.md). |
+| `LISTEN_PID`, `LISTEN_FDS` | `pig serve` | Set by systemd when it starts Pig from a socket unit, never by you. When they name this process, `pig serve` uses the socket systemd opened and ignores `--host` and `--port`. |
+
+The JavaScript client reads none: it runs in a participant's browser, and everything it needs comes from the page and from the server.
+
+The client's browser tests (`npm run e2e`, in `client/`) read two, for running Pig some way other than from a uv checkout:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `PIG_COMMAND` | `uv run pig` | How the tests run `pig serve` and `pig sweep`. |
+| `PIGSTY_COMMAND` | `uv run pigsty` | How the tests run `pigsty`. |
+
+`PIG_PORT`, `PIG_DIR`, and `STATIC_PORT` appear in the test scripts too, but `client/playwright.config.js` sets them, and setting them yourself changes nothing.
+
+`contrib/aws_s3/` uses boto3, which reads AWS's own variables (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, and the rest) when `--profile` isn't given. See its README.
