@@ -27,6 +27,8 @@ once, or to run while nothing needs doing, because a timer will do both.
 Trying Pig out on a laptop, you can skip the timer and run the command by hand when you want
 to see a run reach `complete`.
 
+To have finalized runs finish sooner than the timer gets to them, set `touch_after_finalizing` (see [configuration.md](configuration.md#finishing-a-run)) and start the sweep when the file changes: a systemd `.path` unit with `PathChanged=` on that file, naming the same service the timer starts. systemd won't start that service again while it's already running, and the sweep is safe to run twice at once anyway. Keep the timer. On a Mac, launchd's `WatchPaths` does the same job.
+
 ## The data root is one filesystem
 
 Under the data root, `in_progress/`, `done/`, `purging/` and `uploading/` have to be on the same filesystem. The

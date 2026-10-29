@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import sqlite3
 import sys
 from pathlib import Path
@@ -85,18 +86,24 @@ def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
 def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     """Check pig.toml, and say what each task is set up to do.
 
-    Also lists what Pig needs that isn't there yet: data_root, the database, and the
-    directory it goes in. The service makes them itself when it first needs them; with
-    --fix, this makes them now, so they're there to set owners and permissions on. It
-    never changes anything that's already there.
+    Also lists what Pig needs that isn't there yet: data_root, the database, the
+    directory it goes in, and the directory touch_after_finalizing goes in. The service
+    makes them itself when it first needs them; with --fix, this makes them now, so
+    they're there to set owners and permissions on. It never changes anything that's
+    already there.
+
+    If touch_after_finalizing is set, checks that whoever runs this can write it. Run it
+    as the service's user to check what the service can do: sudo -u pig pig check.
 
     The secure side's pigsty.toml is checked by `pigsty check`.
     """
     loaded = _load(config)
+    directories = [loaded.data_root, loaded.database.parent]
+    signal = loaded.touch_after_finalizing
+    if signal is not None:
+        directories.append(signal.parent)
     missing = [
-        directory
-        for directory in dict.fromkeys([loaded.data_root, loaded.database.parent])
-        if not directory.is_dir()
+        directory for directory in dict.fromkeys(directories) if not directory.is_dir()
     ]
     if not loaded.database.exists():
         missing.append(loaded.database)
@@ -118,6 +125,20 @@ def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     print(f"  database:  {loaded.database}")
     for directory in loaded.include:
         print(f"  includes:  {directory}")
+    # Checked as whoever is running this, because that's the only answer the operating
+    # system gives without guessing. The user is named so the answer isn't mistaken for
+    # the service's.
+    user = pwd.getpwuid(os.getuid()).pw_name
+    unwritable = False
+    if signal is not None:
+        print(f"  touches:   {signal}, after each finalize")
+        if signal.parent.is_dir():
+            if signal.exists():
+                unwritable = not os.access(signal, os.W_OK)
+            else:
+                unwritable = not os.access(signal.parent, os.W_OK | os.X_OK)
+            if not unwritable:
+                print(f"             {user} can write it")
     for code, task in sorted(loaded.task.items()):
         state = "open" if task.open else "closed"
         print(f"\n{code} ({state})")
@@ -158,6 +179,14 @@ def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
         for path in missing:
             print(f"  {path}")
         print("Pig makes them when it needs them, or pig check --fix makes them now.")
+    if unwritable:
+        print(
+            f"\n{user} can't write {signal}, so finalizing a run won't start a sweep. "
+            "Runs still finish on the sweep's timer. If the service runs as someone "
+            "else, check as that user: sudo -u <user> pig check.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 # The first file descriptor systemd passes to a service it started from a socket unit.

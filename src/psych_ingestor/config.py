@@ -280,6 +280,10 @@ class Config(BaseModel):
     # tasks can live in that study's own repository. See docs/configuration.md and
     # issue #36.
     include: list[Path] = Field(default_factory=list)
+    # A file the service touches each time a run is finalized, so something watching it —
+    # a systemd path unit, say — can start a sweep without waiting for the timer. Only a
+    # hint: the timer still runs, and a touch that fails doesn't fail the finalize.
+    touch_after_finalizing: Path | None = None
     task: dict[str, TaskDefinition] = Field(default_factory=dict)
 
     # Filled in by load_config: every public keys file it read, from this file and the
@@ -378,6 +382,8 @@ def load_config(path: Path) -> Config:
     config.data_root = (base / config.data_root).resolve()
     config.database = (base / config.database).resolve()
     config.include = [(base / directory).resolve() for directory in config.include]
+    if config.touch_after_finalizing is not None:
+        config.touch_after_finalizing = (base / config.touch_after_finalizing).resolve()
     for task in config.task.values():
         task.source = path.resolve()
     config.public_keys_file = _resolve_public_keys(
@@ -425,11 +431,11 @@ def _load_task_file(path: Path) -> TaskFile:
         included = TaskFile.model_validate(raw)
     except Exception as error:
         hint = _pigsty_hint(raw)
-        if {"data_root", "database", "include"} & raw.keys():
+        if {"data_root", "database", "include", "touch_after_finalizing"} & raw.keys():
             hint += (
                 "\nIt's in an include directory, so it can only hold tasks and a "
-                "public_keys_file. data_root, database, and include belong in the main "
-                "pig.toml."
+                "public_keys_file. data_root, database, include, and "
+                "touch_after_finalizing belong in the main pig.toml."
             )
         raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
 

@@ -271,6 +271,15 @@ the service simple, and it's affordable because the durability promise lands at
 `finalizing`, not at `complete` — nobody is waiting on the sweep except whoever wants to
 read the finished run. See [deployment.md](deployment.md) for scheduling it.
 
+If that wait matters, `touch_after_finalizing` names a file the service touches each time a task finalizes a run, so something watching the file can start a sweep right away:
+
+```toml
+# local/pig.toml
+touch_after_finalizing = "/run/pig/sweep-due"
+```
+
+It's a hint and nothing more. The sweep's timer still has to run, because expiring runs and catching a touch nobody saw are its job. Like `data_root`, the path is relative to the configuration file, and it belongs in the main file. `pig check` says whether whoever ran it can write the file; run it as the service's user (`sudo -u pig pig check`) to find out whether the service can. See [deployment.md](deployment.md) for a systemd path unit that watches it.
+
 ### Audio, video, and other files
 
 `media = true` lets a task send media items: recordings, images, any file too big to go
