@@ -14,7 +14,6 @@ from pathlib import Path
 
 from . import db, media, purge, runs, storage
 from .config import Config
-from .lock import LockHeld, hold_lock
 from .runs import Disposition
 
 
@@ -55,11 +54,11 @@ def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
     """
     report = SweepReport()
     try:
-        with hold_lock(lock_path(config)):
+        with storage.hold_lock(lock_path(config)):
             expire_runs(config, connection, report)
             finish_closed_runs(config, connection, report)
             finish_purges(config, connection, report)
-    except LockHeld:
+    except storage.LockHeld:
         report.busy = True
     return report
 

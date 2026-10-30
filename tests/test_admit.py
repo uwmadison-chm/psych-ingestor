@@ -223,6 +223,27 @@ def test_a_symlinked_run_isnt_admitted(pig: Pig, tmp_path: Path):
     assert "symbolic link" in only_problem(admit("stroop", tmp_path))
 
 
+def test_the_first_admit_makes_runs_durably(
+    pig: Pig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`runs/` is new on the first admit, and only an entry in the datastore until the
+    datastore is fsynced. Without that, a crash could take every run admitted with it."""
+    downloaded_run(pig, tmp_path)
+    synced: list[Path] = []
+    real = storage.fsync_directory
+
+    def record(directory: Path) -> None:
+        synced.append(Path(directory))
+        real(directory)
+
+    monkeypatch.setattr(storage, "fsync_directory", record)
+
+    admit("stroop", tmp_path)
+
+    assert tmp_path in synced
+    assert tmp_path / "runs" in synced
+
+
 def test_a_run_in_the_wrong_tasks_incoming_isnt_admitted(pig: Pig, tmp_path: Path):
     downloaded_run(pig, tmp_path)
 

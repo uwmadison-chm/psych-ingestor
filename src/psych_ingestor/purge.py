@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 import urllib.error
@@ -58,22 +57,13 @@ def purge_hashes(run_directory: Path) -> dict[str, str]:
     Raises PurgeProblem if anything in it, the directory included, is a symbolic link.
     Pig never makes one, and on the secure side one could point anywhere on the machine.
     """
-    if run_directory.is_symlink():
-        raise PurgeProblem(f"{run_directory} is a symbolic link, not a directory.")
-    hashes = {}
-    waiting = [run_directory]
-    while waiting:
-        directory = waiting.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                path = Path(entry.path)
-                relative = path.relative_to(run_directory).as_posix()
-                if entry.is_symlink():
-                    raise PurgeProblem(f"{relative} is a symbolic link.")
-                if entry.is_dir(follow_symlinks=False):
-                    waiting.append(path)
-                else:
-                    hashes[relative] = purge_hash(path)
+    try:
+        files = storage.files_in(run_directory)
+    except storage.SymbolicLink as link:
+        raise PurgeProblem(f"{link}.") from None
+    hashes = {
+        relative.as_posix(): purge_hash(run_directory / relative) for relative in files
+    }
     return dict(sorted(hashes.items()))
 
 
@@ -183,8 +173,14 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
         return report
 
     for run_id in sorted(
-        set(_directories_in(incoming)) & set(_directories_in(admitted))
+        set(storage.directories_in(incoming)) & set(storage.directories_in(admitted))
     ):
+        if (admitted / run_id).is_symlink():
+            report.problems[str(admitted / run_id)] = (
+                "it's a symbolic link, not a directory. pigsty admit never makes one, "
+                "so this run wasn't purged."
+            )
+            continue
         state = admitted / run_id / STATE_DIRECTORY
         if (state / PURGED_FILE).exists():
             report.already_purged += 1
@@ -216,24 +212,13 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
     return report
 
 
-def _directories_in(directory: Path) -> list[str]:
-    """The names of the directories directly inside this one, leaving out dot-names."""
-    with os.scandir(directory) as entries:
-        return [
-            entry.name
-            for entry in entries
-            if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
-        ]
-
-
 def _record_purged(state: Path) -> None:
     """Write `.state/purged`, saying when, and make sure it's on disk."""
     state.mkdir(exist_ok=True)
     with open(state / PURGED_FILE, "w", encoding="utf-8") as written:
         json.dump({"purged_at": db.now().isoformat()}, written)
         written.write("\n")
-        written.flush()
-        os.fsync(written.fileno())
+        storage.flush_and_fsync(written)
     storage.fsync_directory(state)
     storage.fsync_directory(state.parent)
 

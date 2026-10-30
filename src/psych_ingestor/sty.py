@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +27,7 @@ from .config import (
     TaskDefinition,
     check_run_as,
     is_safe_value,
-    os_error_reason,
+    read_toml,
 )
 
 DEFAULT_STY_CONFIG = "local/pigsty.toml"
@@ -163,6 +162,10 @@ class StyConfig(BaseModel):
     # The user every pigsty command has to run as, so nothing it makes is owned by
     # someone else. Unset means anyone. See issue #95.
     run_as: str | None = None
+    # Read private key files even if their permissions say other people can, for a
+    # filesystem that reports permissions it doesn't enforce. `--ignore-permissions`
+    # does the same for one command.
+    ignore_permissions: bool = False
     task: dict[str, StyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -207,6 +210,10 @@ SETTINGS = {
     "pig_url": ("the web server's address", '"https://pig.example.edu"'),
     "private_keys_dir": ("the directory of private keys", '"./private_keys"'),
     "run_as": ("the user every pigsty command has to run as", '"pigsty"'),
+    "ignore_permissions": (
+        "whether to read private key files other people can read",
+        "true",
+    ),
     "datastore_base": ("the directory this task's runs are kept in", '"./stroop-data"'),
     "organized": (
         "where pigsty organize puts each run",
@@ -301,8 +308,9 @@ def describe_problems(error: ValidationError, raw: dict[str, Any]) -> list[str]:
     for code in pig_settings.keys() | unknown_settings.keys():
         if code is None:
             by_table[code].append(
-                "pigsty.toml can have pig_url, private_keys_dir, run_as, and a "
-                "[task.…] table for each task. See pigsty.example.toml."
+                "pigsty.toml can have pig_url, private_keys_dir, run_as, "
+                "ignore_permissions, and a [task.…] table for each task. See "
+                "pigsty.example.toml."
             )
         else:
             by_table[code].append(
@@ -340,7 +348,7 @@ def _listed(names: list[str]) -> str:
 
 def load_sty_config(path: Path) -> StyConfig:
     """Read and check `pigsty.toml`, or raise ConfigurationError saying why."""
-    raw = _read_toml(path)
+    raw = read_toml(path)
     try:
         config = StyConfig.model_validate(raw)
     except ValidationError as error:
@@ -388,16 +396,3 @@ def load_sty_config(path: Path) -> StyConfig:
                     "its first placeholder."
                 )
     return config
-
-
-def _read_toml(path: Path) -> dict[str, Any]:
-    try:
-        text = path.read_bytes()
-    except OSError as error:
-        raise ConfigurationError(
-            f"Can't read {path}: {os_error_reason(error, path)}."
-        ) from error
-    try:
-        return tomllib.loads(text.decode("utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise ConfigurationError(f"{path} isn't valid TOML: {error}") from error
