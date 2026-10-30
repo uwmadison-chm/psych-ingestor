@@ -15,9 +15,7 @@ version control like `pig.toml`.
 from __future__ import annotations
 
 import re
-import tomllib
 from pathlib import Path
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -26,6 +24,7 @@ from .config import (
     ConfigurationError,
     check_run_as,
     is_safe_value,
+    read_toml,
 )
 
 DEFAULT_STY_CONFIG = "local/pigsty.toml"
@@ -200,7 +199,7 @@ class StyConfig(BaseModel):
 
 def load_sty_config(path: Path) -> StyConfig:
     """Read and check `pigsty.toml`, or raise ConfigurationError saying why."""
-    raw = _read_toml(path)
+    raw = read_toml(path)
     try:
         config = StyConfig.model_validate(raw)
     except Exception as error:
@@ -245,14 +244,3 @@ def load_sty_config(path: Path) -> StyConfig:
                     "its first placeholder."
                 )
     return config
-
-
-def _read_toml(path: Path) -> dict[str, Any]:
-    try:
-        text = path.read_bytes()
-    except OSError as error:
-        raise ConfigurationError(f"Can't read {path}: {error}") from error
-    try:
-        return tomllib.loads(text.decode("utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise ConfigurationError(f"{path} isn't valid TOML: {error}") from error

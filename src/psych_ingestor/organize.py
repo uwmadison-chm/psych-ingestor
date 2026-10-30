@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -151,7 +150,7 @@ def _organize(
     report = OrganizeReport()
     runs = datastore / RUNS_DIRECTORY
     try:
-        run_ids = _directories_in(runs)
+        run_ids = storage.directories_in(runs)
     except FileNotFoundError:
         report.errors[str(runs)] = (
             "There's no runs directory here. pigsty admit makes it, and puts this "
@@ -205,26 +204,12 @@ def _organize_one(placement: Placement, root: Path, dry_run: bool) -> Outcome:
         if _already_placed(destination, placement):
             return Outcome("already there")
         if not dry_run:
-            _copy_run(placement, root, destination)
+            _copy_run(placement, destination)
     except RunProblem as problem:
         return Outcome("not placed", str(problem))
     except OSError as error:
         return Outcome("not placed", f"couldn't copy it: {error}")
     return Outcome("placed")
-
-
-def _directories_in(directory: Path) -> list[str]:
-    """The names of the directories directly inside this one, leaving out dot-names.
-
-    `os.scandir` says whether each entry is a directory without a separate question per
-    entry, which matters on a network share. See issue #42.
-    """
-    with os.scandir(directory) as entries:
-        return sorted(
-            entry.name
-            for entry in entries
-            if not entry.name.startswith(".") and entry.is_dir()
-        )
 
 
 # ---------------------------------------------------------------------- the record
@@ -306,8 +291,7 @@ def _append_record(record: BinaryIO, placement: Placement) -> None:
         "destination": placement.destination.as_posix(),
     }
     record.write((json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
-    record.flush()
-    os.fsync(record.fileno())
+    storage.flush_and_fsync(record)
 
 
 def _replace_record(root: Path, wrote: bool) -> None:
@@ -422,6 +406,11 @@ def _place(task_code: str, source: Path, pattern: str) -> Placement:
 
 
 def _read_run_file_bytes(source: Path) -> bytes:
+    if source.is_symlink():
+        raise RunProblem(
+            "it's a symbolic link, not a directory. Pig never makes one, so the run "
+            "wasn't placed."
+        )
     try:
         return (source / RUN_FILE).read_bytes()
     except FileNotFoundError:
@@ -571,82 +560,41 @@ def _already_placed(destination: Path, placement: Placement) -> bool:
     )
 
 
-def _copy_run(placement: Placement, root: Path, destination: Path) -> None:
+def _copy_run(placement: Placement, destination: Path) -> None:
     """Copy one run's files into place.
 
     Everything goes into a scratch directory beside the destination, which is renamed
     into place at the end, so a run in the tree is always a whole run. Every file and
-    directory is fsynced before the rename, and the directories above it after, so a
-    run the record names is on disk.
+    directory is fsynced before the rename, and the directory it's in after, so a run
+    the record names is on disk.
     """
     # Before anything is made, so a run with a symbolic link leaves nothing behind.
-    files = _files_in(placement.source)
-    scratch = destination.with_name(f".{destination.name}{SCRATCH_SUFFIX}")
     try:
-        # Left by an organize that was interrupted. Ours by its name, never runs/'s.
-        shutil.rmtree(scratch)
-    except FileNotFoundError:
-        pass
-    scratch.mkdir(parents=True)
+        files = storage.files_in(placement.source)
+    except storage.SymbolicLink as link:
+        raise RunProblem(
+            f"{link}. Pig never makes one, so the run wasn't placed."
+        ) from None
+    # One left by an organize that was interrupted is deleted. Ours by its name, never
+    # runs/'s.
+    scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
     made = {scratch}
 
     for relative in files:
         if relative == PurePosixPath(RUN_FILE):
             continue
+        if relative.parts[0] == storage.STATE_DIRECTORY:
+            # What secure-side commands record about the run, not part of it.
+            continue
         target = scratch / _renamed(relative, placement.media_names)
-        _copy(placement.source / relative, target, made)
+        storage.copy_file(placement.source / relative, target, made)
 
     # pig-run.json goes in last, and it's what a later organize looks for to know this
     # run is already placed. It's the bytes read while planning, so it isn't read twice.
     with open(scratch / RUN_FILE, "wb") as run_file:
         run_file.write(placement.run_file_bytes)
-        run_file.flush()
-        os.fsync(run_file.fileno())
-    # Each directory made, and each between it and the scratch directory, for the
-    # entries in it.
-    to_sync = {scratch}
-    for directory in made:
-        while directory != scratch:
-            to_sync.add(directory)
-            directory = directory.parent
-    for directory in to_sync:
-        storage.fsync_directory(directory)
-    scratch.rename(destination)
-    # The rename, and any directory made above the run on the way to it.
-    for directory in destination.parents:
-        storage.fsync_directory(directory)
-        if directory == root:
-            break
-
-
-def _files_in(run_directory: Path) -> list[PurePosixPath]:
-    """Every file in a run directory, relative to it, leaving out `.state/`, or
-    RunProblem if anything in it is a symbolic link.
-
-    `pigsty admit` refuses symbolic links, so there shouldn't be any, but one could
-    point anywhere on this machine. Listed with `os.scandir`, which says whether each
-    entry is a link, a file, or a directory without a separate question per entry.
-    """
-    found = []
-    waiting = [run_directory]
-    while waiting:
-        directory = waiting.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                path = Path(entry.path)
-                relative = PurePosixPath(path.relative_to(run_directory).as_posix())
-                if relative == PurePosixPath(storage.STATE_DIRECTORY):
-                    continue
-                if entry.is_symlink():
-                    raise RunProblem(
-                        f"{relative} is a symbolic link. Pig never makes one, so the "
-                        "run wasn't placed."
-                    )
-                if entry.is_dir(follow_symlinks=False):
-                    waiting.append(path)
-                else:
-                    found.append(relative)
-    return sorted(found)
+        storage.flush_and_fsync(run_file)
+    storage.rename_into_place(scratch, destination, made)
 
 
 def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixPath:
@@ -657,15 +605,3 @@ def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixP
     if is_media and parts[1] in media_names:
         return PurePosixPath(parts[0], media_names[parts[1]], *parts[2:])
     return relative
-
-
-def _copy(source: Path, target: Path, made: set[Path]) -> None:
-    """Copy one file and fsync it. `made` is the directories this run has already
-    created, so each is created once rather than once per file."""
-    if target.parent not in made:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        made.add(target.parent)
-    with open(source, "rb") as reading, open(target, "wb") as writing:
-        shutil.copyfileobj(reading, writing, 1024 * 1024)
-        writing.flush()
-        os.fsync(writing.fileno())

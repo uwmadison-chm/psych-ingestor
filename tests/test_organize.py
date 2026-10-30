@@ -253,6 +253,31 @@ def test_a_symlink_in_a_run_is_refused(pig: Pig, datastore: Path, tree: Path):
     assert [p.name for p in tree.iterdir()] == [LOCK_FILE]
 
 
+def test_a_symlinked_run_is_refused(pig: Pig, datastore: Path, tree: Path):
+    run_id = admitted_run(pig, datastore)
+    moved = datastore / "moved"
+    (datastore / "runs" / run_id).rename(moved)
+    (datastore / "runs" / run_id).symlink_to(moved)
+
+    report = organize("stroop", datastore, tree, PATTERN)
+
+    assert "symbolic link" in only_error(report)
+    assert report.placed == []
+
+
+def test_whats_recorded_about_a_run_isnt_placed_with_it(
+    pig: Pig, datastore: Path, tree: Path
+):
+    run_id = admitted_run(pig, datastore)
+    state = datastore / "runs" / run_id / ".state"
+    state.mkdir()
+    (state / "purged").write_text("{}\n")
+
+    organize("stroop", datastore, tree, PATTERN)
+
+    assert ".state" not in {p.name for p in (tree / PLACED).iterdir()}
+
+
 def test_a_run_without_pig_run_json_is_refused(pig: Pig, datastore: Path, tree: Path):
     run_id = admitted_run(pig, datastore)
     (datastore / "runs" / run_id / RUN_FILE).unlink()

@@ -154,6 +154,37 @@ def test_a_symbolic_link_in_incoming_is_refused(
     assert done(pig, run_id).is_dir()
 
 
+def test_a_symlinked_run_in_incoming_is_reported(
+    pig: Pig, client: TestClient, tmp_path: Path
+):
+    run_id = admitted_run(pig, tmp_path)
+    incoming = tmp_path / "incoming" / run_id
+    incoming.rename(tmp_path / "moved")
+    incoming.symlink_to(tmp_path / "moved")
+
+    report = purge.purge_runs("stroop", tmp_path, through(client))
+
+    assert "symbolic link" in report.problems[str(incoming)]
+    assert report.purged == []
+    assert done(pig, run_id).is_dir()
+
+
+def test_a_symlinked_admitted_run_is_reported(
+    pig: Pig, client: TestClient, tmp_path: Path
+):
+    run_id = admitted_run(pig, tmp_path)
+    admitted = tmp_path / "runs" / run_id
+    admitted.rename(tmp_path / "moved")
+    admitted.symlink_to(tmp_path / "moved")
+
+    report = purge.purge_runs("stroop", tmp_path, through(client))
+
+    assert "symbolic link" in report.problems[str(admitted)]
+    assert report.purged == []
+    assert done(pig, run_id).is_dir()
+    assert not (tmp_path / "moved" / ".state").exists()
+
+
 def test_an_unreachable_web_server_stops_the_task(pig: Pig, tmp_path: Path):
     first = admitted_run(pig, tmp_path)
     admitted_run(pig, tmp_path, {"participant_id": "PPT-2000", "session": "B"})
