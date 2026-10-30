@@ -42,7 +42,6 @@ from typing import Any, Literal
 
 from . import storage
 from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
-from .lock import LockHeld, hold_lock
 
 INCOMING_DIRECTORY = "incoming"
 RUNS_DIRECTORY = "runs"
@@ -146,7 +145,7 @@ def admit(
     storage.make_directories(runs)
 
     try:
-        with hold_lock(datastore / LOCK_FILE):
+        with storage.hold_lock(datastore / LOCK_FILE):
             admitted = set(storage.directories_in(runs))
             new = []
             for run_id in storage.directories_in(incoming):
@@ -173,7 +172,7 @@ def admit(
                         report.arriving.append(run_id)
                     else:
                         report.problems[str(incoming / run_id)] = outcome.why
-    except LockHeld:
+    except storage.LockHeld:
         report.problems[str(datastore)] = (
             "another pigsty admit is working on this task. Nothing was admitted. "
             "Run this again once it's finished."

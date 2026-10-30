@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from psych_ingestor import lock
-from psych_ingestor.lock import LockHeld, hold_lock
+from psych_ingestor import storage
+from psych_ingestor.storage import LockHeld, hold_lock
 
 
 def another_process_can_lock(path: Path) -> bool:
@@ -151,6 +151,6 @@ def test_a_share_that_cant_lock_is_an_error_not_a_busy_job(
 
     # And the failed attempt doesn't leave this process thinking it holds the lock.
     monkeypatch.undo()
-    assert lock._held == set()
+    assert storage._held_locks == set()
     with hold_lock(path):
         pass
