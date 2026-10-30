@@ -33,9 +33,7 @@ itself as runs are purged from the web server and drop out of the bucket.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
-import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -44,7 +42,6 @@ from typing import Any, Literal
 
 from . import storage
 from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
-from .lock import LockHeld, hold_lock
 
 INCOMING_DIRECTORY = "incoming"
 RUNS_DIRECTORY = "runs"
@@ -145,13 +142,13 @@ def admit(
             "is expected to put this task's runs."
         )
         return report
-    runs.mkdir(parents=True, exist_ok=True)
+    storage.make_directories(runs)
 
     try:
-        with hold_lock(datastore / LOCK_FILE):
-            admitted = set(_directories_in(runs))
+        with storage.hold_lock(datastore / LOCK_FILE):
+            admitted = set(storage.directories_in(runs))
             new = []
-            for run_id in _directories_in(incoming):
+            for run_id in storage.directories_in(incoming):
                 if run_id in admitted:
                     report.already_admitted += 1
                 else:
@@ -175,26 +172,12 @@ def admit(
                         report.arriving.append(run_id)
                     else:
                         report.problems[str(incoming / run_id)] = outcome.why
-    except LockHeld:
+    except storage.LockHeld:
         report.problems[str(datastore)] = (
             "another pigsty admit is working on this task. Nothing was admitted. "
             "Run this again once it's finished."
         )
     return report
-
-
-def _directories_in(directory: Path) -> list[str]:
-    """The names of the directories directly inside this one, leaving out dot-names.
-
-    `os.scandir` says whether each entry is a directory without a separate question per
-    entry, which matters on a network share. See issue #42.
-    """
-    with os.scandir(directory) as entries:
-        return sorted(
-            entry.name
-            for entry in entries
-            if not entry.name.startswith(".") and entry.is_dir()
-        )
 
 
 def _admit_one(
@@ -283,7 +266,12 @@ def _check_listing(source: Path, manifest: dict[str, Any]) -> None:
     """
     listed = {_listed_path(entry["path"]): entry for entry in manifest["files"]}
     # First, so that nothing below follows a symbolic link anywhere in the run.
-    present = _files_in(source)
+    try:
+        present = storage.files_in(source)
+    except storage.SymbolicLink as link:
+        raise RunProblem(
+            f"{link}. Pig never makes one, so nothing was admitted."
+        ) from None
     for relative, entry in listed.items():
         try:
             size = (source / relative).stat().st_size
@@ -324,40 +312,6 @@ def _listed_path(path: str) -> PurePosixPath:
     return relative
 
 
-def _files_in(run_directory: Path) -> list[PurePosixPath]:
-    """Every file in a run directory, relative to it, or RunProblem if anything in it,
-    the directory included, is a symbolic link.
-
-    Pig never writes a symbolic link, and one in a downloaded run could point anywhere
-    on this machine, so admit would copy whatever it pointed at into `runs/`. Listed
-    with `os.scandir`, which says whether each entry is a link, a file, or a directory
-    without a separate question per entry.
-    """
-    if run_directory.is_symlink():
-        raise RunProblem(
-            "it's a symbolic link, not a directory. Pig never makes one, so nothing "
-            "was admitted."
-        )
-    found = []
-    waiting = [run_directory]
-    while waiting:
-        directory = waiting.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                path = Path(entry.path)
-                relative = PurePosixPath(path.relative_to(run_directory).as_posix())
-                if entry.is_symlink():
-                    raise RunProblem(
-                        f"{relative} is a symbolic link. Pig never makes one, so "
-                        "nothing was admitted."
-                    )
-                if entry.is_dir(follow_symlinks=False):
-                    waiting.append(path)
-                else:
-                    found.append(relative)
-    return sorted(found)
-
-
 def _copy_into_place(source: Path, destination: Path, manifest: dict[str, Any]) -> None:
     """Copy a run's files into a scratch directory, checking each hash as it's copied,
     then write `pig-run.json` and rename the scratch directory into place.
@@ -365,14 +319,14 @@ def _copy_into_place(source: Path, destination: Path, manifest: dict[str, Any]) 
     Every file and directory is fsynced before the rename, and `runs/` after, so a run
     in `runs/` is on disk.
     """
-    scratch = _fresh_scratch(destination, SCRATCH_SUFFIX)
+    scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
     try:
         made = _copy_checked(source, scratch, manifest)
         _write_run_file(scratch, manifest, decrypted_with=[])
     except BaseException:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
-    _rename_into_place(scratch, destination, made)
+    storage.rename_into_place(scratch, destination, made)
 
 
 def _decrypt_into_place(
@@ -396,38 +350,37 @@ def _decrypt_into_place(
             "private_keys_dir to decrypt it with. Nothing was admitted."
         )
     kept = copy_ciphertext_to / destination.name if copy_ciphertext_to else None
-    if kept is not None:
-        kept.parent.mkdir(parents=True, exist_ok=True)
-    ciphertext = _fresh_scratch(kept or destination, CIPHERTEXT_SUFFIX)
+    ciphertext = storage.fresh_scratch(kept or destination, CIPHERTEXT_SUFFIX)
     scratch = None
     try:
         ciphertext_made = _copy_checked(source, ciphertext, manifest)
-        scratch = _fresh_scratch(destination, SCRATCH_SUFFIX)
+        scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
         made = {scratch}
         keyring = Keyring(private_keys)
         for entry in manifest["files"]:
             relative = _listed_path(entry["path"])
-            _make_parent(scratch / relative, made)
+            storage.make_parent(scratch / relative, made)
             _decrypt_file(ciphertext / relative, scratch / relative, relative, keyring)
         _write_run_file(scratch, manifest, decrypted_with=sorted(keyring.used))
 
         if kept is not None:
-            shutil.copyfile(
-                source / storage.MANIFEST_FILE, ciphertext / storage.MANIFEST_FILE
+            storage.copy_file(
+                source / storage.MANIFEST_FILE,
+                ciphertext / storage.MANIFEST_FILE,
+                ciphertext_made,
             )
-            _fsync_file(ciphertext / storage.MANIFEST_FILE)
             if kept.exists():
                 # Kept by an admit that was interrupted before the run itself was
                 # renamed into place. The same run ID is the same ciphertext.
                 shutil.rmtree(ciphertext)
             else:
-                _rename_into_place(ciphertext, kept, ciphertext_made)
+                storage.rename_into_place(ciphertext, kept, ciphertext_made)
     except BaseException:
         if scratch is not None:
             shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(ciphertext, ignore_errors=True)
         raise
-    _rename_into_place(scratch, destination, made)
+    storage.rename_into_place(scratch, destination, made)
     shutil.rmtree(ciphertext, ignore_errors=True)
 
 
@@ -442,8 +395,7 @@ def _decrypt_file(
             open(target, "w", encoding="utf-8") as writing,
         ):
             writing.writelines(_decrypt_line(line, keyring) for line in reading)
-            writing.flush()
-            os.fsync(writing.fileno())
+            storage.flush_and_fsync(writing)
         return
     if relative.parts[0] == storage.MEDIA_DIRECTORY and relative.suffix == (
         storage.PART_SUFFIX
@@ -457,8 +409,7 @@ def _decrypt_file(
             ) from None
         with open(target, "wb") as writing:
             writing.write(plaintext)
-            writing.flush()
-            os.fsync(writing.fileno())
+            storage.flush_and_fsync(writing)
         return
     raise RunProblem(
         f"{relative} isn't a file Pig writes, so there's no telling how to decrypt it. "
@@ -500,25 +451,13 @@ def _decrypt_line(line: str, keyring: Keyring) -> str:
     return storage.canonical({**stored, "data": data}) + "\n"
 
 
-def _fresh_scratch(destination: Path, suffix: str) -> Path:
-    """An empty scratch directory beside `destination`, named for it."""
-    scratch = destination.with_name(f".{destination.name}{suffix}")
-    try:
-        # Left by an admit that was interrupted. Ours by its name, never incoming's.
-        shutil.rmtree(scratch)
-    except FileNotFoundError:
-        pass
-    scratch.mkdir()
-    return scratch
-
-
 def _copy_checked(source: Path, scratch: Path, manifest: dict[str, Any]) -> set[Path]:
     """Copy every file the manifest lists into `scratch`, checking each hash as it's
-    copied. Returns the directories made, for `_rename_into_place` to fsync."""
+    copied. Returns the directories made, for `storage.rename_into_place` to fsync."""
     made = {scratch}
     for entry in manifest["files"]:
         relative = _listed_path(entry["path"])
-        digest = _copy_and_hash(source / relative, scratch / relative, made)
+        digest = storage.copy_file(source / relative, scratch / relative, made)
         if digest != entry["sha256"]:
             raise RunProblem(
                 f"{relative} doesn't match the manifest (sha256 {digest}; the "
@@ -544,44 +483,4 @@ def _write_run_file(
     with open(scratch / RUN_FILE, "w", encoding="utf-8") as written:
         json.dump(described, written, indent=2, ensure_ascii=False)
         written.write("\n")
-        written.flush()
-        os.fsync(written.fileno())
-
-
-def _rename_into_place(scratch: Path, destination: Path, made: set[Path]) -> None:
-    """Fsync every directory made, rename the scratch directory to its final name, and
-    fsync the directory it's in, so what's there is on disk."""
-    for directory in made:
-        storage.fsync_directory(directory)
-    scratch.rename(destination)
-    storage.fsync_directory(destination.parent)
-
-
-def _fsync_file(path: Path) -> None:
-    with open(path, "rb") as handle:
-        os.fsync(handle.fileno())
-
-
-def _make_parent(target: Path, made: set[Path]) -> None:
-    """Make a file's directory if it isn't made yet, and remember each directory between
-    it and the scratch directory, for `_rename_into_place` to fsync."""
-    if target.parent not in made:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        directory = target.parent
-        while directory not in made:
-            made.add(directory)
-            directory = directory.parent
-
-
-def _copy_and_hash(source: Path, target: Path, made: set[Path]) -> str:
-    """Copy one file and return its sha256. `made` is the directories already created,
-    so each is created once rather than once per file."""
-    _make_parent(target, made)
-    digest = hashlib.sha256()
-    with open(source, "rb") as reading, open(target, "wb") as writing:
-        while chunk := reading.read(1024 * 1024):
-            digest.update(chunk)
-            writing.write(chunk)
-        writing.flush()
-        os.fsync(writing.fileno())
-    return digest.hexdigest()
+        storage.flush_and_fsync(written)

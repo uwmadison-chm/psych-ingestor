@@ -374,7 +374,7 @@ def task_files(directory: Path) -> list[Path]:
 def load_config(path: Path) -> Config:
     """Read and check a configuration file, and the files it includes, or raise
     ConfigurationError saying why."""
-    raw = _read_toml(path)
+    raw = read_toml(path)
     try:
         config = Config.model_validate(raw)
     except Exception as error:
@@ -433,7 +433,7 @@ def _included_files(path: Path, include: list[Path]) -> list[Path]:
 
 def _load_task_file(path: Path) -> TaskFile:
     """Read and check one included file, and find the keys its tasks use."""
-    raw = _read_toml(path)
+    raw = read_toml(path)
     try:
         included = TaskFile.model_validate(raw)
     except Exception as error:
@@ -503,7 +503,7 @@ def wrong_user(path: Path, run_as: str | None, command: str) -> str | None:
     )
 
 
-def _read_toml(path: Path) -> dict[str, Any]:
+def read_toml(path: Path) -> dict[str, Any]:
     try:
         text = path.read_bytes()
     except OSError as error:
