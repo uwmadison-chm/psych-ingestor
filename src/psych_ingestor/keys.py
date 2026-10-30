@@ -55,7 +55,12 @@ from cryptography.hazmat.primitives.serialization import (
 from pyrage import x25519
 
 from . import bech32, storage
-from .config import SAFE_VALUE_EXPLANATION, ConfigurationError, is_safe_value
+from .config import (
+    SAFE_VALUE_EXPLANATION,
+    ConfigurationError,
+    is_safe_value,
+    os_error_reason,
+)
 
 KEY_SUFFIX = ".key"
 
@@ -98,7 +103,11 @@ def read_public_keys(path: Path) -> dict[str, str]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+    except OSError as error:
+        raise ConfigurationError(
+            f"Can't read {path}: {os_error_reason(error, path)}."
+        ) from error
+    except UnicodeDecodeError as error:
         raise ConfigurationError(f"Can't read {path}: {error}") from error
 
     keys: dict[str, str] = {}
@@ -298,7 +307,11 @@ def _read_key_file(name: str, path: Path) -> PrivateKey | SigningKey:
     """A key file of either kind, told apart by the prefix on its one key line."""
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+    except OSError as error:
+        raise ConfigurationError(
+            f"Can't read {path}: {os_error_reason(error, path)}."
+        ) from error
+    except UnicodeDecodeError as error:
         raise ConfigurationError(f"Can't read {path}: {error}") from error
     lines = [
         line.strip()

@@ -34,7 +34,7 @@ from typing import Any, BinaryIO, Literal
 
 from . import storage
 from .admit import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, RUNS_DIRECTORY
-from .config import SAFE_VALUE_EXPLANATION, is_safe_value
+from .config import SAFE_VALUE_EXPLANATION, is_safe_value, os_error_reason
 from .sty import BUILT_IN_NAMES, PLACEHOLDER
 
 # What a run is copied into before it's renamed into place, so a tree never holds half
@@ -207,7 +207,7 @@ def _organize_one(placement: Placement, root: Path, dry_run: bool) -> Outcome:
     except RunProblem as problem:
         return Outcome("not placed", str(problem))
     except OSError as error:
-        return Outcome("not placed", f"couldn't copy it: {error}")
+        return Outcome("not placed", f"couldn't copy it: {os_error_reason(error)}.")
     return Outcome("placed")
 
 

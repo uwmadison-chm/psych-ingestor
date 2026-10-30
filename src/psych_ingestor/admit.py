@@ -41,6 +41,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from . import storage
+from .config import os_error_reason
 from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
 
 INCOMING_DIRECTORY = "incoming"
@@ -209,7 +210,7 @@ def _admit_one(
             f"unexpected value in it ({error!r}).",
         )
     except OSError as error:
-        return Outcome("problem", f"couldn't admit it: {error}")
+        return Outcome("problem", f"couldn't admit it: {os_error_reason(error)}.")
     return Outcome("admitted")
 
 
