@@ -29,7 +29,7 @@ from support import (
     time_limit,
 )
 
-from psych_ingestor import media, service, signing, sweep
+from psych_ingestor import service, signing, sweep
 
 # ----------------------------------------------------------------- what a body holds
 
@@ -64,16 +64,9 @@ def json_values(text: st.SearchStrategy[str], floats: st.SearchStrategy[float]):
 # - Half of a UTF-16 pair is a 500 (#106). Then `text` can be `any_text`.
 # - NaN and the infinities are stored, as lines strict JSON readers refuse (#107). Then
 #   `floats` can be `any_float`.
-# - A media ID beyond SQLite's integers, which go to 2**63 - 1, is a 500. Then
-#   `media_ids` can be `st.integers()`.
-# - A finish that claims more parts than a media item can have takes as long as the
-#   number is big, holding the database's write lock all the while. Then
-#   `part_counts` can be `st.integers()`.
 text = st.text(max_size=20)
 floats = st.floats(allow_nan=False, allow_infinity=False)
 any_json = json_values(text, floats)
-media_ids = st.integers(min_value=-(2**63), max_value=2**63 - 1)
-part_counts = st.integers(max_value=2 * media.MAX_PART)
 
 # What a request with the right outline holds, so most examples get past the first
 # check and on to the ones after it.
@@ -145,7 +138,7 @@ def test_starting_a_media_item(task_code: str, body: Any):
 
 
 @given(
-    media_id=media_ids,
+    media_id=st.integers(),
     part=st.integers(),
     chunks=st.lists(st.binary(max_size=600), max_size=4),
     content_length=st.none() | st.integers(min_value=0),
@@ -166,8 +159,8 @@ def test_sending_a_part(
 
 
 @given(
-    media_id=media_ids,
-    body=any_json | st.fixed_dictionaries({"parts": part_counts | any_json}),
+    media_id=st.integers(),
+    body=any_json | st.fixed_dictionaries({"parts": st.integers() | any_json}),
 )
 def test_finishing_a_media_item(media_id: int, body: Any):
     with fresh_pig() as pig:
@@ -176,6 +169,42 @@ def test_finishing_a_media_item(media_id: int, body: Any):
         check_answer(
             *answer(lambda: pig.finish_media("interview", run_id, media_id, body))
         )
+
+
+@given(media_id=st.integers(min_value=2**63) | st.integers(max_value=-(2**63) - 1))
+def test_a_media_id_too_big_for_the_database(media_id: int):
+    """A media ID comes from the URL, and FastAPI reads it as a whole number of any
+    size. SQLite's integers stop at 2**63 - 1, and asking it about a bigger one raises
+    rather than finding nothing, so Pig doesn't ask."""
+    with fresh_pig() as pig:
+        run_id = started(pig, "interview")
+        check_answer(
+            *answer(lambda: pig.finish_media("interview", run_id, media_id, {}))
+        )
+        check_answer(
+            *answer(
+                lambda: send_part(pig, "interview", run_id, media_id, 1, [b"x"], None)
+            )
+        )
+
+
+def test_a_huge_part_count_is_refused_at_once():
+    """No media item can have more than `MAX_PART` parts, so a finish that says it has
+    is refused straight away, rather than after working out which of a trillion parts
+    are missing, under the database's write lock.
+
+    One example rather than many: if this ever fails again, each would take as long as
+    the time limit to."""
+    with fresh_pig() as pig:
+        run_id = started(pig, "interview")
+        pig.start_media("interview", run_id, {"event_id": "1", "data": {}})
+        body = {"parts": 10**12}
+        with time_limit(seconds=1):
+            status, reply = answer(
+                lambda: pig.finish_media("interview", run_id, 1, body)
+            )
+        check_answer(status, reply)
+        assert status == 422, reply
 
 
 @given(
@@ -249,46 +278,6 @@ def test_nan_and_infinity_are_refused(data: dict[str, Any], name: str, value: fl
         body = {"events": {"1": {"data": {**data, name: value}}}}
         check_answer(*answer(lambda: send_events(pig, "stroop", run_id, body)))
         check_stored_lines(pig)
-
-
-@pytest.mark.xfail(
-    strict=True, raises=OverflowError, reason="a media ID too big for SQLite is a 500"
-)
-@known
-@given(media_id=st.integers(min_value=2**63) | st.integers(max_value=-(2**63) - 1))
-def test_any_media_id(media_id: int):
-    """A media ID comes from the URL, and FastAPI reads it as a whole number of any
-    size."""
-    with fresh_pig() as pig:
-        run_id = started(pig, "interview")
-        check_answer(
-            *answer(lambda: pig.finish_media("interview", run_id, media_id, {}))
-        )
-        check_answer(
-            *answer(
-                lambda: send_part(pig, "interview", run_id, media_id, 1, [b"x"], None)
-            )
-        )
-
-
-@pytest.mark.xfail(
-    strict=True, raises=TimeoutError, reason="a huge part count holds the write lock"
-)
-def test_a_huge_part_count_is_refused_at_once():
-    """No media item can have more than `MAX_PART` parts, so a finish that says it has
-    can be refused straight away. Today Pig lists every part it's missing first, all
-    under the database's write lock, which for a trillion parts is hours and more
-    memory than the machine has, and no other request can store anything meanwhile.
-
-    One example rather than many: each takes as long as the time limit to fail."""
-    with fresh_pig() as pig:
-        run_id = started(pig, "interview")
-        pig.start_media("interview", run_id, {"event_id": "1", "data": {}})
-        body = {"parts": 10**12}
-        with time_limit(seconds=1):
-            check_answer(
-                *answer(lambda: pig.finish_media("interview", run_id, 1, body))
-            )
 
 
 # --------------------------------------------------------------------------- helpers

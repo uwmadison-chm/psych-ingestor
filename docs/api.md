@@ -429,8 +429,8 @@ ID, same `data` gets `200 OK` and the same media ID back. Same event ID with dif
 
 The body is the bytes, and nothing else: no JSON around them, no base64, no form
 encoding. Send whatever your recorder hands you, as it hands it to you. `part` is a
-number counting from 1, and it's required even if there's only one part. Parts can
-arrive in any order.
+number counting from 1, up to 999,999, and it's required even if there's only one part.
+Parts can arrive in any order.
 
 ```javascript
 await fetch(`${PIG}/v1/task/${TASK}/run/${runId}/media/${mediaId}/${part}`, {
