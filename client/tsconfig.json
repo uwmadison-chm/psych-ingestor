@@ -14,5 +14,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "benchmarks"]
+  "include": ["src", "test", "fuzz", "benchmarks"]
 }

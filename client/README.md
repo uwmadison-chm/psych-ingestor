@@ -349,6 +349,7 @@ strict Content Security Policy may block that. This isn't the usual way.
 npm install
 npm run check        # type-check
 npm test             # the queue and sender, in Node, against a pretend Pig
+npm run fuzz         # the same, with generated sequences of events; slower, so CI skips it
 npm run build        # dist/
 npx playwright install chromium   # once, for the browser tests
 npm run e2e          # a real browser against a real `pig serve`

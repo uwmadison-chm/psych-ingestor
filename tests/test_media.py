@@ -297,6 +297,29 @@ def test_an_unknown_media_item_is_a_404(client: TestClient):
     assert finish(client, run_id, 7, 1).status_code == 404
 
 
+def test_a_media_id_pig_would_never_hand_out_is_a_404(client: TestClient):
+    """Including one too big for the database's integers, which FastAPI reads from the
+    URL all the same, and which used to be a 500."""
+    run_id = start_run(client)
+    start_media(client, run_id)
+    for media_id in (0, -1, media.MAX_MEDIA_ID + 1, 2**63, 10**30):
+        assert put_part(client, run_id, media_id, 1, b"x").status_code == 404, media_id
+        assert finish(client, run_id, media_id, 1).status_code == 404, media_id
+
+
+def test_a_finish_claiming_more_parts_than_an_item_can_have_is_refused(
+    client: TestClient,
+):
+    """Refused for the count itself, before Pig works out which of that many parts it
+    doesn't have, which for a big enough count used to take longer than anyone would
+    wait, under the database's write lock."""
+    run_id = start_run(client)
+    start_media(client, run_id)
+    refused = finish(client, run_id, 1, media.MAX_PART + 1)
+    assert refused.status_code == 422
+    assert f"at most {media.MAX_PART} parts" in refused.json()["message"]
+
+
 def test_a_part_bigger_than_the_task_allows_is_refused_by_content_length(
     pig: Pig, client: TestClient
 ):

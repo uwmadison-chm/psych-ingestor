@@ -40,6 +40,7 @@
     "build": "node scripts/build.js && tsc -p tsconfig.types.json",
     "check": "tsc -p .",
     "test": "node --test test/*.test.ts",
+    "fuzz": "node --test fuzz/*.test.ts",
     "e2e": "npm run build && playwright test",
     "benchmark": "node scripts/build-benchmark.js",
     "prepublishOnly": "npm run check && npm test && npm run build"
@@ -48,6 +49,7 @@
     "@playwright/test": "1.56.1",
     "@types/node": "22.20.5",
     "fake-indexeddb": "6.2.5",
+    "fast-check": "4.10.2",
     "typescript": "5.9.3",
     "vite": "7.3.6"
   },

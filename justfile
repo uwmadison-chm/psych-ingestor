@@ -5,16 +5,26 @@ sync:
     uv sync
 
 format:
-    ruff format src tests
-    ruff check --fix src tests
+    ruff format src tests fuzz
+    ruff check --fix src tests fuzz
 
 # Lint and typecheck.
 check:
-    ruff check src tests
+    ruff check src tests fuzz
     ty check src
 
 test:
     pytest -q -n auto # one worker per core, with pytest-xdist
+
+# The property tests, for the server and the client: thousands of generated requests
+# and sequences of events, rather than the few `just test` spells out. They take a
+# minute or so, which is why CI doesn't run them. Run them before a release, and after
+# any change to how Pig stores or sends anything. Arguments go to pytest, like
+# `just fuzz --hypothesis-profile=long` for a longer look; for the client's, set
+# FUZZ_RUNS, like `FUZZ_RUNS=2000 just fuzz`.
+fuzz *ARGS:
+    pytest -q -n auto fuzz {{ARGS}}
+    cd client && npm run fuzz
 
 # Run the service against ./local/pig.toml.
 serve:

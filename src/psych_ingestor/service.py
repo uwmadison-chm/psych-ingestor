@@ -666,7 +666,12 @@ class Pig:
     ) -> tuple[TaskDefinition, Run, MediaItem]:
         task = self._media_task(task_code)
         run = self._run_for_task(task_code, run_id)
-        item = media.get(self.connection, run_id, media_id)
+        # The media ID is from the URL, which FastAPI reads as a whole number of any
+        # size. One Pig would never hand out has no item, and asking the database
+        # about one too big for its integers raises rather than finding nothing.
+        item = None
+        if 1 <= media_id <= media.MAX_MEDIA_ID:
+            item = media.get(self.connection, run_id, media_id)
         if item is None:
             raise RequestProblem(
                 404, "There's no media item with that ID for this run."
@@ -897,6 +902,14 @@ def _as_declared_parts(submitted: Any) -> int:
     if isinstance(parts, bool) or not isinstance(parts, int) or parts < 1:
         raise RequestProblem(
             422, f"'parts' has to be a whole number, 1 or more. {expected}"
+        )
+    # Refused here, before anything counts up to it: checking which of a billion
+    # parts are missing would take minutes, under the database's write lock.
+    if parts > media.MAX_PART:
+        raise RequestProblem(
+            422,
+            f"'parts' is {parts}, and a media item can have at most {media.MAX_PART} "
+            f"parts. {expected}",
         )
     return parts
 
