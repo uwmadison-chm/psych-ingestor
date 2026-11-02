@@ -34,6 +34,8 @@ Read what the task at hand calls for rather than all of it.
 | [docs/design_assumptions.md](docs/design_assumptions.md) | Before any design or implementation decision. These constraints are what to argue from when a choice is contested. |
 | [docs/definitions.md](docs/definitions.md) | Any time you use the words task, session, run, dataset, event, or participant. Pig follows BIDS: a participant comes in for a *session*, does a *task*, and each time they do it is a *run*. "Session" never means the HTTP thing. |
 | [docs/api.md](docs/api.md) | Working on endpoints, request/response shapes, or the client side of a task. |
+| [docs/api.yaml](docs/api.yaml) | Changing the shape of any request or reply. It's the OpenAPI description of every one, and has to change with `api.md` and the code. |
+| [docs/protocol.md](docs/protocol.md) | Working on what the server or the client does over time: run states, expiry, what's guaranteed about storing, retries, races. Also before writing tests for any of those. |
 | [docs/configuration.md](docs/configuration.md) | Working on task definitions, the config file, storage paths, or the CLI. |
 | [docs/organizing.md](docs/organizing.md) | Working on `pigsty organize`, `pigsty.toml`, or anything on the secure side. |
 | [docs/security.md](docs/security.md) | Working on CORS, signing, or anything about what Pig does and doesn't defend against. |

@@ -1,0 +1,948 @@
+openapi: 3.1.0
+
+info:
+  title: Psych Ingestor (Pig)
+  version: "1"
+  summary: Every request a task, or the secure side, makes to Pig, and every reply.
+  description: |-
+    The shapes of Pig's API, for anyone writing a client, a server, or tests against either. What the shapes mean over time (a run's states, what Pig promises about storing, and what can happen at once) is in [protocol.md](protocol.md). The explanation for people writing tasks is [api.md](api.md).
+
+    **Status: draft.** This describes the server on `main` on 1 November 2026. Where an open issue will change a shape, the description names it.
+
+    Every request:
+
+    - A body is JSON, in UTF-8, unless the request says otherwise. UTF-8 is decided (#107); today the server also takes UTF-16 and UTF-32, and `NaN` and the infinities, which it will refuse.
+    - A body is an object with named fields, never the parameters or events themselves, so there's room for a new field without taking a name a task might want. A field Pig doesn't expect is refused with `422`, except in the purge request, which ignores one today (#114).
+    - Any origin may make any of these requests. See [security.md](security.md).
+
+    Every reply:
+
+    - A refusal of the whole request is `{"message": "..."}`, written for a person. Some come back in FastAPI's `{"detail": [...]}` shape instead: malformed JSON, a part number that isn't a whole number, an unknown URL, a wrong method. Clients should never see that shape; it's a bug (#64).
+    - A reply about particular events or parts has `status`, and refusals of those events or parts are in `errors`, each with `message` and `can_retry`.
+    - When more than one thing is wrong with a request, which refusal comes back isn't specified.
+    - A `5xx`, or no reply at all, means try again later. Pig doesn't answer `5xx` for anything wrong with what a client sent.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: https://pig.yourlab.edu
+    description: Your lab's Pig. Every example uses this address.
+
+security: []
+
+tags:
+  - name: Tasks
+    description: A task's settings.
+  - name: Runs
+    description: Starting a run, sending events, finishing, checking on it.
+  - name: Media
+    description: Audio, video and other files, for tasks with `media = true`.
+  - name: Secure side
+    description: Requests `pigsty` makes. A task never makes these.
+  - name: Operations
+    description: For whatever watches the service.
+
+paths:
+  /v1/task/{task_code}:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+    get:
+      operationId: getTaskSettings
+      tags: [Tasks]
+      summary: Read a task's settings
+      description: |-
+        What a task needs to know before it starts a run: which parameters to expect, how big an event can be, whether it takes media, encrypts, or checks signatures. Nothing in it is secret; a task could learn all of it by trying. A closed task gives the same answer with `open` false, because runs already going still need the rest.
+      responses:
+        "200":
+          description: The task's settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskSettings"
+              example:
+                task_code: stroop
+                open: true
+                parameters: [participant_id, session]
+                path_parameters: [participant_id, session]
+                expires_after_sec: 86400
+                max_event_size_bytes: 1048576
+                media: null
+                encryption: null
+                parameter_signing: null
+        "404":
+          $ref: "#/components/responses/NoSuchTask"
+
+  /v1/task/{task_code}/run:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+    post:
+      operationId: startRun
+      tags: [Runs]
+      summary: Start a run
+      description: |-
+        Starts a new run with the parameters from the participant's link, and gives back its run ID and run number. Every start makes a new run, including a start sent again after a lost reply; making that safe to retry is #109.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartRequest"
+            examples:
+              plain:
+                summary: A task that doesn't check signatures
+                value:
+                  parameters:
+                    participant_id: "10351"
+                    session: baseline
+              signed:
+                summary: A task that checks signatures
+                value:
+                  parameters:
+                    id: "10235"
+                    event: base
+                    modules: "questions:1,2,3|reels:03,22"
+                  signature: lucida/signing.PoJp6ymhcyAmkJgx8Ga1cZUbJ9qdTjwyyb1m2or4BQhWtFaX8qOMPnfxfteELi6IovnZG3CBBd2VezRoZJ31NA
+      responses:
+        "201":
+          description: The run has started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartedRun"
+              example:
+                run_id: 9f1c4a72-3e58-4b0d-8a16-2d7e5c93f4b1
+                run_number: 2
+        "403":
+          description: The task checks signatures, and this one is missing, can't be read, is by a key the task doesn't accept, or doesn't match the values. Retrying won't help.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "404":
+          $ref: "#/components/responses/NoSuchTask"
+        "409":
+          description: The task is closed to new runs, or this run key already has 9,999 runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "422":
+          description: The body isn't shaped like the example, or a parameter the task needs is missing or has a value Pig can't use.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "503":
+          description: Pig couldn't get a run number because of other starts at the same moment. Try again.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+
+  /v1/task/{task_code}/run/{run_id}:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+    get:
+      operationId: getRun
+      tags: [Runs]
+      summary: Check on a run
+      responses:
+        "200":
+          description: Where the run stands.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDescription"
+              example:
+                status: in_progress
+                stored: ["1", "2", "3"]
+        "404":
+          $ref: "#/components/responses/NoSuchRun"
+    post:
+      operationId: sendEvents
+      tags: [Runs]
+      summary: Send events
+      description: |-
+        Stores events in the run. Each event is checked on its own: one refused event doesn't stop the others in the request from being stored. Sending the same event again is safe; see protocol.md for what counts as the same.
+
+        The web server in front of Pig limits the size of a whole request, and a request over it gets a `413` or a `5xx` that Pig didn't write.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventsRequest"
+            example:
+              events:
+                "1":
+                  data:
+                    type: task_start
+                    time: "2026-07-26T18:25:43.511-05:00"
+                "2":
+                  data:
+                    type: trial
+                    time: "2026-07-26T18:25:47.204-05:00"
+                    word: GREEN
+                    ink: red
+                    rt: 843
+                    correct: true
+      responses:
+        "201":
+          description: Every event in the request is stored, and this request stored at least one of them.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+              example:
+                status: in_progress
+                stored: ["1", "2"]
+        "200":
+          description: Every event in the request is stored, and Pig already had all of them. A successful retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+              example:
+                status: in_progress
+                stored: ["1", "2"]
+        "404":
+          $ref: "#/components/responses/NoSuchRun"
+        "409":
+          description: The run has closed, so none of the events were stored. Each is in `errors` with `can_retry` true; send them to a new run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+              example:
+                status: expired
+                stored: ["1", "2", "3"]
+                errors:
+                  "4":
+                    message: This run has expired, so it isn't taking events. Start a new run for this participant and send these events to it.
+                    can_retry: true
+        "422":
+          description: |-
+            Either the body isn't shaped like the example, and nothing was stored (a `Refusal`), or at least one event was refused (a `RunReply`). In the second case **the other events in the request were stored**, and `stored` says which. Whether a partly stored request should be `422` at all is #113.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunReply"
+                  - $ref: "#/components/schemas/Refusal"
+              example:
+                status: in_progress
+                stored: ["1", "2"]
+                errors:
+                  "2":
+                    message: This run already has a different event with the ID '2'. Pig kept the one it had. Two events were given the same ID, which is a bug in the task rather than a network problem — sending it again won't help.
+                    can_retry: false
+
+  /v1/task/{task_code}/run/{run_id}/finalize:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: finalizeRun
+      tags: [Runs]
+      summary: Finish a run
+      description: |-
+        Closes the run to further data, with the task's word that it sent everything. No body. Finalizing a run that's already finalized is a retry, and answers `200` with the run's status as it is now.
+      responses:
+        "200":
+          description: The run is finalized. `finalizing` and `complete` both mean the task is done.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+              example:
+                status: finalizing
+                stored: ["1", "2", "3"]
+        "404":
+          $ref: "#/components/responses/NoSuchRun"
+        "409":
+          description: The run expired before it was finalized. Everything it received is saved. The refusal is in `errors` under `run`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+              example:
+                status: expired
+                stored: ["1", "2", "3"]
+                errors:
+                  run:
+                    message: This run has expired, so there's nothing to finalize. Everything it received is saved. If the participant is still working, start a new run.
+                    can_retry: false
+
+  /v1/task/{task_code}/run/{run_id}/media:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: startMedia
+      tags: [Media]
+      summary: Start a media item
+      description: |-
+        Stores an ordinary event, under every rule an event has, and gives it a media ID. The event's stored line carries the media ID in its `metadata`. Sending the same start again is safe, and gives back the same media ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaStartRequest"
+            example:
+              event_id: prompt3_audio
+              data:
+                content_type: audio/webm;codecs=opus
+                prompt: 3
+      responses:
+        "201":
+          description: The item has started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaStarted"
+              example:
+                media_id: 1
+                max_part_size: 8388608
+        "200":
+          description: Pig already had this start, with the same `data`. A successful retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaStarted"
+              example:
+                media_id: 1
+                max_part_size: 8388608
+        "404":
+          description: The task doesn't take media, or there's no such run for this task.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "409":
+          description: The run has closed. The event is in `errors`, keyed by its event ID, with `can_retry` true.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunReply"
+        "422":
+          description: |-
+            Either the body isn't shaped like the example (a `Refusal`), or the event was refused (a `RunReply`, with the event in `errors` and `can_retry` false): its ID is too long or already used, it's too big, it isn't encrypted for an encrypted run, or the run has as many media items as media IDs go.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/RunReply"
+                  - $ref: "#/components/schemas/Refusal"
+
+  /v1/task/{task_code}/run/{run_id}/media/{media_id}/{part}:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+      - $ref: "#/components/parameters/MediaId"
+      - name: part
+        in: path
+        required: true
+        description: The part's number, counting from 1. Required even if there's only one part.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 999999
+    put:
+      operationId: sendPart
+      tags: [Media]
+      summary: Send one part of a media item
+      description: |-
+        The body is the part's bytes and nothing else: no JSON, no base64, no form encoding. Pig ignores `Content-Type`. Parts can arrive in any order. Sending the same part again with the same bytes is safe.
+
+        For an encrypted run, each part is an age file of its own, and `max_part_size_bytes` applies to the encrypted bytes.
+      requestBody:
+        required: true
+        content:
+          "*/*":
+            schema: {}
+      responses:
+        "201":
+          description: The part is stored, and this request stored it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+              example:
+                status: in_progress
+                media:
+                  media_id: 1
+                  event_id: prompt3_audio
+                  stored: [1, 2, 3, 4, 5]
+                  finished: false
+        "200":
+          description: Pig already had this part, byte for byte. A successful retry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+        "404":
+          description: The task doesn't take media, or there's no such run for this task, or no such media item in the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "409":
+          description: The run has closed (`can_retry` true), or the item is already finished (`can_retry` false). The refusal is in `errors`, keyed by the part number.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+        "413":
+          description: The part is bigger than the task allows. Send smaller parts. The refusal is in `errors`, keyed by the part number.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+        "422":
+          description: The part number is out of range, the part isn't encrypted for an encrypted run, or the item already has different bytes under this number. Pig kept what it had. The refusal is in `errors`, keyed by the part number, with `can_retry` false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+
+  /v1/task/{task_code}/run/{run_id}/media/{media_id}/finish:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+      - $ref: "#/components/parameters/MediaId"
+    post:
+      operationId: finishMedia
+      tags: [Media]
+      summary: Finish a media item
+      description: |-
+        The task says how many parts it sent. If Pig holds exactly parts 1 through that number, the item is finished and takes no more parts. Finishing again with the same count is a retry; with a different count, it's refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FinishRequest"
+            example:
+              parts: 3
+      responses:
+        "200":
+          description: The item is finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+              example:
+                status: in_progress
+                media:
+                  media_id: 1
+                  event_id: prompt3_audio
+                  stored: [1, 2, 3]
+                  finished: true
+                  parts: 3
+        "404":
+          description: The task doesn't take media, or there's no such run for this task, or no such media item in the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "409":
+          description: The run has closed, so the item can't be finished. Every part is kept, and the item is recorded as not finished. The refusal is in `errors` under `media`, with `can_retry` false.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaReply"
+        "422":
+          description: |-
+            Either the body isn't shaped like the example (a `Refusal`), or the count doesn't match (a `MediaReply`, with the refusal in `errors` under `media`): parts are missing (`can_retry` true: send them, then finish again), Pig holds parts beyond the count (`can_retry` false), or the item was already finished with a different count (`can_retry` false).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MediaReply"
+                  - $ref: "#/components/schemas/Refusal"
+
+  /v1/task/{task_code}/run/{run_id}/purge:
+    parameters:
+      - $ref: "#/components/parameters/TaskCode"
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: purgeRun
+      tags: [Secure side]
+      summary: Delete a finished run from the web server
+      description: |-
+        Made by `pigsty purge`, never by a task. Deletes the run's files from the web server if the secure side's copy matches it exactly, file for file. There's no key: computing a purge hash takes the file's bytes, and anyone with those already has what purging deletes. See [api.md](api.md#purging-a-finished-run). This works for a run whose task has since been taken out of the configuration.
+
+        A purge hash is the sha256, in hex, of the text `pig-purge:` followed by the file's bytes. It isn't the sha256 the manifest lists, so a manifest can't be used to purge a run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurgeRequest"
+            example:
+              purge_hashes:
+                events.jsonl: 3b1f5e0c8a9d7b6e4f2a1c3d5e7f9a0b2c4d6e8f0a1b3c5d7e9f1a2b4c6d8e0f
+                manifest.json: 9c04d2e6f8a0b1c3d5e7f9a1b3c5d7e9f0a2b4c6d8e0f1a3b5c7d9e1f2a4b6c8
+                media/00001/000001.part: e7a2c4d6e8f0a1b3c5d7e9f1a2b4c6d8e0f1a3b5c7d9e0f2a4b6c8d0e1f3a5b7
+      responses:
+        "200":
+          description: The run is gone from the web server. Also the answer for a run that was already purged, so a retry isn't an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Purged"
+        "404":
+          $ref: "#/components/responses/NoSuchRun"
+        "409":
+          description: Nothing was purged. The run isn't finished yet, or the hashes don't match (the message says which files differ), or the web server's copy is somewhere Pig doesn't expect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+        "422":
+          description: The body isn't shaped like the example.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Refusal"
+
+  /health:
+    get:
+      operationId: getHealth
+      tags: [Operations]
+      summary: Is anything wrong right now
+      description: |-
+        Not under `/v1/`: whatever watches the service shouldn't have to know about API versions. The status code is the answer, and the body says where to look. See [deployment.md](deployment.md).
+      responses:
+        "200":
+          description: Nothing is wrong.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: Something is wrong. `checks` and `tasks` say what.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+components:
+  parameters:
+    TaskCode:
+      name: task_code
+      in: path
+      required: true
+      description: The task's code, from the configuration. Unique across the deployment, and lowercase. A code no task has gets `404`.
+      schema:
+        type: string
+        pattern: "^[a-z0-9_][a-z0-9_-]{0,63}$"
+      example: stroop
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      description: The run ID from the reply to the start. A real run ID with another task's code gets `404`, the same as one that doesn't exist.
+      schema:
+        type: string
+        format: uuid
+      example: 9f1c4a72-3e58-4b0d-8a16-2d7e5c93f4b1
+    MediaId:
+      name: media_id
+      in: path
+      required: true
+      description: The media ID from the reply to the media start.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 99999
+      example: 1
+
+  responses:
+    NoSuchTask:
+      description: There's no task with this code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Refusal"
+          example:
+            message: There's no task called 'stroop'.
+    NoSuchRun:
+      description: There's no task with this code, or no run with this ID for this task.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Refusal"
+          example:
+            message: There's no run with that ID for this task.
+
+  schemas:
+    Refusal:
+      type: object
+      description: |-
+        A refusal of the whole request. Nothing was stored. #64 plans for every non-2xx body to have a `message`, so `RunReply` and `MediaReply` refusals will gain one too.
+      required: [message]
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          description: What happened and what to do, written for a person.
+
+    Problem:
+      type: object
+      description: Why one event, part, or item wasn't taken.
+      required: [message, can_retry]
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+          description: What happened and what to do, written for a person.
+        can_retry:
+          type: boolean
+          description: |-
+            Whether the event or part itself is fine. `false`: something about it is wrong, and sending it again won't help. `true`: it's fine, but this run wouldn't take it now; usually the run has closed, and the message says to send it to a new run.
+
+    RunStatus:
+      type: string
+      description: |-
+        Where a run stands. `in_progress`: taking events. `finalizing`: the task finalized it and Pig is finishing up. `complete`: Pig is finished with it. `expired`: it was open as long as the task allows, and Pig closed it. See protocol.md for how a run moves between them.
+      enum: [in_progress, finalizing, complete, expired]
+
+    TaskSettings:
+      type: object
+      required: [task_code, open, parameters, path_parameters, expires_after_sec, max_event_size_bytes, media, encryption, parameter_signing]
+      additionalProperties: false
+      properties:
+        task_code:
+          type: string
+        open:
+          type: boolean
+          description: Whether Pig will start new runs for this task. Closing a task refuses new runs only.
+        parameters:
+          type: array
+          items:
+            type: string
+          description: The parameters a run needs.
+        path_parameters:
+          type: array
+          items:
+            type: string
+          description: |-
+            The ones whose values have to be letters, digits, underscore and dash (not first), 1 to 64 characters, because they may end up in file names. The rest are text: anything up to 2,048 characters without control characters.
+        expires_after_sec:
+          type: integer
+          description: How long a run may stay open, in seconds, counted from when it started.
+        max_event_size_bytes:
+          type: integer
+          description: The biggest event Pig will store, measured as the canonical JSON of the event's `event_id` and `data`, in UTF-8. See protocol.md.
+        media:
+          description: "`null` if the task can't send media."
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [max_part_size_bytes]
+              additionalProperties: false
+              properties:
+                max_part_size_bytes:
+                  type: integer
+                  description: The biggest media part Pig will store.
+        encryption:
+          description: "`null` if the task doesn't encrypt."
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [public_key]
+              additionalProperties: false
+              properties:
+                public_key:
+                  type: string
+                  pattern: "^age1"
+                  description: The age public key to encrypt events and parts to.
+        parameter_signing:
+          description: "`null` if the task starts a run from any link."
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [signed_parameters]
+              additionalProperties: false
+              properties:
+                signed_parameters:
+                  type: array
+                  items:
+                    type: string
+                  description: The parameters a signature covers.
+
+    StartRequest:
+      type: object
+      required: [parameters]
+      additionalProperties: false
+      properties:
+        parameters:
+          type: object
+          additionalProperties: true
+          description: |-
+            Every name and value from the participant's link. Each parameter the task needs has to be there, as text or a whole number (a number is taken as its decimal text). A path parameter is held to the safe-value rule, and every parameter the task needs to the text rule (see `TaskSettings.path_parameters`). Values are kept exactly as sent, case included. Parameters the task doesn't name are recorded on the run and otherwise ignored.
+        signature:
+          type: string
+          description: |-
+            For a task that checks signatures: the signature from the link, exactly as it was. `{key name}.{signature}`, where the signature is base64url without padding. A task that doesn't check signatures ignores it.
+      # client_run_id is planned, beside these two, to make a start safe to retry (#109).
+
+    StartedRun:
+      type: object
+      required: [run_id, run_number]
+      additionalProperties: false
+      properties:
+        run_id:
+          type: string
+          format: uuid
+          description: Random, and the only thing later requests need to find the run.
+        run_number:
+          type: integer
+          minimum: 1
+          maximum: 9999
+          description: Which start this is for this run key, counting every start, including runs that never finished.
+
+    Event:
+      type: object
+      required: [data]
+      additionalProperties: false
+      properties:
+        data:
+          description: |-
+            The task's, stored unchanged; Pig never looks inside. Anything JSON can hold. For an encrypted run, a string: the base64 of an age file holding the event's JSON.
+
+    EventsRequest:
+      type: object
+      required: [events]
+      additionalProperties: false
+      properties:
+        events:
+          type: object
+          description: |-
+            The events, keyed by event ID. An event ID is the task's to choose, unique within the run, up to 256 characters. The order of events within one request isn't kept. Problems with one event, like a field beside `data`, refuse that event only, in the reply's `errors`.
+          propertyNames:
+            maxLength: 256
+          additionalProperties:
+            $ref: "#/components/schemas/Event"
+
+    RunReply:
+      type: object
+      description: The reply about a run's events, from sending events, finalizing, and a refused media start.
+      required: [status, stored]
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        stored:
+          type: array
+          items:
+            type: string
+          description: |-
+            Every event ID Pig holds for this run, from this request and every earlier one, in the order they were stored. #113 may narrow this to the IDs from this request.
+        errors:
+          type: object
+          description: Events Pig didn't take, keyed by event ID. Finalize uses the key `run`. Absent when there are none.
+          additionalProperties:
+            $ref: "#/components/schemas/Problem"
+
+    RunDescription:
+      type: object
+      required: [status, stored]
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        stored:
+          type: array
+          items:
+            type: string
+          description: Every event ID Pig holds for this run, in the order they were stored.
+        media:
+          type: array
+          description: Only for a task that takes media. One entry per media item, in media ID order.
+          items:
+            $ref: "#/components/schemas/MediaItem"
+
+    MediaStartRequest:
+      type: object
+      required: [event_id, data]
+      additionalProperties: false
+      properties:
+        event_id:
+          description: The event's ID, under the same rules as any event ID. A whole number is taken as its decimal text.
+          oneOf:
+            - type: string
+              maxLength: 256
+            - type: integer
+        data:
+          description: The task's, as for any event. Pig defines no fields for media; record the content type here.
+
+    MediaStarted:
+      type: object
+      required: [media_id, max_part_size]
+      additionalProperties: false
+      properties:
+        media_id:
+          type: integer
+          minimum: 1
+          maximum: 99999
+          description: Counts from 1 within the run.
+        max_part_size:
+          type: integer
+          description: |-
+            The biggest part this task will take, in bytes. The same value as `max_part_size_bytes` in the task's settings; #64 settled on that name, so this one is expected to change to match.
+
+    MediaItem:
+      type: object
+      required: [media_id, event_id, stored, finished]
+      additionalProperties: false
+      properties:
+        media_id:
+          type: integer
+          minimum: 1
+          maximum: 99999
+        event_id:
+          type: string
+          description: The ID of the event that started the item.
+        stored:
+          type: array
+          items:
+            type: integer
+          description: Every part number Pig holds for this item, lowest first.
+        finished:
+          type: boolean
+          description: Whether the task finished the item, and Pig held exactly the parts it said.
+        parts:
+          type: integer
+          description: The count the item was finished with. Present only when `finished` is true.
+      if:
+        properties:
+          finished:
+            const: true
+      then:
+        required: [parts]
+      else:
+        not:
+          required: [parts]
+
+    MediaReply:
+      type: object
+      description: The reply about one media item, from sending a part and finishing.
+      required: [status, media]
+      additionalProperties: false
+      properties:
+        status:
+          $ref: "#/components/schemas/RunStatus"
+        media:
+          $ref: "#/components/schemas/MediaItem"
+        errors:
+          type: object
+          description: The refusal, keyed by the part number for a part, or `media` for a finish. Absent when nothing was refused.
+          additionalProperties:
+            $ref: "#/components/schemas/Problem"
+
+    FinishRequest:
+      type: object
+      required: [parts]
+      additionalProperties: false
+      properties:
+        parts:
+          type: integer
+          minimum: 1
+          maximum: 999999
+          description: How many parts the task sent.
+
+    PurgeRequest:
+      type: object
+      required: [purge_hashes]
+      additionalProperties: false
+      description: |-
+        Today the server ignores fields beside `purge_hashes`; #114 refuses them, so that a future `dry_run` can never purge for real on an older server.
+      properties:
+        purge_hashes:
+          type: object
+          minProperties: 1
+          description: The purge hash of every file in the run, `manifest.json` included, keyed by its path inside the run directory with `/` between parts.
+          additionalProperties:
+            type: string
+
+    Purged:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          const: purged
+
+    Health:
+      type: object
+      required: [ok, checks, data_root_free_bytes, tasks]
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+          description: Whether every check passed and no finalized run has waited for the sweep for more than an hour. Matches the status code.
+        checks:
+          type: object
+          required: [configuration_loads, database_writable, data_root_writable]
+          additionalProperties: false
+          properties:
+            configuration_loads:
+              type: boolean
+              description: Whether the configuration file on disk loads. If it doesn't, the service keeps running on the last one that did.
+            database_writable:
+              type: boolean
+            data_root_writable:
+              type: boolean
+        data_root_free_bytes:
+          type: [integer, "null"]
+          description: Free space where the data is stored, or `null` if Pig can't tell.
+        tasks:
+          type: object
+          description: One entry per task in the configuration, keyed by task code.
+          additionalProperties:
+            $ref: "#/components/schemas/TaskHealth"
+        configuration_problem:
+          type: string
+          description: Why the configuration file won't load. Present only when it won't.
+        note:
+          type: string
+          description: What to do about `configuration_problem`. Present only with it.
+
+    TaskHealth:
+      type: object
+      required: [open, media, runs, stuck_finalizing, awaiting_sweep, last_event_at]
+      additionalProperties: false
+      properties:
+        open:
+          type: boolean
+        media:
+          type: boolean
+        runs:
+          type: object
+          description: How many of the task's runs are in each status.
+          required: [in_progress, finalizing, complete, expired]
+          additionalProperties: false
+          properties:
+            in_progress:
+              type: integer
+            finalizing:
+              type: integer
+            complete:
+              type: integer
+            expired:
+              type: integer
+        stuck_finalizing:
+          type: integer
+          description: Finalized runs that have waited for the sweep for more than an hour.
+        awaiting_sweep:
+          type: integer
+          description: Closed runs the next sweep has to finish.
+        last_event_at:
+          type: [string, "null"]
+          format: date-time
+          description: When Pig last stored an event or media part for this task, or `null` if it never has.

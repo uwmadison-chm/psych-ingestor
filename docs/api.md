@@ -9,6 +9,8 @@ This page is for people writing tasks — in jsPsych, PsychoPy, plain JavaScript
 standalone app. It describes the requests your task makes to Psych Ingestor (Pig) and what
 comes back.
 
+If you're writing a client library, or tests, the same requests are described for programs in [api.yaml](api.yaml), and what Pig promises about them, retries and timing included, is in [protocol.md](protocol.md).
+
 You need three things to use Pig: start a run, send events as they happen, and say when
 you're done.
 
@@ -225,8 +227,7 @@ Pig refuses that event and says so, because otherwise it would have to drop the 
 field silently and you'd never know. (Earlier versions of Pig took a `timestamp` next to
 `data`. If your task still sends one, move it inside.)
 
-Pig stores events in the order they arrive and never reorders them. If you want your data
-in time order, record a timestamp in `data` and sort on it when you analyze.
+Don't rely on the order of lines in your data file. A task that was offline sends its events long after it recorded them, and events sent together can be stored in any order. Record a timestamp in `data`, and sort on it when you analyze.
 
 The reply tells you what's stored:
 
