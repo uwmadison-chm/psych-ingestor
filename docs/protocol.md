@@ -79,7 +79,9 @@ Checked by `tests/test_closing_races.py` and `fuzz/test_run_lifecycle.py`.
 
 ### 4. Order
 
-The finished run's lines are in the order the server committed them, and `stored` lists event IDs in that order. Within one request, events are committed in the order the request's `events` object lists them. Across requests that arrive at once, the order isn't specified. Pig never orders events by anything in `data`.
+Across requests, the finished run's lines are in the order the server committed them, and `stored` lists event IDs in that order. Within one request, and between requests that arrive at once, the order isn't specified. Today's server keeps a request's order, but a JavaScript server reading the request with `JSON.parse` would put IDs that look like array indexes (`"1"`, `"2"`, `"10"`) first, in numeric order.
+
+The order of lines isn't a record of when things happened, since a task that was offline sends its events long after it recorded them. Whoever analyzes the data sorts on a timestamp the task records in `data`. Pig never orders events by anything in `data`.
 
 ### 5. Run numbers
 
@@ -175,13 +177,19 @@ A client whose request got no reply can't know whether it happened. Sending it a
 
 An event's content is its `event_id` and its `data`. What Pig adds, in `metadata`, is never part of it.
 
-Two events are the same when their canonical forms are byte for byte the same. The canonical form is the JSON of `{"data": ..., "event_id": ...}` with object keys sorted at every level, no whitespace, and characters outside ASCII written as themselves, in UTF-8. In Python:
+Two events are the same when their event IDs are the same text and their `data` is the same JSON value. JSON has one kind of number, so numbers are compared as numbers: `1`, `1.0` and `1e0` are the same. Objects are the same when they have the same keys with the same values, in any order. Pig stores `data` as that value, not as the text that arrived, so the stored line can space, order and write numbers differently from the request.
+
+A server tells whether two events are the same by comparing a canonical form: text that comes out identical exactly when the values are the same. It keeps the sha256 of that text as the event's receipt. An event's size, for `max_event_size_bytes`, is the canonical form's length in bytes, so the limit doesn't depend on how a client spaced its JSON. A media start is measured the same way.
+
+Today's server uses this canonical form, the JSON of `{"data": ..., "event_id": ...}` with object keys sorted at every level, no whitespace, and characters outside ASCII written as themselves, in UTF-8:
 
 ```python
 json.dumps({"event_id": event_id, "data": data}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 ```
 
-The server keeps the sha256 of the canonical form as the event's receipt. An event's size, for `max_event_size_bytes`, is the canonical form's length in bytes. A media start is measured the same way.
+It falls short of the rule: Python writes `1` and `1.0` differently, so a retry that changed one into the other would be refused as a collision. Clients resend what they sent, so it's unlikely to come up. RFC 8785 (JCS) is a canonical form that meets the rule. It writes numbers the way JavaScript does, so a JavaScript server gets it almost for free, and Python needs a number formatter of its own. Changing the form changes the receipts, so runs open across the change would need both.
+
+Numbers are compared as IEEE 754 doubles, which is what JavaScript holds and what I-JSON (RFC 7493) recommends. Integers beyond 2^53 can't all be held exactly that way, so two that differ only past that point compare as the same.
 
 Two parts are the same when their bytes are. The server keeps each part's sha256.
 
@@ -239,8 +247,8 @@ Each of these changes something above. None is settled here.
 - **`stored` lists every event ID in the run**, so a client sending one event at a time pays for the whole list each time. #113 would list only the IDs from the request.
 - **Every non-2xx body gets a `message`** (#64), and the media start reply's `max_part_size` becomes `max_part_size_bytes`, to match the task's settings.
 - **Strict JSON** (#107). Clients must send UTF-8; that's decided. `NaN`, the infinities and duplicate keys are to be refused rather than stored.
-- **Equal numbers written differently.** `1` and `1.0` have different canonical forms in Python, so a retry that changed one into the other is a collision. JavaScript can't tell them apart once parsed, and writes some numbers differently from Python (`1e21` against `1e+21`, #62). A second server either reproduces Python's canonical form exactly, or this page defines "same content" another way.
-- **Order within a request, in JavaScript.** `JSON.parse` puts keys that look like array indexes (`"1"`, `"2"`, `"10"`) first, in numeric order, whatever order the request had them in. A JavaScript server needs a parser that keeps the request's order, or guarantee 4 relaxes to "any order within one request".
+- **The canonical form.** Whether today's server moves to RFC 8785 (JCS), so that `1` and `1.0` are the same event there too and both servers hash alike, and how runs open across the change are handled. See [Content and size](#content-and-size).
+- **Integers beyond 2^53.** Whether to refuse them along with #107's other refusals, as I-JSON advises, rather than compare them as doubles.
 - **The deadline fixed at start** (#56), and runs of a removed task (#55).
 - **Refusing unknown fields in the purge request** (#114), so a future `dry_run` can't purge for real on an older server.
 - **Media event IDs** that `pigsty organize` can't use as directory names (#57).

@@ -723,7 +723,7 @@ components:
         events:
           type: object
           description: |-
-            The events, keyed by event ID. An event ID is the task's to choose, unique within the run, up to 256 characters. Events are stored in the order this object lists them. Problems with one event, like a field beside `data`, refuse that event only, in the reply's `errors`.
+            The events, keyed by event ID. An event ID is the task's to choose, unique within the run, up to 256 characters. The order of events within one request isn't kept. Problems with one event, like a field beside `data`, refuse that event only, in the reply's `errors`.
           propertyNames:
             maxLength: 256
           additionalProperties:
