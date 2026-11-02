@@ -9,6 +9,8 @@ This page is for people writing tasks — in jsPsych, PsychoPy, plain JavaScript
 standalone app. It describes the requests your task makes to Psych Ingestor (Pig) and what
 comes back.
 
+If you're writing a client library, or tests, the same requests are described for programs in [api.yaml](api.yaml), and what Pig promises about them, retries and timing included, is in [protocol.md](protocol.md).
+
 You need three things to use Pig: start a run, send events as they happen, and say when
 you're done.
 
