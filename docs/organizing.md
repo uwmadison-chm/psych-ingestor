@@ -83,7 +83,7 @@ Once a run is admitted, the web server doesn't need its copy, and shouldn't keep
 pig_url = "https://pig.example.edu"
 ```
 
-For each run that's in both `runs/` and `incoming/`, `pigsty purge` hashes the files in `incoming/` and sends the hashes to Pig, which deletes its copy only if every one matches its own. It hashes `incoming/` because that's a copy of the bucket, so its files are exactly the web server's. A run still downloading doesn't match, and isn't purged. How the hashes work is in [api.md](api.md#purging-a-finished-run).
+For each run that's in both `runs/` and `incoming/`, `pigsty purge` hashes the files in `incoming/` and sends the hashes to Pig, which deletes its copy only if every one matches its own. It hashes `incoming/` because that's a copy of the bucket, so its files are exactly the web server's. A run still downloading doesn't match, and isn't purged. Neither is a directory in `runs/` without the `pig-run.json` admit writes, naming that run and task: being in `runs/` only counts if admit put it there, not if it was copied in by hand or half-restored from a backup. How the hashes work is in [api.md](api.md#purging-a-finished-run).
 
 Then the run leaves on its own. The web server's next copy to the bucket deletes it there, and this side's next copy from the bucket deletes it from `incoming/`. Its copy in `runs/` stays. So a run is in `incoming/` from when it arrives until it's purged and both copies have run, and a run that stays in `incoming/` long after it was admitted means something in that chain isn't working.
 
