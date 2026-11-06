@@ -83,6 +83,7 @@ def pig(web: Path) -> Pig:
 def secure(private_keys_dir: Path) -> Path:
     path = private_keys_dir.parent / "pigsty.toml"
     path.write_text(
+        'incoming = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
         "[task.teddy]\n"
         'datastore_base = "./teddy"\n'
@@ -159,7 +160,7 @@ def test_the_public_keys_file_has_both_kinds(web: Path, signing_key: keys.Signin
 
 def test_pigsty_makes_signing_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('private_keys_dir = "./keys"\n')
+    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
         ["keys", "new", "--signing", "lucida/signing", "--config", str(path)],
         result_action="return_value",
@@ -432,10 +433,9 @@ def finished(pig: Pig, signing_key: keys.SigningKey, datastore: Path) -> str:
     pig.store_events("teddy", run_id, {"1": {"data": {"trial": 1}}})
     pig.finalize_run("teddy", run_id)
     sweep.sweep(pig.config, pig.connection)
-    shutil.copytree(
-        pig.config.done_root / "teddy" / run_id, datastore / "incoming" / run_id
-    )
-    assert admit("teddy", datastore).admitted == [run_id]
+    incoming = datastore.parent / "incoming" / "teddy"
+    shutil.copytree(pig.config.done_root / "teddy" / run_id, incoming / run_id)
+    assert admit("teddy", incoming, datastore).admitted == [run_id]
     return run_id
 
 
@@ -467,7 +467,7 @@ def test_admit_reads_a_manifest_from_before_signing(
     run_id = pig.start_run("stroop", {"participant_id": "10351"})["run_id"]
     pig.finalize_run("stroop", run_id)
     sweep.sweep(pig.config, pig.connection)
-    incoming = tmp_path / "stroop" / "incoming" / run_id
+    incoming = tmp_path / "incoming" / "stroop" / run_id
     shutil.copytree(pig.config.done_root / "stroop" / run_id, incoming)
     manifest = storage.read_manifest(incoming)
     for name in ("path_parameters", "signed_parameters", "signed_by"):
@@ -476,7 +476,9 @@ def test_admit_reads_a_manifest_from_before_signing(
     manifest["manifest_version"] = 3
     (incoming / storage.MANIFEST_FILE).write_text(json.dumps(manifest))
 
-    assert admit("stroop", tmp_path / "stroop").admitted == [run_id]
+    assert admit(
+        "stroop", tmp_path / "incoming" / "stroop", tmp_path / "stroop"
+    ).admitted == [run_id]
     run = json.loads((tmp_path / "stroop" / "runs" / run_id / RUN_FILE).read_text())
     assert run["run_key_parameters"] == ["participant_id"]
     assert run["path_parameters"] == ["participant_id"]
@@ -517,7 +519,7 @@ def test_pigsty_says_why_it_stopped_rather_than_crashing(
     tmp_path: Path, capsys, monkeypatch
 ):
     path = tmp_path / "pigsty.toml"
-    path.write_text('private_keys_dir = "./keys"\n')
+    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
 
     def refused(*_: object) -> None:
         raise PermissionError(13, "Permission denied", str(tmp_path / "keys"))

@@ -127,9 +127,8 @@ class StyTask(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Where this task's runs are kept on the secure side: `incoming/`, where the copy
-    # from the bucket puts them, and `runs/`, where `pigsty admit` puts them once they
-    # check out.
+    # Where this task's runs are kept on the secure side: `runs/`, where `pigsty admit`
+    # puts them once they check out.
     datastore_base: Path
     # Where `pigsty organize` puts each of this task's runs: a fixed directory, then a
     # pattern. See `split_organized`.
@@ -153,6 +152,10 @@ class StyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Where the copy from the bucket puts runs, the same shape as the web server's
+    # `done/`: `{incoming}/{task_code}/{run_id}/`. Admit reads it, purge hashes it, and
+    # nothing in pigsty writes to it. On a single machine, it can be `done/` itself.
+    incoming: Path
     # The web server's address, like https://pig.example.edu, for `pigsty purge`. Not
     # needed by anything else.
     pig_url: str | None = None
@@ -207,6 +210,10 @@ class StyConfig(BaseModel):
 
 # What each setting is for, and what one looks like.
 SETTINGS = {
+    "incoming": (
+        "where the copy from the bucket puts runs, shaped like the web server's done/",
+        '"./incoming"',
+    ),
     "pig_url": ("the web server's address", '"https://pig.example.edu"'),
     "private_keys_dir": ("the directory of private keys", '"./private_keys"'),
     "run_as": ("the user every pigsty command has to run as", '"pigsty"'),
@@ -368,12 +375,30 @@ def load_sty_config(path: Path) -> StyConfig:
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()
+    config.incoming = (base / config.incoming).resolve()
     if config.private_keys_dir is not None:
         config.private_keys_dir = (base / config.private_keys_dir).resolve()
     for task in config.task.values():
         task.datastore_base = (base / task.datastore_base).resolve()
         root, pattern = split_organized(task.organized)
         task.organized = f"{(base / root).resolve()}/{pattern}"
+
+    # incoming is a mirror of the bucket, and the copy into it deletes whatever the
+    # bucket doesn't have. So no task's datastore can be inside it, and it can't be inside
+    # a datastore, where admit would find runs/ among the task codes.
+    for code, task in sorted(config.task.items()):
+        if (
+            task.datastore_base == config.incoming
+            or config.incoming in task.datastore_base.parents
+            or task.datastore_base in config.incoming.parents
+        ):
+            raise ConfigurationError(
+                f"{path} has a problem: task {code!r} keeps its runs in "
+                f"{task.datastore_base}, and incoming is {config.incoming}. One is "
+                "inside the other. incoming is a copy of the bucket, and the copy "
+                "deletes whatever the bucket doesn't have, so it needs a directory "
+                "of its own."
+            )
 
     # One task per datastore, so admit can tell from where a run is which task it
     # belongs to. And one task per organized root, with no root inside another, so each

@@ -273,9 +273,7 @@ None of this happens in the web service. Finalizing a run marks it `finalizing` 
 finds closed runs, writes each one's manifest, moves its directory, and marks the run
 `done`.
 
-Copying finished runs somewhere else — an `rclone` push to S3 or similar — is not built,
-and when it is, it won't be Pig tracking whether the copy happened: `done/` is a directory
-of immutable, hashable run directories, which is what a copy tool wants. See issue #2.
+Copying finished runs somewhere else is `rclone`'s job, not Pig's, and Pig doesn't track whether the copy happened: `done/` is a directory of immutable, hashable run directories, which is what a copy tool wants. See [deployment.md](deployment.md#copying-finished-runs-to-the-bucket).
 
 Every run waits for the next sweep before it reaches `complete`. That's the cost of keeping
 the service simple, and it's affordable because the durability promise lands at

@@ -7,6 +7,13 @@
 # Paths are relative to this file. A task not listed here is never admitted or
 # organized: pigsty only works on the tasks it's told about.
 
+# Where the copy from the bucket puts runs. It has the same shape as the web server's
+# done/: one directory per task, one directory per run inside that. pigsty admit reads
+# it and pigsty purge hashes it; nothing in pigsty changes it. With Pig and pigsty on
+# one machine there's no bucket, and it's Pig's done/ itself, as it is here: this is
+# local/data/done/ once copied to local/. See docs/organizing.md.
+incoming = "./data/done"
+
 # Where Pig's web server is, for pigsty purge.
 pig_url = "http://127.0.0.1:8000"
 
@@ -29,8 +36,8 @@ pig_url = "http://127.0.0.1:8000"
 # ignore_permissions = true
 
 [task.stroop]
-# Where this task's runs are kept. Runs copied from the bucket arrive in incoming/, and
-# pigsty admit puts them in runs/ once they check out.
+# Where this task's runs are kept. pigsty admit puts them in runs/ here once they check
+# out.
 datastore_base = "./stroop-data"
 # Where pigsty organize puts each run. Everything before the first placeholder is a
 # directory of this task's own; the rest is filled in from each run. Placeholders are

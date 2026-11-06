@@ -164,10 +164,12 @@ class PurgeReport:
     problems: dict[str, str] = field(default_factory=dict)
 
 
-def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
-    """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming/`."""
+def purge_runs(
+    task_code: str, incoming: Path, datastore: Path, send: Sender
+) -> PurgeReport:
+    """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming`, this
+    task's directory in `incoming`."""
     report = PurgeReport()
-    incoming = datastore / admit.INCOMING_DIRECTORY
     admitted = datastore / admit.RUNS_DIRECTORY
     if not incoming.is_dir() or not admitted.is_dir():
         return report

@@ -46,11 +46,11 @@ def admitted_run(pig: Pig, datastore: Path, parameters: dict = BASELINE) -> str:
 
 
 def arrive(pig: Pig, datastore: Path, run_id: str, task: str = "stroop") -> str:
+    """Copy a finished run into incoming, beside the datastore, and admit it."""
     sweep.sweep(pig.config, pig.connection)
-    shutil.copytree(
-        pig.config.done_root / task / run_id, datastore / "incoming" / run_id
-    )
-    assert admit(task, datastore).admitted == [run_id]
+    incoming = datastore.parent / "incoming" / task
+    shutil.copytree(pig.config.done_root / task / run_id, incoming / run_id)
+    assert admit(task, incoming, datastore).admitted == [run_id]
     return run_id
 
 
@@ -535,6 +535,8 @@ def test_unusable_organized_settings_are_refused(organized: str):
 
 
 STY = """
+incoming = "./incoming"
+
 [task.stroop]
 datastore_base = "./stroop-data"
 organized = "./organized/stroop/{session}/{participant_id}_{run_number}"

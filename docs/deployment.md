@@ -12,9 +12,7 @@ Systemd stuff here
 **A scheduled CLI command**, on a systemd timer, doing everything else: finishing closed
 runs — writing each one's manifest and moving it into `done/` — expiring runs that have
 been open longer than their task allows, and retrying whatever didn't work last time.
-Copying finished runs offsite isn't built yet; when it is, it'll run here too.
-
-If finished runs go offsite through a versioned S3 bucket on a service without lifecycle rules, `contrib/aws_s3/` has a script that expires old versions in their place. It runs on the secure side, not here.
+Copying finished runs offsite is a job of its own, with its own timer: see [Copying finished runs to the bucket](#copying-finished-runs-to-the-bucket).
 
 Both are required. A deployment that runs only the service collects data correctly and
 never finishes any of it — runs pile up in `finalizing`, which is not data loss but is not
@@ -52,9 +50,59 @@ It brings the database up to date and leaves the runs in it as they were. It nev
 
 A database from a newer version of Pig than the one installed is refused, and there's no going back to the older shape.
 
+## Copying finished runs to the bucket
+
+Pig doesn't copy runs anywhere itself. `done/` holds finished runs, each in a directory that never changes once it's there, and `rclone` copies it to an S3 bucket. The secure side copies from the bucket into `incoming` in its `pigsty.toml` (see [organizing.md](organizing.md#copying-runs-from-the-bucket)).
+
+On the web server:
+
+```
+rclone sync /var/lib/pig/data/done/ pigbucket:chm-wilbur-01/ \
+  --config /etc/pig/rclone.conf --checksum --immutable --fast-list
+```
+
+- Copy `done/`, never the data root. `in_progress/`, `purging/` and `uploading/` must not reach the bucket. A run only appears in `done/` by a rename, once it's whole, so the copy never sees half of one.
+- Use `sync`, not `copy`. When the secure side purges a run, Pig takes it out of `done/`, and the next sync takes it out of the bucket. That's how it leaves.
+- `--checksum` compares files by hash. On S3 the hash comes with the listing, so that's faster than comparing sizes and times, as well as stricter. Media parts are well under the size where S3 stops using a plain hash.
+- `--immutable` stops rather than overwrite a file that's changed. Nothing in `done/` changes, so one that has is something to look at. Deletes still happen.
+- If a purge lands while a sync is running, rclone can't find that run's files, skips its deletes for that pass, and tries again. That's noise, not loss.
+
+Give it a `oneshot` service and a timer of its own, every few minutes like the sweep, and separate from the sweep's, so a sync that hangs holds up nothing else. Set `TimeoutStartSec=` so a hung one eventually fails where someone will see it. systemd won't start a `oneshot` that's still running, so two syncs never overlap.
+
+`rclone.conf` holds the bucket's key, so it's readable only by the user that runs the sync, and it isn't `pig.toml`, which holds no secrets:
+
+```ini
+# /etc/pig/rclone.conf
+[pigbucket]
+type = s3
+provider = Other
+endpoint = https://s3.drive.wisc.edu
+access_key_id = …
+secret_access_key = …
+no_check_bucket = true
+```
+
+`no_check_bucket` is there because the key can't create buckets, and shouldn't.
+
+### Keys
+
+Three keys, each able to do one side's part and no more:
+
+| Key | Where | Can | Can't |
+| --- | --- | --- | --- |
+| The web server's | the web server | list the bucket, write objects, delete objects | delete old versions, change versioning or any other bucket setting |
+| The secure side's | the secure side | list the bucket, read objects | write anything |
+| Cleanup | the secure side | list versions, delete old versions | — |
+
+The point is the web server's. It's the machine on the public internet, so assume it could be broken into. With versioning on, a delete only hides an object, and the key that did it can't remove what's hidden, so the undo window below outlasts a break-in. Not every S3 service can draw that line: some only offer roles like reader, writer, and manager for a whole bucket. Find out what yours can do before relying on it, and if the web server's key can delete old versions, know that it can.
+
+The cleanup key is for `contrib/aws_s3/`'s `pig-expire-versions`, on a service without lifecycle rules. See below.
+
 ## The bucket is the undo for a purge
 
 Once the secure side has a run, `pigsty purge` asks Pig to delete it, and the next copy to the bucket deletes it there too. If the secure side's copy turns out to be bad after all, the bucket's retention is the only thing that can bring the run back: versioning, so a deleted object can be restored for a while. Pig can't check that the bucket has it. Set it up before purging anything.
+
+On AWS, a lifecycle rule ends the undo window: it deletes old versions after a set number of days. On a service without lifecycle rules, like the campus Cleversafe, old versions stay forever unless something removes them. `contrib/aws_s3/` has `pig-expire-versions`, which does the lifecycle rule's job. Run it daily from the secure side, with the cleanup key.
 
 ## Media and the web server in front of Pig
 

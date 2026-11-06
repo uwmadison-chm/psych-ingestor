@@ -126,8 +126,8 @@ def check(
     wouldn't start runs there. The web server's pig.toml is checked by `pig check`.
 
     Lists the directories pigsty needs that aren't there yet. With --fix, makes them:
-    private_keys_dir, readable only by you, and each task's incoming/ and runs/
-    directories and the directory its tree goes in. It never makes a key, and never
+    private_keys_dir, readable only by you, incoming, and each task's runs/ directory
+    and the directory its tree goes in. It never makes a key, and never
     changes anything that's already there.
     """
     loaded = _load(config, ignore_permissions)
@@ -147,6 +147,7 @@ def check(
     signing_keys = _signing_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
     print(f"Run by {user_name(os.getuid())}.")
+    print(f"Runs arrive in {loaded.incoming}.")
     if loaded.pig_url:
         print(f"Purges runs from {loaded.pig_url}.")
     else:
@@ -187,11 +188,23 @@ def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
     wanted = []
     if loaded.private_keys_dir is not None:
         wanted.append((loaded.private_keys_dir, 0o700))
+    wanted.append((loaded.incoming, 0o777))
     for _, task in sorted(loaded.task.items()):
-        wanted.append((task.datastore_base / admit_module.INCOMING_DIRECTORY, 0o777))
         wanted.append((task.datastore_base / admit_module.RUNS_DIRECTORY, 0o777))
         wanted.append((task.organized_root, 0o777))
     return [(directory, mode) for directory, mode in wanted if not directory.is_dir()]
+
+
+def _require_incoming(loaded: sty.StyConfig) -> Path:
+    """incoming, or stop if it isn't there. A task's own directory in it can be
+    missing, which only means nothing of that task's has arrived, but a missing incoming
+    means the copy from the bucket has never run, or incoming is set wrong."""
+    if not loaded.incoming.is_dir():
+        _fail(
+            f"incoming is {loaded.incoming}, and there's no directory there. It's where "
+            "the copy from the bucket puts runs. pigsty check --fix makes it."
+        )
+    return loaded.incoming
 
 
 def _make_directory(directory: Path, mode: int) -> None:
@@ -298,12 +311,12 @@ def admit(
     """Check downloaded runs against their manifests, and move the ones that are whole
     into place.
 
-    For each task in pigsty.toml, looks at the runs in its datastore's incoming/
-    directory that aren't in runs/ yet. A run whose files all match its
+    For each task in pigsty.toml, looks at its runs in incoming that aren't in its
+    datastore's runs/ yet. A run whose files all match its
     manifest is copied into runs/, and decrypted on the way if it's encrypted. A run
     still downloading is left for next time. A run that's all there but doesn't match,
     or that no private key opens, is reported, and the command exits with an error.
-    Nothing in incoming/ is ever changed.
+    Nothing in incoming is ever changed.
 
     Parameters
     ----------
@@ -312,11 +325,13 @@ def admit(
         {this}/{task_code}/{run_id}/. It's the only copy the manifest's hashes describe.
     """
     loaded = _load(config, ignore_permissions)
+    incoming = _require_incoming(loaded)
     private_keys = _private_keys(loaded)
     problems = False
     for code, task in sorted(loaded.task.items()):
         report = admit_module.admit(
             code,
+            incoming / code,
             task.datastore_base,
             private_keys,
             copy_ciphertext_to.resolve() / code if copy_ciphertext_to else None,
@@ -390,11 +405,11 @@ def purge(
     """Ask the web server to delete each run that's been admitted here.
 
     For each task in pigsty.toml, looks at the runs that are in both its datastore's
-    runs/ and incoming/ directories. Hashes each one's files in incoming/, which are a
+    runs/ and incoming. Hashes each one's files in incoming, which are a
     copy of the web server's, and sends the hashes to the Pig at pig_url, which deletes
     its copy only if they all match. A run Pig refuses is reported, and the command
     exits with an error. Once Pig has deleted a run, the copies to and from the bucket
-    take it out of incoming/.
+    take it out of incoming.
     """
     loaded = _load(config, ignore_permissions)
     if not loaded.pig_url:
@@ -404,10 +419,13 @@ def purge(
             file=sys.stderr,
         )
         raise SystemExit(1)
+    incoming = _require_incoming(loaded)
     send = purge_module.http_sender(loaded.pig_url)
     problems = False
     for code, task in sorted(loaded.task.items()):
-        report = purge_module.purge_runs(code, task.datastore_base, send)
+        report = purge_module.purge_runs(
+            code, incoming / code, task.datastore_base, send
+        )
         print(
             f"{code}: purged {len(report.purged)} run(s), "
             f"{report.already_purged} purged before."
