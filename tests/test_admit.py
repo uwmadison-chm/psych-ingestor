@@ -315,7 +315,7 @@ def test_pigsty_toml_needs_incoming(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(sty_toml("./stroop-data"))
 
-    with pytest.raises(ConfigurationError, match="needs incoming"):
+    with pytest.raises(ConfigurationError, match="needs incoming_dir"):
         load_sty_config(path)
 
 
@@ -323,7 +323,7 @@ def test_incoming_is_relative_to_the_file(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(TOP + sty_toml("./stroop-data"))
 
-    assert load_sty_config(path).incoming == tmp_path / "incoming"
+    assert load_sty_config(path).incoming_dir == tmp_path / "incoming"
 
 
 @pytest.mark.parametrize(
@@ -334,7 +334,7 @@ def test_incoming_and_a_datastore_cant_be_inside_each_other(
     tmp_path: Path, incoming: str, datastore: str
 ):
     path = tmp_path / "pigsty.toml"
-    path.write_text(f'incoming = "{incoming}"\n' + sty_toml(datastore))
+    path.write_text(f'incoming_dir = "{incoming}"\n' + sty_toml(datastore))
 
     with pytest.raises(ConfigurationError, match="One is inside the other"):
         load_sty_config(path)
@@ -393,7 +393,7 @@ def test_the_cli_refuses_an_incoming_that_isnt_there(tmp_path: Path, capsys):
 
 
 # The settings above the tasks, which have to come first in the file.
-TOP = 'incoming = "./incoming"\n'
+TOP = 'incoming_dir = "./incoming"\n'
 
 
 def sty_toml(datastore: str, task: str = "stroop") -> str:

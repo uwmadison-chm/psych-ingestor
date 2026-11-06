@@ -56,7 +56,7 @@ def test_pig_health_exits_like_the_health_check_answers(config_path, pig, capsys
 
 STY = """
 private_keys_dir = "./private_keys"
-incoming = "./mount/incoming"
+incoming_dir = "./mount/incoming"
 
 [task.stroop]
 datastore_base = "./mount/stroop-data"

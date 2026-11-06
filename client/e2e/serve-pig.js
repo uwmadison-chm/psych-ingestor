@@ -21,7 +21,7 @@ const pigstyCommand = (process.env.PIGSTY_COMMAND ?? "uv run pigsty").split(" ")
 writeFileSync(
   join(dir, "pigsty.toml"),
   `private_keys_dir = "./private_keys"
-incoming = "./data/done"
+incoming_dir = "./data/done"
 
 [task.sealed]
 datastore_base = "./sealed"

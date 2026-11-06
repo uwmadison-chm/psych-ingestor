@@ -1,18 +1,18 @@
-"""Copy the tasks in `pigsty.toml` from the bucket into `incoming`, with `rclone sync`.
+"""Copy the tasks in `pigsty.toml` from the bucket into `incoming_dir`, with `rclone sync`.
 
 The web server copies its `done/` to a bucket, so the bucket holds `{task}/{run_id}/…`,
-and `incoming` in `pigsty.toml` has the same shape. A bucket can hold other tasks too,
-other studies' among them. This runs one `rclone sync`, from the bucket to `incoming`,
+and `incoming_dir` in `pigsty.toml` has the same shape. A bucket can hold other tasks too,
+other studies' among them. This runs one `rclone sync`, from the bucket to `incoming_dir`,
 with an `--include` for each task `pigsty.toml` lists, so only those are copied.
 
 It's `sync`, not `copy`, on purpose. Once a run is purged, the web server's next copy
-drops it from the bucket, and this drops it from `incoming`. With `--include`, sync only
-deletes what the includes match, so another task's directory in `incoming`, if one is
+drops it from the bucket, and this drops it from `incoming_dir`. With `--include`, sync only
+deletes what the includes match, so another task's directory in `incoming_dir`, if one is
 there, is left alone.
 
 `sync` deletes whatever is at the destination and not in the bucket, so the destination
 has to be right. That's why this reads it from `pigsty.toml` instead of having anyone
-type it, and refuses an `incoming` that's a symbolic link: on a machine that also runs
+type it, and refuses an `incoming_dir` that's a symbolic link: on a machine that also runs
 Pig, it could be Pig's own `done/`, and there's nothing to copy then.
 
 Run `pigsty admit` after this finishes, not alongside it. rclone downloads each file
@@ -45,7 +45,7 @@ class Refused(Exception):
 
 
 def read_config(config_path: Path) -> tuple[Path, list[str]]:
-    """`incoming`, resolved the way pigsty resolves it, and the task codes, sorted."""
+    """`incoming_dir`, resolved the way pigsty resolves it, and the task codes, sorted."""
     try:
         with config_path.open("rb") as file:
             config = tomllib.load(file)
@@ -63,30 +63,30 @@ def read_config(config_path: Path) -> tuple[Path, list[str]]:
                 f"files rclone makes would belong to {me!r}. Run this as {run_as!r}."
             )
 
-    if "incoming" not in config:
+    if "incoming_dir" not in config:
         raise Refused(
-            f"{config_path} has no incoming, so there's nowhere to copy runs to."
+            f"{config_path} has no incoming_dir, so there's nowhere to copy runs to."
         )
     tasks = sorted(config.get("task", {}))
     if not tasks:
         raise Refused(f"{config_path} has no tasks, so there's nothing to copy.")
 
     # Paths in pigsty.toml are relative to the file, as pigsty reads them.
-    incoming = config_path.parent.resolve() / config["incoming"]
+    incoming = config_path.parent.resolve() / config["incoming_dir"]
     return incoming, tasks
 
 
 def check_destination(incoming: Path) -> None:
-    """Raise Refused if rclone shouldn't sync into `incoming`."""
+    """Raise Refused if rclone shouldn't sync into `incoming_dir`."""
     if incoming.is_symlink():
         raise Refused(
-            f"incoming, {incoming}, is a symbolic link. rclone sync would delete and "
+            f"incoming_dir, {incoming}, is a symbolic link. rclone sync would delete and "
             "write wherever it points, so nothing was copied. If it's Pig's done/ on "
             "this machine, there's no bucket to copy from."
         )
     if not incoming.is_dir():
         raise Refused(
-            f"incoming, {incoming}, isn't there. `pigsty check --fix` makes it. "
+            f"incoming_dir, {incoming}, isn't there. `pigsty check --fix` makes it. "
             "Nothing was copied, so a mistyped path can't become a new directory full "
             "of runs."
         )
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pigsty-fetch",
         description=(
-            "Copy the runs of the tasks in pigsty.toml from the bucket into incoming, "
+            "Copy the runs of the tasks in pigsty.toml from the bucket into incoming_dir, "
             "with rclone sync. Run pigsty admit after it."
         ),
         epilog=(

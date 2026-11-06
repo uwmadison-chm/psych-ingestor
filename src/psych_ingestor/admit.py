@@ -1,8 +1,8 @@
 """Admit downloaded runs: check each one against its manifest and move it into `runs/`.
 
 Runs reach the secure side by a copy Pig doesn't run, `rclone sync` from the bucket or
-something like it, into `incoming`, which has the same shape as the web server's `done/`:
-`{incoming}/{task_code}/{run_id}/`. On a single machine, `incoming` can be `done/` itself.
+something like it, into `incoming_dir`, which has the same shape as the web server's `done/`:
+`{incoming_dir}/{task_code}/{run_id}/`. On a single machine, `incoming_dir` can be `done/` itself.
 That copy isn't atomic. A run can be
 half there for a while, and its manifest can arrive before the files it lists. So nothing
 on the secure side reads `incoming/`, except this, and purge, which needs the bytes the
@@ -131,7 +131,7 @@ def admit(
     private_keys: list[PrivateKey] | None = None,
     copy_ciphertext_to: Path | None = None,
 ) -> AdmitReport:
-    """Admit every run in `incoming`, this task's directory in `incoming`, that isn't in
+    """Admit every run in `incoming_dir`, this task's directory in `incoming_dir`, that isn't in
     `datastore/runs/` yet.
 
     `private_keys` are the keys an encrypted run is decrypted with. With

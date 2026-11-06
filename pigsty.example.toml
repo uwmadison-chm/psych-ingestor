@@ -12,7 +12,7 @@
 # it and pigsty purge hashes it; nothing in pigsty changes it. With Pig and pigsty on
 # one machine there's no bucket, and it's Pig's done/ itself, as it is here: this is
 # local/data/done/ once copied to local/. See docs/organizing.md.
-incoming = "./data/done"
+incoming_dir = "./data/done"
 
 # Where Pig's web server is, for pigsty purge.
 pig_url = "http://127.0.0.1:8000"

@@ -153,9 +153,9 @@ class StyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Where the copy from the bucket puts runs, the same shape as the web server's
-    # `done/`: `{incoming}/{task_code}/{run_id}/`. Admit reads it, purge hashes it, and
+    # `done/`: `{incoming_dir}/{task_code}/{run_id}/`. Admit reads it, purge hashes it, and
     # nothing in pigsty writes to it. On a single machine, it can be `done/` itself.
-    incoming: Path
+    incoming_dir: Path
     # The web server's address, like https://pig.example.edu, for `pigsty purge`. Not
     # needed by anything else.
     pig_url: str | None = None
@@ -210,7 +210,7 @@ class StyConfig(BaseModel):
 
 # What each setting is for, and what one looks like.
 SETTINGS = {
-    "incoming": (
+    "incoming_dir": (
         "where the copy from the bucket puts runs, shaped like the web server's done/",
         '"./incoming"',
     ),
@@ -375,7 +375,7 @@ def load_sty_config(path: Path) -> StyConfig:
 
     # Paths in the file are relative to the file, as they are in pig.toml.
     base = path.parent.resolve()
-    config.incoming = (base / config.incoming).resolve()
+    config.incoming_dir = (base / config.incoming_dir).resolve()
     if config.private_keys_dir is not None:
         config.private_keys_dir = (base / config.private_keys_dir).resolve()
     for task in config.task.values():
@@ -383,19 +383,19 @@ def load_sty_config(path: Path) -> StyConfig:
         root, pattern = split_organized(task.organized)
         task.organized = f"{(base / root).resolve()}/{pattern}"
 
-    # incoming is a mirror of the bucket, and the copy into it deletes whatever the
+    # incoming_dir is a mirror of the bucket, and the copy into it deletes whatever the
     # bucket doesn't have. So no task's datastore can be inside it, and it can't be inside
     # a datastore, where admit would find runs/ among the task codes.
     for code, task in sorted(config.task.items()):
         if (
-            task.datastore_base == config.incoming
-            or config.incoming in task.datastore_base.parents
-            or task.datastore_base in config.incoming.parents
+            task.datastore_base == config.incoming_dir
+            or config.incoming_dir in task.datastore_base.parents
+            or task.datastore_base in config.incoming_dir.parents
         ):
             raise ConfigurationError(
                 f"{path} has a problem: task {code!r} keeps its runs in "
-                f"{task.datastore_base}, and incoming is {config.incoming}. One is "
-                "inside the other. incoming is a copy of the bucket, and the copy "
+                f"{task.datastore_base}, and incoming_dir is {config.incoming_dir}. One is "
+                "inside the other. incoming_dir is a copy of the bucket, and the copy "
                 "deletes whatever the bucket doesn't have, so it needs a directory "
                 "of its own."
             )

@@ -52,7 +52,7 @@ A database from a newer version of Pig than the one installed is refused, and th
 
 ## Copying finished runs to the bucket
 
-Pig doesn't copy runs anywhere itself. `done/` holds finished runs, each in a directory that never changes once it's there, and `rclone` copies it to an S3 bucket. The secure side copies from the bucket into `incoming` in its `pigsty.toml` (see [organizing.md](organizing.md#copying-runs-from-the-bucket)).
+Pig doesn't copy runs anywhere itself. `done/` holds finished runs, each in a directory that never changes once it's there, and `rclone` copies it to an S3 bucket. The secure side copies from the bucket into `incoming_dir` in its `pigsty.toml` (see [organizing.md](organizing.md#copying-runs-from-the-bucket)).
 
 On the web server:
 

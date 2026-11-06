@@ -535,7 +535,7 @@ def test_unusable_organized_settings_are_refused(organized: str):
 
 
 STY = """
-incoming = "./incoming"
+incoming_dir = "./incoming"
 
 [task.stroop]
 datastore_base = "./stroop-data"

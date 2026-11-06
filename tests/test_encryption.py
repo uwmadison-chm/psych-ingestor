@@ -230,7 +230,7 @@ def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
 
 def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     made = keys.new_private_key(tmp_path / "keys", "lucida/2026a", NOW)
     made.path.chmod(0o644)
 
@@ -247,7 +247,7 @@ def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     assert "ignoring permissions" in output.err
 
     path.write_text(
-        'incoming = "./incoming"\n'
+        'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./keys"\nignore_permissions = true\n'
     )
     pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
@@ -280,7 +280,7 @@ def test_export_lists_every_key_by_name(private_keys_dir: Path):
 
 def test_pigsty_makes_and_exports_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
         ["keys", "new", "lucida/2026b", "--config", str(path)],
         result_action="return_value",
@@ -424,7 +424,7 @@ def test_pigsty_check_warns_about_a_public_key_no_private_key_matches(
     path = private_keys_dir.parent / "pigsty.toml"
     path.write_text(
         'pig_url = "https://pig.example.edu"\n'
-        'incoming = "./incoming"\n'
+        'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
         '[task.secret]\ndatastore_base = "./a"\norganized = "./o/a/{run_number}"\n'
         '[task.other]\ndatastore_base = "./b"\norganized = "./o/b/{run_number}"\n'

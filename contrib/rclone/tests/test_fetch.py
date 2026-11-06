@@ -11,7 +11,7 @@ import pytest
 from pig_rclone.fetch import main
 
 PIGSTY = """
-incoming = "./incoming"
+incoming_dir = "./incoming"
 
 [task.stroop]
 datastore_base = "./stroop-data"
@@ -109,11 +109,11 @@ def test_a_symlinked_incoming_runs_nothing(tmp_path, fake_rclone, capsys):
 
 def test_no_incoming_setting_runs_nothing(tmp_path, fake_rclone, capsys):
     rclone, record = fake_rclone
-    write_config(tmp_path, PIGSTY.replace('incoming = "./incoming"', ""))
+    write_config(tmp_path, PIGSTY.replace('incoming_dir = "./incoming"', ""))
 
     assert run(tmp_path, rclone) == 1
     assert not record.exists()
-    assert "no incoming" in capsys.readouterr().err
+    assert "no incoming_dir" in capsys.readouterr().err
 
 
 def test_rclones_failure_is_this_commands_failure(tmp_path, fake_rclone):

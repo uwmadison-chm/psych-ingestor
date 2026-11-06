@@ -83,7 +83,7 @@ def pig(web: Path) -> Pig:
 def secure(private_keys_dir: Path) -> Path:
     path = private_keys_dir.parent / "pigsty.toml"
     path.write_text(
-        'incoming = "./incoming"\n'
+        'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
         "[task.teddy]\n"
         'datastore_base = "./teddy"\n'
@@ -160,7 +160,7 @@ def test_the_public_keys_file_has_both_kinds(web: Path, signing_key: keys.Signin
 
 def test_pigsty_makes_signing_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
         ["keys", "new", "--signing", "lucida/signing", "--config", str(path)],
         result_action="return_value",
@@ -519,7 +519,7 @@ def test_pigsty_says_why_it_stopped_rather_than_crashing(
     tmp_path: Path, capsys, monkeypatch
 ):
     path = tmp_path / "pigsty.toml"
-    path.write_text('incoming = "./incoming"\nprivate_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
 
     def refused(*_: object) -> None:
         raise PermissionError(13, "Permission denied", str(tmp_path / "keys"))

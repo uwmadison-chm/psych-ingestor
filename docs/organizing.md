@@ -22,20 +22,20 @@ The same machine also signs links, with `pigsty sign`, for tasks that only start
 
 Where the data ends up gets its own configuration file, `pigsty.toml`, separate from the web server's `pig.toml`. Keep the two on different machines: `pigsty.toml` is for the side that will eventually hold private keys, and nothing about it should be on a public-facing server.
 
-At the top, `incoming` says where runs arrive from the web server. It has the same shape as the web server's `done/`: a directory for each task, and a directory for each run inside that. Then each task gets an entry saying where its runs are kept and where its tree goes:
+At the top, `incoming_dir` says where runs arrive from the web server. It has the same shape as the web server's `done/`: a directory for each task, and a directory for each run inside that. Then each task gets an entry saying where its runs are kept and where its tree goes:
 
 ```toml
 # pigsty.toml
-incoming = "/secure/pig/incoming"
+incoming_dir = "/secure/pig/incoming"
 
 [task.stroop]
 datastore_base = "/some/mount/mystudy/primary_data/pig/stroop"
 organized = "/some/mount/mystudy/intermediate_data/pig/stroop/{session}/{participant_id}_{run_number}"
 ```
 
-A task with no entry is never admitted or organized, even if its runs are in `incoming`. Two tasks can't share a `datastore_base`, and neither can share where they're organized; see [Patterns](#patterns). No `datastore_base` can be inside `incoming`, or the other way around, because the copy into `incoming` deletes whatever the bucket doesn't have.
+A task with no entry is never admitted or organized, even if its runs are in `incoming_dir`. Two tasks can't share a `datastore_base`, and neither can share where they're organized; see [Patterns](#patterns). No `datastore_base` can be inside `incoming_dir`, or the other way around, because the copy into `incoming_dir` deletes whatever the bucket doesn't have.
 
-The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`, and lists the directories it names that aren't there yet. `pigsty check --fix` makes them: `private_keys_dir`, readable only by you, `incoming`, and each task's `runs/` and the directory its tree goes in. It never makes a key, and never changes the permissions of anything already there. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG` (see [Environment variables](configuration.md#environment-variables)).
+The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`, and lists the directories it names that aren't there yet. `pigsty check --fix` makes them: `private_keys_dir`, readable only by you, `incoming_dir`, and each task's `runs/` and the directory its tree goes in. It never makes a key, and never changes the permissions of anything already there. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG` (see [Environment variables](configuration.md#environment-variables)).
 
 `run_as` works as it does in `pig.toml` (see [configuration.md](configuration.md#running-as-one-user)): when it's set, every `pigsty` command refuses to run as any other user, so `admit`, `organize`, and `keys new` never make files that belong to someone else.
 
@@ -46,11 +46,11 @@ run_as = "pigsty"
 
 ## Trying it on a laptop
 
-`pigsty.example.toml` in the repository is a starting point. Copy it to `local/pigsty.toml`, where its paths are under `local/`. On one machine there's no bucket, so its `incoming` is your local Pig's `done/`:
+`pigsty.example.toml` in the repository is a starting point. Copy it to `local/pigsty.toml`, where its paths are under `local/`. On one machine there's no bucket, so its `incoming_dir` is your local Pig's `done/`:
 
 ```toml
 # local/pigsty.toml
-incoming = "./data/done"
+incoming_dir = "./data/done"
 ```
 
 Then admit and organize your finished stroop runs:
@@ -63,11 +63,11 @@ pigsty organize
 
 The tree is in `local/organized/stroop/`. Add `--dry-run` to `pigsty organize` to see where each run would go without copying anything.
 
-With `pig serve` running, `pigsty purge` then deletes those runs from `local/data/done/stroop/`, which is also `incoming`, so they're gone from both at once. The same setting works for a real deployment that keeps Pig and pigsty on one machine, though that puts the private keys on the machine that faces the internet.
+With `pig serve` running, `pigsty purge` then deletes those runs from `local/data/done/stroop/`, which is also `incoming_dir`, so they're gone from both at once. The same setting works for a real deployment that keeps Pig and pigsty on one machine, though that puts the private keys on the machine that faces the internet.
 
 ## Copying runs from the bucket
 
-The web server copies its `done/` to a bucket (see [deployment.md](deployment.md#copying-finished-runs-to-the-bucket)), so the bucket has the shape `incoming` wants. Copy it down with `rclone sync`, only the tasks in `pigsty.toml`, since a bucket can hold other studies' tasks too:
+The web server copies its `done/` to a bucket (see [deployment.md](deployment.md#copying-finished-runs-to-the-bucket)), so the bucket has the shape `incoming_dir` wants. Copy it down with `rclone sync`, only the tasks in `pigsty.toml`, since a bucket can hold other studies' tasks too:
 
 ```
 rclone sync pigbucket:chm-wilbur-01/ /secure/pig/incoming/ \
@@ -75,24 +75,24 @@ rclone sync pigbucket:chm-wilbur-01/ /secure/pig/incoming/ \
   --include "/teddy/**" --include "/teddy_followup/**"
 ```
 
-`contrib/rclone/` has `pigsty-fetch`, which reads `incoming` and the task list from `pigsty.toml` and runs exactly that, so neither has to be typed. See its README.
+`contrib/rclone/` has `pigsty-fetch`, which reads `incoming_dir` and the task list from `pigsty.toml` and runs exactly that, so neither has to be typed. See its README.
 
-- Use `sync`, not `copy`. Purged runs leave `incoming` because they've left the bucket, and `copy` would keep them forever. With `--include`, sync only deletes inside the tasks it was given.
+- Use `sync`, not `copy`. Purged runs leave `incoming_dir` because they've left the bucket, and `copy` would keep them forever. With `--include`, sync only deletes inside the tasks it was given.
 - `--checksum` compares files by hash. On S3 the hash comes with the listing, so that's faster than comparing sizes and times, as well as stricter.
 - `--immutable` stops rather than overwrite a file that's changed. A finished run's files never change.
-- The destination is `incoming` and nothing else. Sync deletes whatever the bucket doesn't have, so pointed at a `datastore_base` it would delete admitted runs. That's the one way this pipeline can lose the secure side's copy, and the reason to let `pigsty-fetch` build the command.
+- The destination is `incoming_dir` and nothing else. Sync deletes whatever the bucket doesn't have, so pointed at a `datastore_base` it would delete admitted runs. That's the one way this pipeline can lose the secure side's copy, and the reason to let `pigsty-fetch` build the command.
 
 Run the copy, `pigsty admit`, and `pigsty purge` one after another, from one scheduled job, never at the same time. rclone downloads each file under a temporary name, and admit refuses a run with a file its manifest doesn't list. In systemd, a `oneshot` service with an `ExecStart=` for each does it, and stops at the first one that fails. Every 15 minutes to an hour is plenty: nothing is waiting except the web server, to be rid of the data.
 
 ## Admitting downloaded runs
 
-On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it, into `incoming`. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
+On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it, into `incoming_dir`. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
 
-`pigsty admit` reads each task's runs from `{incoming}/{task_code}/`, and puts each one in `runs/`, inside the task's `datastore_base`, once every file its manifest lists is there, with the right size and hash, and nothing else is. A task with nothing in `incoming` yet isn't a problem; `incoming` itself not being there is.
+`pigsty admit` reads each task's runs from `{incoming_dir}/{task_code}/`, and puts each one in `runs/`, inside the task's `datastore_base`, once every file its manifest lists is there, with the right size and hash, and nothing else is. A task with nothing in `incoming_dir` yet isn't a problem; `incoming_dir` itself not being there is.
 
-A run in `runs/` holds its files exactly as the web server stored them, decrypted if the task encrypts (see [Encrypted runs](#encrypted-runs)), and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming`, because it describes the files as they traveled.
+A run in `runs/` holds its files exactly as the web server stored them, decrypted if the task encrypts (see [Encrypted runs](#encrypted-runs)), and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming_dir`, because it describes the files as they traveled.
 
-Running `pigsty admit` again is safe, and it's how new runs get admitted. A run already in `runs/` is left alone. A run still downloading is left for next time and isn't an error. A run that's all there but doesn't match its manifest is reported, nothing of it is admitted, and `pigsty admit` exits with an error so a scheduled job notices. Nothing in `incoming` is ever changed: it's a copy of the bucket, and runs leave it when they leave the bucket.
+Running `pigsty admit` again is safe, and it's how new runs get admitted. A run already in `runs/` is left alone. A run still downloading is left for next time and isn't an error. A run that's all there but doesn't match its manifest is reported, nothing of it is admitted, and `pigsty admit` exits with an error so a scheduled job notices. Nothing in `incoming_dir` is ever changed: it's a copy of the bucket, and runs leave it when they leave the bucket.
 
 A run with a symbolic link anywhere in it is refused too. Pig never makes one, and one could point anywhere on the secure machine.
 
@@ -107,9 +107,9 @@ Once a run is admitted, the web server doesn't need its copy, and shouldn't keep
 pig_url = "https://pig.example.edu"
 ```
 
-For each run that's in both `runs/` and `incoming`, `pigsty purge` hashes the files in `incoming` and sends the hashes to Pig, which deletes its copy only if every one matches its own. It hashes `incoming` because that's a copy of the bucket, so its files are exactly the web server's. A run still downloading doesn't match, and isn't purged. Neither is a directory in `runs/` without the `pig-run.json` admit writes, naming that run and task: being in `runs/` only counts if admit put it there, not if it was copied in by hand or half-restored from a backup. How the hashes work is in [api.md](api.md#purging-a-finished-run).
+For each run that's in both `runs/` and `incoming_dir`, `pigsty purge` hashes the files in `incoming_dir` and sends the hashes to Pig, which deletes its copy only if every one matches its own. It hashes `incoming_dir` because that's a copy of the bucket, so its files are exactly the web server's. A run still downloading doesn't match, and isn't purged. Neither is a directory in `runs/` without the `pig-run.json` admit writes, naming that run and task: being in `runs/` only counts if admit put it there, not if it was copied in by hand or half-restored from a backup. How the hashes work is in [api.md](api.md#purging-a-finished-run).
 
-Then the run leaves on its own. The web server's next copy to the bucket deletes it there, and this side's next copy from the bucket deletes it from `incoming`. Its copy in `runs/` stays. So a run is in `incoming` from when it arrives until it's purged and both copies have run, and a run that stays in `incoming` long after it was admitted means something in that chain isn't working.
+Then the run leaves on its own. The web server's next copy to the bucket deletes it there, and this side's next copy from the bucket deletes it from `incoming_dir`. Its copy in `runs/` stays. So a run is in `incoming_dir` from when it arrives until it's purged and both copies have run, and a run that stays in `incoming_dir` long after it was admitted means something in that chain isn't working.
 
 Running `pigsty purge` again is safe. A purged run gets a note, `runs/{run_id}/.state/purged`, saying when, and isn't hashed again. Organize doesn't copy `.state/` into the tree. A run Pig refuses to purge is reported with Pig's reason, the rest carry on, and `pigsty purge` exits with an error so a scheduled job notices.
 

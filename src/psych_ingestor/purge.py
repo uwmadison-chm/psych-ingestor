@@ -167,8 +167,8 @@ class PurgeReport:
 def purge_runs(
     task_code: str, incoming: Path, datastore: Path, send: Sender
 ) -> PurgeReport:
-    """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming`, this
-    task's directory in `incoming`."""
+    """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming_dir`, this
+    task's directory in `incoming_dir`."""
     report = PurgeReport()
     admitted = datastore / admit.RUNS_DIRECTORY
     if not incoming.is_dir() or not admitted.is_dir():

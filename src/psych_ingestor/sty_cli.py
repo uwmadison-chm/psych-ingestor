@@ -147,7 +147,7 @@ def check(
     signing_keys = _signing_keys(loaded)
     print(f"Configuration looks good: {len(loaded.task)} task(s) listed.")
     print(f"Run by {user_name(os.getuid())}.")
-    print(f"Runs arrive in {loaded.incoming}.")
+    print(f"Runs arrive in {loaded.incoming_dir}.")
     if loaded.pig_url:
         print(f"Purges runs from {loaded.pig_url}.")
     else:
@@ -188,7 +188,7 @@ def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
     wanted = []
     if loaded.private_keys_dir is not None:
         wanted.append((loaded.private_keys_dir, 0o700))
-    wanted.append((loaded.incoming, 0o777))
+    wanted.append((loaded.incoming_dir, 0o777))
     for _, task in sorted(loaded.task.items()):
         wanted.append((task.datastore_base / admit_module.RUNS_DIRECTORY, 0o777))
         wanted.append((task.organized_root, 0o777))
@@ -196,15 +196,15 @@ def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
 
 
 def _require_incoming(loaded: sty.StyConfig) -> Path:
-    """incoming, or stop if it isn't there. A task's own directory in it can be
-    missing, which only means nothing of that task's has arrived, but a missing incoming
-    means the copy from the bucket has never run, or incoming is set wrong."""
-    if not loaded.incoming.is_dir():
+    """incoming_dir, or stop if it isn't there. A task's own directory in it can be
+    missing, which only means nothing of that task's has arrived, but a missing
+    incoming_dir means the copy from the bucket has never run, or it's set wrong."""
+    if not loaded.incoming_dir.is_dir():
         _fail(
-            f"incoming is {loaded.incoming}, and there's no directory there. It's where "
+            f"incoming_dir is {loaded.incoming_dir}, and there's no directory there. It's where "
             "the copy from the bucket puts runs. pigsty check --fix makes it."
         )
-    return loaded.incoming
+    return loaded.incoming_dir
 
 
 def _make_directory(directory: Path, mode: int) -> None:
@@ -311,12 +311,12 @@ def admit(
     """Check downloaded runs against their manifests, and move the ones that are whole
     into place.
 
-    For each task in pigsty.toml, looks at its runs in incoming that aren't in its
+    For each task in pigsty.toml, looks at its runs in incoming_dir that aren't in its
     datastore's runs/ yet. A run whose files all match its
     manifest is copied into runs/, and decrypted on the way if it's encrypted. A run
     still downloading is left for next time. A run that's all there but doesn't match,
     or that no private key opens, is reported, and the command exits with an error.
-    Nothing in incoming is ever changed.
+    Nothing in incoming_dir is ever changed.
 
     Parameters
     ----------
