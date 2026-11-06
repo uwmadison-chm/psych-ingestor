@@ -284,7 +284,7 @@ class Config(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    data_root: Path
+    data_dir: Path
     database: Path
     # The public keys tasks can encrypt to and check signatures with, as `pigsty keys
     # export` writes them on the secure side. Only needed if a task sets `encrypt_to` or
@@ -316,26 +316,26 @@ class Config(BaseModel):
     @property
     def in_progress_root(self) -> Path:
         """Runs still collecting, and closed runs the sweep hasn't finished yet."""
-        return self.data_root / "in_progress"
+        return self.data_dir / "in_progress"
 
     @property
     def done_root(self) -> Path:
         """Finished runs, whichever way they closed. Nothing here ever changes again.
         A run leaves only when it's purged, all at once."""
-        return self.data_root / "done"
+        return self.data_dir / "done"
 
     @property
     def purging_root(self) -> Path:
         """Purged runs on their way to being deleted. Empty except for a moment during a
         purge, or after one was interrupted, until the next sweep clears it."""
-        return self.data_root / "purging"
+        return self.data_dir / "purging"
 
     @property
     def uploading_root(self) -> Path:
         """Media parts while they arrive, before they're renamed into their run. Kept
         out of the run's directory so the sweep can never mistake one for part of the
         run. See `storage.PartWriter`."""
-        return self.data_root / "uploading"
+        return self.data_dir / "uploading"
 
     @model_validator(mode="after")
     def _check_task_codes(self) -> Config:
@@ -398,7 +398,7 @@ def load_config(path: Path) -> Config:
 
     # Paths in the file are relative to the file, so a checkout can move without editing.
     base = path.parent.resolve()
-    config.data_root = (base / config.data_root).resolve()
+    config.data_dir = (base / config.data_dir).resolve()
     config.database = (base / config.database).resolve()
     config.include = [(base / directory).resolve() for directory in config.include]
     if config.touch_after_finalizing is not None:
@@ -451,7 +451,7 @@ def _load_task_file(path: Path) -> TaskFile:
     except Exception as error:
         hint = _pigsty_hint(raw)
         main_only = {
-            "data_root",
+            "data_dir",
             "database",
             "include",
             "touch_after_finalizing",
@@ -460,7 +460,7 @@ def _load_task_file(path: Path) -> TaskFile:
         if main_only & raw.keys():
             hint += (
                 "\nIt's in an include directory, so it can only hold tasks and a "
-                "public_keys_file. data_root, database, include, "
+                "public_keys_file. data_dir, database, include, "
                 "touch_after_finalizing, and run_as belong in the main pig.toml."
             )
         raise ConfigurationError(f"{path} has a problem:\n{error}{hint}") from error
@@ -533,7 +533,7 @@ def _pigsty_hint(raw: dict[str, Any]) -> str:
     """Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know."""
     tasks = raw.get("task")
     if isinstance(tasks, dict) and any(
-        isinstance(task, dict) and {"datastore_base", "organized"} & task.keys()
+        isinstance(task, dict) and {"datastore_dir", "organized"} & task.keys()
         for task in tasks.values()
     ):
         return (

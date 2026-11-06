@@ -12,7 +12,7 @@ from psych_ingestor.config import (
 )
 
 VALID_CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -114,7 +114,7 @@ def test_load_config_rejects_invalid_toml(tmp_path: Path) -> None:
 
 def test_load_config_rejects_uppercase_task_code(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.Stroop]
@@ -127,7 +127,7 @@ run_key_parameters = ["participant_id"]
 
 def test_load_config_rejects_task_code_with_dot(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task."stroop.v2"]
@@ -140,7 +140,7 @@ run_key_parameters = ["participant_id"]
 
 def test_load_config_rejects_run_key_not_in_path_parameters(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -155,7 +155,7 @@ def test_load_config_names_the_renamed_parameter_lists(tmp_path: Path) -> None:
     """`parameters` and `run_key` were renamed for issue #44. The old names are refused,
     with the new ones in the message."""
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -170,7 +170,7 @@ def test_load_config_says_path_is_gone(tmp_path: Path) -> None:
     """A configuration from before issue #3 says where data lands. It doesn't any more,
     and the error should say so rather than "extra inputs are not permitted"."""
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -185,7 +185,7 @@ path = "{participant_id}/{run_number}.jsonl"
 
 def test_load_config_says_what_abandon_after_is_called_now(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -200,7 +200,7 @@ abandon_after = "24h"
 
 def test_expires_after_reads_a_duration(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -223,7 +223,7 @@ def test_load_config_resolves_paths_relative_to_config_file(tmp_path: Path) -> N
 
     config = load_config(config_path)
 
-    assert config.data_root == (subdir / "data").resolve()
+    assert config.data_dir == (subdir / "data").resolve()
     assert config.database == (subdir / "pig.db").resolve()
 
 
@@ -249,7 +249,7 @@ def test_media_is_off_unless_asked_for(tmp_path: Path) -> None:
 
 def test_max_part_size_reads_a_size(tmp_path: Path) -> None:
     config_text = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.interview]

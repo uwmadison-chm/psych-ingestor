@@ -42,7 +42,7 @@ from psych_ingestor import db, media, purge, runs, storage, sweep
 from psych_ingestor.runs import Phase
 
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]

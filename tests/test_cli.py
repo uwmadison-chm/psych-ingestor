@@ -59,7 +59,7 @@ private_keys_dir = "./private_keys"
 incoming_dir = "./mount/incoming"
 
 [task.stroop]
-datastore_base = "./mount/stroop-data"
+datastore_dir = "./mount/stroop-data"
 organized = "./mount/organized/stroop/{participant_id}_{run_number}"
 """
 

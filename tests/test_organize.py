@@ -538,7 +538,7 @@ STY = """
 incoming_dir = "./incoming"
 
 [task.stroop]
-datastore_base = "./stroop-data"
+datastore_dir = "./stroop-data"
 organized = "./organized/stroop/{session}/{participant_id}_{run_number}"
 """
 
@@ -549,7 +549,7 @@ def test_pigsty_paths_are_relative_to_the_file(tmp_path: Path):
 
     stroop = load_sty_config(path).task["stroop"]
 
-    assert stroop.datastore_base == tmp_path / "stroop-data"
+    assert stroop.datastore_dir == tmp_path / "stroop-data"
     assert stroop.organized_root == tmp_path / "organized" / "stroop"
     assert stroop.pattern == "{session}/{participant_id}_{run_number}"
 
@@ -573,7 +573,7 @@ def test_pigsty_with_a_bad_pattern_is_refused(tmp_path: Path):
 def test_two_tasks_cant_share_an_organized_root(tmp_path: Path, balloons: str):
     path = tmp_path / "pigsty.toml"
     path.write_text(
-        STY + '\n[task.balloons]\ndatastore_base = "./balloons-data"\n'
+        STY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
         f'organized = "{balloons}"\n'
     )
 
@@ -584,7 +584,7 @@ def test_two_tasks_cant_share_an_organized_root(tmp_path: Path, balloons: str):
 def test_two_tasks_can_have_neighboring_organized_roots(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(
-        STY + '\n[task.balloons]\ndatastore_base = "./balloons-data"\n'
+        STY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
         'organized = "./organized/stroop-2/{participant_id}/{run_number}"\n'
     )
 
@@ -618,7 +618,7 @@ def test_pigsty_says_when_a_task_is_copied_from_pig_toml(tmp_path: Path):
         load_sty_config(path)
 
     message = str(refused.value)
-    assert "[task.stroop] needs datastore_base" in message
+    assert "[task.stroop] needs datastore_dir" in message
     assert "[task.stroop] needs organized" in message
     assert (
         "path_parameters, run_key_parameters, and media are pig.toml settings"

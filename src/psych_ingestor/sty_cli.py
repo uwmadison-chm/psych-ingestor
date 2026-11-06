@@ -167,7 +167,7 @@ def check(
             )
     for code, task in sorted(loaded.task.items()):
         print(f"\n{code}")
-        print(f"  datastore: {task.datastore_base}")
+        print(f"  datastore: {task.datastore_dir}")
         print(f"  organized: {task.organized_root}")
         print(f"  pattern:   {task.pattern}")
         if task.signed_parameters:
@@ -190,7 +190,7 @@ def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
         wanted.append((loaded.private_keys_dir, 0o700))
     wanted.append((loaded.incoming_dir, 0o777))
     for _, task in sorted(loaded.task.items()):
-        wanted.append((task.datastore_base / admit_module.RUNS_DIRECTORY, 0o777))
+        wanted.append((task.datastore_dir / admit_module.RUNS_DIRECTORY, 0o777))
         wanted.append((task.organized_root, 0o777))
     return [(directory, mode) for directory, mode in wanted if not directory.is_dir()]
 
@@ -332,7 +332,7 @@ def admit(
         report = admit_module.admit(
             code,
             incoming / code,
-            task.datastore_base,
+            task.datastore_dir,
             private_keys,
             copy_ciphertext_to.resolve() / code if copy_ciphertext_to else None,
         )
@@ -377,7 +377,7 @@ def organize(
     for code, task in sorted(loaded.task.items()):
         root = task.organized_root
         report = organize_module.organize(
-            code, task.datastore_base, root, task.pattern, dry_run=dry_run, full=full
+            code, task.datastore_dir, root, task.pattern, dry_run=dry_run, full=full
         )
         counts = [
             f"{verb} {len(report.placed)} run(s)",
@@ -424,7 +424,7 @@ def purge(
     problems = False
     for code, task in sorted(loaded.task.items()):
         report = purge_module.purge_runs(
-            code, incoming / code, task.datastore_base, send
+            code, incoming / code, task.datastore_dir, send
         )
         print(
             f"{code}: purged {len(report.purged)} run(s), "

@@ -14,11 +14,11 @@ PIGSTY = """
 incoming_dir = "./incoming"
 
 [task.stroop]
-datastore_base = "./stroop-data"
+datastore_dir = "./stroop-data"
 organized = "./organized/stroop/{run_number}"
 
 [task.balloons]
-datastore_base = "./balloons-data"
+datastore_dir = "./balloons-data"
 organized = "./organized/balloons/{run_number}"
 """
 

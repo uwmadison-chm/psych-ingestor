@@ -24,7 +24,7 @@ NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
 PARTICIPANT = {"participant_id": "10351"}
 
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "public_keys.txt"
 
@@ -426,8 +426,8 @@ def test_pigsty_check_warns_about_a_public_key_no_private_key_matches(
         'pig_url = "https://pig.example.edu"\n'
         'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
-        '[task.secret]\ndatastore_base = "./a"\norganized = "./o/a/{run_number}"\n'
-        '[task.other]\ndatastore_base = "./b"\norganized = "./o/b/{run_number}"\n'
+        '[task.secret]\ndatastore_dir = "./a"\norganized = "./o/a/{run_number}"\n'
+        '[task.other]\ndatastore_dir = "./b"\norganized = "./o/b/{run_number}"\n'
     )
 
     pigsty(["check", "--config", str(path)], result_action="return_value")

@@ -29,11 +29,11 @@ At the top, `incoming_dir` says where runs arrive from the web server. It has th
 incoming_dir = "/secure/pig/incoming"
 
 [task.stroop]
-datastore_base = "/some/mount/mystudy/primary_data/pig/stroop"
+datastore_dir = "/some/mount/mystudy/primary_data/pig/stroop"
 organized = "/some/mount/mystudy/intermediate_data/pig/stroop/{session}/{participant_id}_{run_number}"
 ```
 
-A task with no entry is never admitted or organized, even if its runs are in `incoming_dir`. Two tasks can't share a `datastore_base`, and neither can share where they're organized; see [Patterns](#patterns). No `datastore_base` can be inside `incoming_dir`, or the other way around, because the copy into `incoming_dir` deletes whatever the bucket doesn't have.
+A task with no entry is never admitted or organized, even if its runs are in `incoming_dir`. Two tasks can't share a `datastore_dir`, and neither can share where they're organized; see [Patterns](#patterns). No `datastore_dir` can be inside `incoming_dir`, or the other way around, because the copy into `incoming_dir` deletes whatever the bucket doesn't have.
 
 The two sides have their own commands as well as their own files. `pig` runs on the web server and reads `pig.toml`; `pigsty` runs where the data ends up and reads `pigsty.toml`, never `pig.toml` or the database. `pigsty check` checks the file, the way `pig check` checks `pig.toml`, and lists the directories it names that aren't there yet. `pigsty check --fix` makes them: `private_keys_dir`, readable only by you, `incoming_dir`, and each task's `runs/` and the directory its tree goes in. It never makes a key, and never changes the permissions of anything already there. Paths are relative to the file, as they are in `pig.toml`. Every `pigsty` command reads `local/pigsty.toml`, or the file named by `--config` or `PIGSTY_CONFIG` (see [Environment variables](configuration.md#environment-variables)).
 
@@ -80,7 +80,7 @@ rclone sync pigbucket:chm-wilbur-01/ /secure/pig/incoming/ \
 - Use `sync`, not `copy`. Purged runs leave `incoming_dir` because they've left the bucket, and `copy` would keep them forever. With `--include`, sync only deletes inside the tasks it was given.
 - `--checksum` compares files by hash. On S3 the hash comes with the listing, so that's faster than comparing sizes and times, as well as stricter.
 - `--immutable` stops rather than overwrite a file that's changed. A finished run's files never change.
-- The destination is `incoming_dir` and nothing else. Sync deletes whatever the bucket doesn't have, so pointed at a `datastore_base` it would delete admitted runs. That's the one way this pipeline can lose the secure side's copy, and the reason to let `pigsty-fetch` build the command.
+- The destination is `incoming_dir` and nothing else. Sync deletes whatever the bucket doesn't have, so pointed at a `datastore_dir` it would delete admitted runs. That's the one way this pipeline can lose the secure side's copy, and the reason to let `pigsty-fetch` build the command.
 
 Run the copy, `pigsty admit`, and `pigsty purge` one after another, from one scheduled job, never at the same time. rclone downloads each file under a temporary name, and admit refuses a run with a file its manifest doesn't list. In systemd, a `oneshot` service with an `ExecStart=` for each does it, and stops at the first one that fails. Every 15 minutes to an hour is plenty: nothing is waiting except the web server, to be rid of the data.
 
@@ -88,7 +88,7 @@ Run the copy, `pigsty admit`, and `pigsty purge` one after another, from one sch
 
 On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it, into `incoming_dir`. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
 
-`pigsty admit` reads each task's runs from `{incoming_dir}/{task_code}/`, and puts each one in `runs/`, inside the task's `datastore_base`, once every file its manifest lists is there, with the right size and hash, and nothing else is. A task with nothing in `incoming_dir` yet isn't a problem; `incoming_dir` itself not being there is.
+`pigsty admit` reads each task's runs from `{incoming_dir}/{task_code}/`, and puts each one in `runs/`, inside the task's `datastore_dir`, once every file its manifest lists is there, with the right size and hash, and nothing else is. A task with nothing in `incoming_dir` yet isn't a problem; `incoming_dir` itself not being there is.
 
 A run in `runs/` holds its files exactly as the web server stored them, decrypted if the task encrypts (see [Encrypted runs](#encrypted-runs)), and `pig-run.json`, which says what the run is: task, run number, parameters, media. It's the manifest without the file hashes. The manifest itself stays in `incoming_dir`, because it describes the files as they traveled.
 
@@ -180,7 +180,7 @@ Copy the file to the web server and add `signed_by = ["lucida/signing"]` to the 
 ```toml
 # pigsty.toml
 [task.teddy]
-datastore_base = "/secure/lucida/pig/teddy"
+datastore_dir = "/secure/lucida/pig/teddy"
 organized = "/secure/lucida/intermediate_data/pig/teddy/{id}/{event}_{run_number}"
 signed_parameters = ["id", "event", "modules"]
 ```

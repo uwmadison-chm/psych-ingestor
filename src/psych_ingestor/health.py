@@ -30,7 +30,7 @@ def report(
     checks = {
         "configuration_loads": configuration_problem is None,
         "database_writable": _is_writable(config.database.parent),
-        "data_root_writable": _is_writable(config.data_root),
+        "data_root_writable": _is_writable(config.data_dir),
     }
     tasks = {
         code: _task_report(config, connection, code) for code in sorted(config.task)
@@ -43,7 +43,7 @@ def report(
         # Media is the first thing in Pig that can fill a disk, and nothing bounds how
         # much a run may send but time, so the number is here for a monitor to watch.
         # No threshold: what counts as low depends on the deployment.
-        "data_root_free_bytes": _free_bytes(config.data_root),
+        "data_root_free_bytes": _free_bytes(config.data_dir),
         "tasks": tasks,
     }
     if configuration_problem is not None:

@@ -38,7 +38,7 @@ pig_url = "http://127.0.0.1:8000"
 [task.stroop]
 # Where this task's runs are kept. pigsty admit puts them in runs/ here once they check
 # out.
-datastore_base = "./stroop-data"
+datastore_dir = "./stroop-data"
 # Where pigsty organize puts each run. Everything before the first placeholder is a
 # directory of this task's own; the rest is filled in from each run. Placeholders are
 # {task_code}, {run_number}, and any of the task's path_parameters in pig.toml. It has

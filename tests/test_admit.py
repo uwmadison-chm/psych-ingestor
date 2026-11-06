@@ -302,13 +302,13 @@ def test_two_admits_cant_work_on_one_datastore_at_once(
 # ------------------------------------------------------------ pigsty.toml
 
 
-def test_datastore_base_is_relative_to_the_file(tmp_path: Path):
+def test_datastore_dir_is_relative_to_the_file(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(TOP + sty_toml("./stroop-data"))
 
     loaded = load_sty_config(path)
 
-    assert loaded.task["stroop"].datastore_base == tmp_path / "stroop-data"
+    assert loaded.task["stroop"].datastore_dir == tmp_path / "stroop-data"
 
 
 def test_pigsty_toml_needs_incoming(tmp_path: Path):
@@ -346,7 +346,7 @@ def test_two_tasks_cant_share_a_datastore(tmp_path: Path):
         TOP + sty_toml("./shared") + "\n" + sty_toml("./shared", task="balloons")
     )
 
-    with pytest.raises(ConfigurationError, match="same datastore_base"):
+    with pytest.raises(ConfigurationError, match="same datastore_dir"):
         load_sty_config(path)
 
 
@@ -398,7 +398,7 @@ TOP = 'incoming_dir = "./incoming"\n'
 
 def sty_toml(datastore: str, task: str = "stroop") -> str:
     return (
-        f'[task.{task}]\ndatastore_base = "{datastore}"\n'
+        f'[task.{task}]\ndatastore_dir = "{datastore}"\n'
         f'organized = "./organized/{task}/{{participant_id}}/{{run_number}}"\n'
     )
 

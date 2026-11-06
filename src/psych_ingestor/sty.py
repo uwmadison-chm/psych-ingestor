@@ -129,7 +129,7 @@ class StyTask(BaseModel):
 
     # Where this task's runs are kept on the secure side: `runs/`, where `pigsty admit`
     # puts them once they check out.
-    datastore_base: Path
+    datastore_dir: Path
     # Where `pigsty organize` puts each of this task's runs: a fixed directory, then a
     # pattern. See `split_organized`.
     organized: str
@@ -221,7 +221,7 @@ SETTINGS = {
         "whether to read private key files other people can read",
         "true",
     ),
-    "datastore_base": ("the directory this task's runs are kept in", '"./stroop-data"'),
+    "datastore_dir": ("the directory this task's runs are kept in", '"./stroop-data"'),
     "organized": (
         "where pigsty organize puts each run",
         '"./organized/stroop/{session}/{participant_id}_{run_number}"',
@@ -364,7 +364,7 @@ def load_sty_config(path: Path) -> StyConfig:
         )
         # Refused anyway, but saying so is quicker than reading what's wrong with it.
         hint = ""
-        if {"data_root", "database"} & raw.keys():
+        if {"data_dir", "database"} & raw.keys():
             hint = (
                 "\nThis looks like pig.toml, the web server's configuration, which pig "
                 "reads. pigsty reads the secure side's pigsty.toml."
@@ -379,7 +379,7 @@ def load_sty_config(path: Path) -> StyConfig:
     if config.private_keys_dir is not None:
         config.private_keys_dir = (base / config.private_keys_dir).resolve()
     for task in config.task.values():
-        task.datastore_base = (base / task.datastore_base).resolve()
+        task.datastore_dir = (base / task.datastore_dir).resolve()
         root, pattern = split_organized(task.organized)
         task.organized = f"{(base / root).resolve()}/{pattern}"
 
@@ -388,13 +388,13 @@ def load_sty_config(path: Path) -> StyConfig:
     # a datastore, where admit would find runs/ among the task codes.
     for code, task in sorted(config.task.items()):
         if (
-            task.datastore_base == config.incoming_dir
-            or config.incoming_dir in task.datastore_base.parents
-            or task.datastore_base in config.incoming_dir.parents
+            task.datastore_dir == config.incoming_dir
+            or config.incoming_dir in task.datastore_dir.parents
+            or task.datastore_dir in config.incoming_dir.parents
         ):
             raise ConfigurationError(
                 f"{path} has a problem: task {code!r} keeps its runs in "
-                f"{task.datastore_base}, and incoming_dir is {config.incoming_dir}. One is "
+                f"{task.datastore_dir}, and incoming_dir is {config.incoming_dir}. One is "
                 "inside the other. incoming_dir is a copy of the bucket, and the copy "
                 "deletes whatever the bucket doesn't have, so it needs a directory "
                 "of its own."
@@ -407,10 +407,10 @@ def load_sty_config(path: Path) -> StyConfig:
     for number, code in enumerate(codes):
         for other in codes[number + 1 :]:
             mine, theirs = config.task[code], config.task[other]
-            if mine.datastore_base == theirs.datastore_base:
+            if mine.datastore_dir == theirs.datastore_dir:
                 raise ConfigurationError(
                     f"{path} has a problem: tasks {code!r} and {other!r} have the same "
-                    f"datastore_base, {mine.datastore_base}. Each task needs its own."
+                    f"datastore_dir, {mine.datastore_dir}. Each task needs its own."
                 )
             roots = sorted([mine.organized_root, theirs.organized_root])
             if roots[0] == roots[1] or roots[0] in roots[1].parents:

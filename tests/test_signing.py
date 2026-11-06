@@ -30,7 +30,7 @@ MODULES = "questions:1,2,3|reels:03,22|sentences:05,52|videolog:1,2"
 SIGNED = {"id": "10235", "event": "base", "modules": MODULES}
 
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "public_keys.txt"
 
@@ -86,7 +86,7 @@ def secure(private_keys_dir: Path) -> Path:
         'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
         "[task.teddy]\n"
-        'datastore_base = "./teddy"\n'
+        'datastore_dir = "./teddy"\n'
         'organized = "./organized/teddy/{id}/{event}_{run_number}"\n'
         'signed_parameters = ["id", "event", "modules"]\n'
     )

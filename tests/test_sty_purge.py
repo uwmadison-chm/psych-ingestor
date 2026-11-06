@@ -416,6 +416,6 @@ def sty_task(tmp_path: Path) -> str:
     return (
         f'incoming_dir = "{tmp_path / "incoming"}"\n'
         "[task.stroop]\n"
-        f'datastore_base = "{tmp_path / "stroop-data"}"\n'
+        f'datastore_dir = "{tmp_path / "stroop-data"}"\n'
         f'organized = "{tmp_path / "organized"}/{{participant_id}}_{{run_number}}"\n'
     )

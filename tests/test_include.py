@@ -13,7 +13,7 @@ from psych_ingestor.config import ConfigSource, ConfigurationError, load_config
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 
 MAIN = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 include = ["studies"]
 
@@ -128,7 +128,7 @@ def test_one_studys_task_cant_encrypt_to_anothers_key(main: Path, tmp_path: Path
 
 def test_an_included_file_cant_say_where_data_goes(main: Path, tmp_path: Path):
     (tmp_path / "studies" / "lucida.toml").write_text(
-        'data_root = "/elsewhere"\n' + LUCIDA
+        'data_dir = "/elsewhere"\n' + LUCIDA
     )
     with pytest.raises(ConfigurationError) as raised:
         load_config(main)

@@ -24,11 +24,11 @@ writeFileSync(
 incoming_dir = "./data/done"
 
 [task.sealed]
-datastore_base = "./sealed"
+datastore_dir = "./sealed"
 organized = "./organized/sealed/{participant_id}_{run_number}"
 
 [task.signed]
-datastore_base = "./signed"
+datastore_dir = "./signed"
 organized = "./organized/signed/{participant_id}_{run_number}"
 signed_parameters = ["participant_id", "modules"]
 `,
@@ -48,7 +48,7 @@ writeFileSync(join(dir, "public_keys.txt"), pigsty("keys", "export"));
 const config = join(dir, "pig.toml");
 writeFileSync(
   config,
-  `data_root = "./data"
+  `data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "./public_keys.txt"
 
