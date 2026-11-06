@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Copy the tasks in `pigsty.toml` from the bucket into `incoming_dir`, with `rclone sync`.
 
 The web server copies its `done/` to a bucket, so the bucket holds `{task}/{run_id}/…`,

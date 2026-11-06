@@ -2,12 +2,24 @@
 
 On the secure side, `pigsty admit` reads runs from `incoming_dir` in `pigsty.toml`, which has the same shape as the web server's `done/`. Something has to copy them there from the bucket the web server uploads to. `pigsty-fetch` does that with one `rclone sync`, limited to the tasks `pigsty.toml` lists, so a bucket that holds other studies' tasks too only gives you yours.
 
-It needs Python 3.12 or later and rclone, and nothing else.
+It needs Python 3.12 or later and rclone, and nothing else. It's one file, so you can download it and run it, with `main` replaced by a tag or commit to pin a version:
 
 ```
-cd contrib/rclone
-uv sync
-uv run pigsty-fetch --from pigbucket:chm-wilbur-01 \
+curl -fsSLo /usr/local/bin/pigsty-fetch \
+  https://raw.githubusercontent.com/uwmadison-chm/psych-ingestor/main/contrib/rclone/src/pig_rclone/fetch.py
+chmod +x /usr/local/bin/pigsty-fetch
+```
+
+Or install it with uv, which puts `pigsty-fetch` on your PATH:
+
+```
+uv tool install "git+https://github.com/uwmadison-chm/psych-ingestor#subdirectory=contrib/rclone"
+```
+
+Then:
+
+```
+pigsty-fetch --from pigbucket:chm-wilbur-01 \
   --config /etc/pigsty/pigsty.toml --rclone-config /etc/pigsty/rclone.conf
 ```
 
@@ -32,7 +44,7 @@ Run `pigsty admit` once it's finished, not at the same time: rclone downloads ea
 Type=oneshot
 User=pigsty
 Environment=PIGSTY_CONFIG=/etc/pigsty/pigsty.toml
-ExecStart=/opt/pig/contrib/rclone/.venv/bin/pigsty-fetch --from pigbucket:chm-wilbur-01 --rclone-config /etc/pigsty/rclone.conf
+ExecStart=/usr/local/bin/pigsty-fetch --from pigbucket:chm-wilbur-01 --rclone-config /etc/pigsty/rclone.conf
 ExecStart=/opt/pig/.venv/bin/pigsty admit
 ExecStart=/opt/pig/.venv/bin/pigsty purge
 ```
