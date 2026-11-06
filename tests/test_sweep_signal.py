@@ -13,7 +13,7 @@ from psych_ingestor.config import ConfigurationError, load_config
 from psych_ingestor.service import Pig
 
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]

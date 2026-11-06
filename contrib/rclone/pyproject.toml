@@ -1,0 +1,19 @@
+[project]
+name = "pig-rclone"
+version = "0.1.0"
+description = "Copy Psych Ingestor runs from a bucket into each task's incoming/, with rclone"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+pigsty-fetch = "pig_rclone.fetch:main"
+
+[build-system]
+requires = ["uv_build>=0.11.22,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.16.0",
+]

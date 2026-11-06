@@ -56,9 +56,10 @@ def test_pig_health_exits_like_the_health_check_answers(config_path, pig, capsys
 
 STY = """
 private_keys_dir = "./private_keys"
+incoming_dir = "./mount/incoming"
 
 [task.stroop]
-datastore_base = "./mount/stroop-data"
+datastore_dir = "./mount/stroop-data"
 organized = "./mount/organized/stroop/{participant_id}_{run_number}"
 """
 
@@ -109,7 +110,7 @@ def test_pigsty_check_lists_directories_that_arent_there(tmp_path, capsys):
     pigsty(["check", "--config", str(sty)], result_action="return_value")
 
     out = capsys.readouterr().out
-    assert f"  {tmp_path / 'mount' / 'stroop-data' / 'incoming'}\n" in out
+    assert f"  {tmp_path / 'mount' / 'incoming'}\n" in out
     assert f"  {tmp_path / 'mount' / 'stroop-data' / 'runs'}\n" in out
     assert f"  {tmp_path / 'mount' / 'organized' / 'stroop'}\n" in out
     assert not (tmp_path / "mount").exists()
@@ -126,7 +127,7 @@ def test_pigsty_check_fix_makes_every_directory_it_needs(tmp_path, capsys):
     assert "none yet" in out
     for made in [
         "private_keys",
-        "mount/stroop-data/incoming",
+        "mount/incoming",
         "mount/stroop-data/runs",
         "mount/organized/stroop",
     ]:

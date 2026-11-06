@@ -1,7 +1,9 @@
 """Admit downloaded runs: check each one against its manifest and move it into `runs/`.
 
 Runs reach the secure side by a copy Pig doesn't run, `rclone sync` from the bucket or
-something like it, into each task's `incoming/`. That copy isn't atomic. A run can be
+something like it, into `incoming_dir`, which has the same shape as the web server's `done/`:
+`{incoming_dir}/{task_code}/{run_id}/`. On a single machine, `incoming_dir` can be `done/` itself.
+That copy isn't atomic. A run can be
 half there for a while, and its manifest can arrive before the files it lists. So nothing
 on the secure side reads `incoming/`, except this, and purge, which needs the bytes the
 web server has.
@@ -44,7 +46,6 @@ from . import storage
 from .config import os_error_reason
 from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
 
-INCOMING_DIRECTORY = "incoming"
 RUNS_DIRECTORY = "runs"
 
 # What a run is, without its file hashes. Written by admit into `runs/{run_id}/`, and
@@ -125,23 +126,22 @@ class Outcome:
 
 def admit(
     task_code: str,
+    incoming: Path,
     datastore: Path,
     private_keys: list[PrivateKey] | None = None,
     copy_ciphertext_to: Path | None = None,
 ) -> AdmitReport:
-    """Admit every run in `datastore/incoming/` that isn't in `datastore/runs/` yet.
+    """Admit every run in `incoming_dir`, this task's directory in `incoming_dir`, that isn't in
+    `datastore/runs/` yet.
 
     `private_keys` are the keys an encrypted run is decrypted with. With
     `copy_ciphertext_to`, each encrypted run's ciphertext is kept there too.
     """
     report = AdmitReport()
-    incoming = datastore / INCOMING_DIRECTORY
     runs = datastore / RUNS_DIRECTORY
     if not incoming.is_dir():
-        report.problems[str(incoming)] = (
-            "There's no incoming directory here. It's where the copy from the bucket "
-            "is expected to put this task's runs."
-        )
+        # Nothing of this task's has arrived yet. The copy from the bucket makes the
+        # directory along with its first run.
         return report
     storage.make_directories(runs)
 
@@ -218,8 +218,8 @@ def _read_manifest(task_code: str, source: Path) -> dict[str, Any]:
     try:
         text = (source / storage.MANIFEST_FILE).read_text(encoding="utf-8")
     except FileNotFoundError:
-        # The web side uploads the manifest last, but a download can still bring it in
-        # before the rest, or not yet at all.
+        # Neither copy promises an order, so the manifest can arrive before the files
+        # it lists, after them, or not yet at all.
         raise StillArriving("no manifest.json yet") from None
     try:
         manifest = json.loads(text)

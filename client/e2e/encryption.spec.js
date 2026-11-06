@@ -4,7 +4,7 @@
 // against each other.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
@@ -41,7 +41,6 @@ test("an encrypted run is unreadable on the web server and decrypted by admit", 
   expect(events).not.toContain("run_start");
 
   run("PIG_COMMAND", "uv run pig", "sweep", "--config", join(PIG_DIR, "pig.toml"));
-  cpSync(join(PIG_DIR, "data", "done", "sealed", runId), join(PIG_DIR, "sealed", "incoming", runId), { recursive: true });
   run("PIGSTY_COMMAND", "uv run pigsty", "admit", "--config", join(PIG_DIR, "pigsty.toml"));
 
   const admitted = join(PIG_DIR, "sealed", "runs", runId);

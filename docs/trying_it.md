@@ -28,7 +28,7 @@ changing and the next request uses it — open or close a task, add a new one, c
 long its runs stay open, no restart needed. If you save something that doesn't parse, the server
 keeps running on the last version that worked and `pig health` tells you what's wrong.
 
-The exception is `data_root` and `database`: change those with the server stopped, or
+The exception is `data_dir` and `database`: change those with the server stopped, or
 runs already in progress end up with their data somewhere nothing will look for it.
 
 ## Send it something

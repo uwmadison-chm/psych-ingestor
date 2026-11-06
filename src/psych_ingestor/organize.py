@@ -1,6 +1,6 @@
 """Build a readable tree from a task's admitted runs.
 
-`pigsty admit` keeps each task's runs in `{datastore_base}/runs/`, one directory per run,
+`pigsty admit` keeps each task's runs in `{datastore_dir}/runs/`, one directory per run,
 named for its run ID. That's the record, and it's deliberately not readable:
 `runs/9f3c1a7e-…/` tells a person nothing. This copies each run to a path built from its
 `pig-run.json`, like `stroop/baseline/10351_0002/`, under the task's organized root.

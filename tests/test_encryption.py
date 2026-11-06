@@ -24,7 +24,7 @@ NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
 PARTICIPANT = {"participant_id": "10351"}
 
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "public_keys.txt"
 
@@ -86,10 +86,10 @@ def encrypted_data(data: object, private_key: keys.PrivateKey) -> str:
 
 
 def downloaded(pig: Pig, run_id: str, datastore: Path) -> Path:
-    """Finish a run on the web side and copy it into the datastore's incoming/."""
+    """Finish a run on the web side and copy it into incoming, beside the datastore."""
     pig.finalize_run("secret", run_id)
     sweep.sweep(pig.config, pig.connection)
-    incoming = datastore / "incoming" / run_id
+    incoming = datastore.parent / "incoming" / "secret" / run_id
     shutil.copytree(pig.config.done_root / "secret" / run_id, incoming)
     return incoming
 
@@ -230,7 +230,7 @@ def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
 
 def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('private_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     made = keys.new_private_key(tmp_path / "keys", "lucida/2026a", NOW)
     made.path.chmod(0o644)
 
@@ -246,7 +246,10 @@ def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     assert "lucida/2026a" in output.out
     assert "ignoring permissions" in output.err
 
-    path.write_text('private_keys_dir = "./keys"\nignore_permissions = true\n')
+    path.write_text(
+        'incoming_dir = "./incoming"\n'
+        'private_keys_dir = "./keys"\nignore_permissions = true\n'
+    )
     pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
     output = capsys.readouterr()
     assert "lucida/2026a" in output.out
@@ -277,7 +280,7 @@ def test_export_lists_every_key_by_name(private_keys_dir: Path):
 
 def test_pigsty_makes_and_exports_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text('private_keys_dir = "./keys"\n')
+    path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
         ["keys", "new", "lucida/2026b", "--config", str(path)],
         result_action="return_value",
@@ -316,7 +319,7 @@ def test_admit_decrypts_events_and_parts(
     datastore = tmp_path / "datastore"
     incoming = downloaded(pig, run_id, datastore)
 
-    report = admit("secret", datastore, [private_key])
+    report = admit("secret", tmp_path / "incoming" / "secret", datastore, [private_key])
 
     assert report.problems == {}
     assert report.admitted == [run_id]
@@ -344,7 +347,7 @@ def test_admit_can_keep_the_ciphertext(
     incoming = downloaded(pig, run_id, datastore)
     kept = tmp_path / "ciphertext"
 
-    admit("secret", datastore, [private_key], kept)
+    admit("secret", tmp_path / "incoming" / "secret", datastore, [private_key], kept)
 
     assert (kept / run_id / "events.jsonl").read_bytes() == (
         incoming / "events.jsonl"
@@ -364,7 +367,13 @@ def test_a_run_no_key_opens_isnt_admitted(
     downloaded(pig, run_id, datastore)
     stranger = keys.new_private_key(tmp_path / "elsewhere", "stranger", NOW)
 
-    report = admit("secret", datastore, [stranger], tmp_path / "ciphertext")
+    report = admit(
+        "secret",
+        tmp_path / "incoming" / "secret",
+        datastore,
+        [stranger],
+        tmp_path / "ciphertext",
+    )
 
     assert report.admitted == []
     assert "no private key" in next(iter(report.problems.values()))
@@ -377,7 +386,7 @@ def test_an_encrypted_run_needs_private_keys(pig: Pig, tmp_path: Path):
     datastore = tmp_path / "datastore"
     downloaded(pig, run_id, datastore)
 
-    report = admit("secret", datastore, [])
+    report = admit("secret", tmp_path / "incoming" / "secret", datastore, [])
 
     assert "private_keys_dir" in next(iter(report.problems.values()))
 
@@ -394,7 +403,7 @@ def test_a_cut_short_line_is_kept_as_it_is(
     datastore = tmp_path / "datastore"
     downloaded(pig, run_id, datastore)
 
-    admit("secret", datastore, [private_key])
+    admit("secret", tmp_path / "incoming" / "secret", datastore, [private_key])
 
     admitted = (datastore / "runs" / run_id / "events.jsonl").read_text()
     assert admitted.splitlines()[0] == '{"event_id": "1", "da'
@@ -415,9 +424,10 @@ def test_pigsty_check_warns_about_a_public_key_no_private_key_matches(
     path = private_keys_dir.parent / "pigsty.toml"
     path.write_text(
         'pig_url = "https://pig.example.edu"\n'
+        'incoming_dir = "./incoming"\n'
         'private_keys_dir = "./private_keys"\n'
-        '[task.secret]\ndatastore_base = "./a"\norganized = "./o/a/{run_number}"\n'
-        '[task.other]\ndatastore_base = "./b"\norganized = "./o/b/{run_number}"\n'
+        '[task.secret]\ndatastore_dir = "./a"\norganized = "./o/a/{run_number}"\n'
+        '[task.other]\ndatastore_dir = "./b"\norganized = "./o/b/{run_number}"\n'
     )
 
     pigsty(["check", "--config", str(path)], result_action="return_value")

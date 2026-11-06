@@ -4,7 +4,7 @@
 # working copy accumulates — the database, the data — lands under local/ too. That's the
 # one directory version control ignores.
 
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 # More task definitions, from every .toml file in these directories: a file or a few per
@@ -22,7 +22,7 @@ database = "./pig.db"
 #
 # run_as = "pig"
 
-# Every run is stored under data_root as done/{task_code}/{run_id}/, with its events and a
+# Every run is stored under data_dir as done/{task_code}/{run_id}/, with its events and a
 # manifest describing it. A readable layout built from the parameters is `pigsty organize`'s
 # job, later and elsewhere, so nothing here says where data lands.
 

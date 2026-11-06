@@ -92,7 +92,7 @@ def _open(path: Path | None) -> tuple[Config, sqlite3.Connection]:
 def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     """Check pig.toml, and say what each task is set up to do.
 
-    Also lists what Pig needs that isn't there yet: data_root, the database, the
+    Also lists what Pig needs that isn't there yet: data_dir, the database, the
     directory it goes in, and the directory touch_after_finalizing goes in. The service
     makes them itself when it first needs them; with --fix, this makes them now, so
     they're there to set owners and permissions on. It never changes anything that's
@@ -104,7 +104,7 @@ def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
     The secure side's pigsty.toml is checked by `pigsty check`.
     """
     loaded = _load(config)
-    directories = [loaded.data_root, loaded.database.parent]
+    directories = [loaded.data_dir, loaded.database.parent]
     signal = loaded.touch_after_finalizing
     if signal is not None:
         directories.append(signal.parent)
@@ -127,7 +127,7 @@ def check(*, config: ConfigPath | None = None, fix: bool = False) -> None:
             print(f"Made {path}")
         missing = []
     print(f"Configuration looks good: {len(loaded.task)} task(s).")
-    print(f"  data root: {loaded.data_root}")
+    print(f"  data root: {loaded.data_dir}")
     print(f"  database:  {loaded.database}")
     for directory in loaded.include:
         print(f"  includes:  {directory}")

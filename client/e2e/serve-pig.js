@@ -16,17 +16,19 @@ const pigstyCommand = (process.env.PIGSTY_COMMAND ?? "uv run pigsty").split(" ")
 
 // The secure side, for the encrypted task and the signed one: a private key of each
 // kind, and the public keys file the web side reads. encryption.spec.js admits runs, and
-// signing.spec.js signs links, with the same pigsty.toml.
+// signing.spec.js signs links, with the same pigsty.toml. Both sides are on one machine,
+// so incoming is Pig's own done/ and nothing has to be copied.
 writeFileSync(
   join(dir, "pigsty.toml"),
   `private_keys_dir = "./private_keys"
+incoming_dir = "./data/done"
 
 [task.sealed]
-datastore_base = "./sealed"
+datastore_dir = "./sealed"
 organized = "./organized/sealed/{participant_id}_{run_number}"
 
 [task.signed]
-datastore_base = "./signed"
+datastore_dir = "./signed"
 organized = "./organized/signed/{participant_id}_{run_number}"
 signed_parameters = ["participant_id", "modules"]
 `,
@@ -39,8 +41,6 @@ function pigsty(...args) {
   if (done.status !== 0) throw new Error(`pigsty ${args.join(" ")} failed: ${done.stderr}`);
   return done.stdout;
 }
-// Admit goes through every task in pigsty.toml, and the signed task's runs never arrive.
-mkdirSync(join(dir, "signed", "incoming"), { recursive: true });
 pigsty("keys", "new", "e2e");
 pigsty("keys", "new", "--signing", "e2e-signing");
 writeFileSync(join(dir, "public_keys.txt"), pigsty("keys", "export"));
@@ -48,7 +48,7 @@ writeFileSync(join(dir, "public_keys.txt"), pigsty("keys", "export"));
 const config = join(dir, "pig.toml");
 writeFileSync(
   config,
-  `data_root = "./data"
+  `data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "./public_keys.txt"
 

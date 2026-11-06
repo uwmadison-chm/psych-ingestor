@@ -33,7 +33,7 @@ AGE_KEY = "fuzz/age"
 
 # One task for each kind of check Pig makes, so a generated request meets all of them.
 CONFIG = """
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 public_keys_file = "{public_keys}"
 
@@ -204,7 +204,7 @@ def check_stored_lines(pig: Pig) -> None:
     The lines Pig writes are read by researchers' tools, not just by Pig, and a line
     `jq` refuses is a trial lost as surely as one never written.
     """
-    for events in pig.config.data_root.rglob("events.jsonl"):
+    for events in pig.config.data_dir.rglob("events.jsonl"):
         # Split on newlines only. `str.splitlines` also splits on characters JSON
         # can hold as they are, like U+2028, and Pig writes those unescaped.
         for line in events.read_bytes().decode("utf-8").split("\n"):

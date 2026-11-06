@@ -42,7 +42,7 @@ section that isn't mentioned here isn't.
 
 ```toml
 # local/pig.toml
-data_root = "./data"
+data_dir = "./data"
 database = "./pig.db"
 
 [task.stroop]
@@ -59,11 +59,11 @@ media = true               # this task records audio; off unless you say so
 max_part_size = "8M"       # optional, defaults to 8M
 ```
 
-`data_root` and `database` are relative to the configuration file, so a checkout can move
+`data_dir` and `database` are relative to the configuration file, so a checkout can move
 without editing anything. A working copy keeps the whole lot — file, database, and data —
 under `local/`, which is the one directory version control ignores; the commands default
 to `./local/pig.toml` and `--config` or `PIG_CONFIG` overrides that (see [Environment variables](#environment-variables)). A real deployment
-puts the file wherever its configuration belongs and points `data_root` at real storage.
+puts the file wherever its configuration belongs and points `data_dir` at real storage.
 
 Under the data root, Pig keeps two directories, and every run is a directory named for
 its run ID under one of them:
@@ -97,7 +97,7 @@ Two things follow, and both are deliberate:
   next good save picks up from there. A typo in a text editor must not stop data
   collection for participants who are mid-task — that trade is the whole reason this
   isn't "refuse everything until it parses."
-- **`data_root` and `database` are not safe to change under a running service.** They're
+- **`data_dir` and `database` are not safe to change under a running service.** They're
   re-read like everything else, so the change takes effect immediately, and datasets for
   runs already in progress are under the *old* root where nothing will look for them.
   Change those two while the service is stopped.
@@ -109,7 +109,7 @@ gets its runs finished.
 
 `pig check` validates the file and prints what each task is set up to do. Worth running
 after an edit, since the service won't complain to you directly — it just keeps serving the
-last good version and reports the problem on `/health`. It also lists `data_root`, the
+last good version and reports the problem on `/health`. It also lists `data_dir`, the
 database, and the database's directory if they aren't there yet. The service makes them
 when it first needs them; `pig check --fix` makes them now.
 
@@ -130,7 +130,7 @@ Every `pig` command, `serve` included, refuses to start as anyone else, and says
 
 ```toml
 # /etc/pig/pig.toml
-data_root = "/srv/pig/data"
+data_dir = "/srv/pig/data"
 database = "/srv/pig/pig.db"
 include = ["studies"]
 ```
@@ -149,7 +149,7 @@ run_key_parameters = ["id", "event"]
 encrypt_to = "lucida/2026a"
 ```
 
-Nothing else: `data_root`, `database`, `include`, `touch_after_finalizing`, and `run_as` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
+Nothing else: `data_dir`, `database`, `include`, `touch_after_finalizing`, and `run_as` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
 
 **A task uses only the keys its own file names.** Only an included file's tasks can encrypt to the keys in its `public_keys_file` or check signatures with them, and the main file's `public_keys_file` is for the main file's tasks. The path is relative to the included file or, when that's a link, to the file it links to, so a linked study file finds its keys next to it in its repository. That's what lets each study run its own secure side: the study's `pigsty keys export` writes just that study's keys, the file is copied in next to the study's tasks, and a typo can't send one study's data to a key another study holds. Key names only have to be unique within a file.
 
@@ -273,9 +273,7 @@ None of this happens in the web service. Finalizing a run marks it `finalizing` 
 finds closed runs, writes each one's manifest, moves its directory, and marks the run
 `done`.
 
-Copying finished runs somewhere else — an `rclone` push to S3 or similar — is not built,
-and when it is, it won't be Pig tracking whether the copy happened: `done/` is a directory
-of immutable, hashable run directories, which is what a copy tool wants. See issue #2.
+Copying finished runs somewhere else is `rclone`'s job, not Pig's, and Pig doesn't track whether the copy happened: `done/` is a directory of immutable, hashable run directories, which is what a copy tool wants. See [deployment.md](deployment.md#copying-finished-runs-to-the-bucket).
 
 Every run waits for the next sweep before it reaches `complete`. That's the cost of keeping
 the service simple, and it's affordable because the durability promise lands at
@@ -289,7 +287,7 @@ If that wait matters, `touch_after_finalizing` names a file the service touches 
 touch_after_finalizing = "/run/pig/sweep-due"
 ```
 
-It's a hint and nothing more. The sweep's timer still has to run, because expiring runs and catching a touch nobody saw are its job. Like `data_root`, the path is relative to the configuration file, and it belongs in the main file. `pig check` says whether whoever ran it can write the file; run it as the service's user (`sudo -u pig pig check`) to find out whether the service can. See [deployment.md](deployment.md) for a systemd path unit that watches it.
+It's a hint and nothing more. The sweep's timer still has to run, because expiring runs and catching a touch nobody saw are its job. Like `data_dir`, the path is relative to the configuration file, and it belongs in the main file. `pig check` says whether whoever ran it can write the file; run it as the service's user (`sudo -u pig pig check`) to find out whether the service can. See [deployment.md](deployment.md) for a systemd path unit that watches it.
 
 ### Audio, video, and other files
 
