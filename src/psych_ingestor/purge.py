@@ -185,6 +185,13 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
         if (state / PURGED_FILE).exists():
             report.already_purged += 1
             continue
+        not_admitted = _not_admitted(task_code, admitted / run_id)
+        if not_admitted:
+            report.problems[str(admitted / run_id)] = (
+                f"{not_admitted} pigsty admit writes it into every run it admits, so "
+                "this run wasn't purged."
+            )
+            continue
         try:
             hashes = purge_hashes(incoming / run_id)
         except PurgeProblem as problem:
@@ -210,6 +217,35 @@ def purge_runs(task_code: str, datastore: Path, send: Sender) -> PurgeReport:
         _record_purged(state)
         report.purged.append(run_id)
     return report
+
+
+def _not_admitted(task_code: str, directory: Path) -> str:
+    """Why a directory in `runs/` doesn't look like a run admit put there, or nothing
+    if it does.
+
+    A directory with the run's name isn't enough. One copied in by hand, or left by a
+    partial restore, would have it, and purging on its word would leave the secure side
+    with whatever that directory holds. Admit writes `pig-run.json` before renaming the
+    run into `runs/`, so every run it admitted has one, naming the run and its task.
+    """
+    try:
+        described = json.loads((directory / admit.RUN_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return f"There's no {admit.RUN_FILE} in it."
+    except (OSError, ValueError) as error:
+        reason = os_error_reason(error) if isinstance(error, OSError) else error
+        return f"Its {admit.RUN_FILE} can't be read ({reason})."
+    if (
+        not isinstance(described, dict)
+        or described.get("type") != admit.RUN_FILE_TYPE
+        or described.get("run_id") != directory.name
+        or described.get("task_code") != task_code
+    ):
+        return (
+            f"Its {admit.RUN_FILE} doesn't describe run {directory.name} of task "
+            f"{task_code}."
+        )
+    return ""
 
 
 def _record_purged(state: Path) -> None:

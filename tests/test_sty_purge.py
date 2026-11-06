@@ -77,6 +77,56 @@ def test_a_run_not_admitted_isnt_purged(pig: Pig, client: TestClient, tmp_path: 
     assert done(pig, run_id).is_dir()
 
 
+def test_a_directory_in_runs_without_a_run_file_isnt_purged(
+    pig: Pig, client: TestClient, tmp_path: Path
+):
+    """Only admit's word counts. A directory copied into runs/ by hand doesn't."""
+    run_id = downloaded_run(pig, tmp_path)
+    shutil.copytree(tmp_path / "incoming" / run_id, tmp_path / "runs" / run_id)
+
+    report = purge.purge_runs("stroop", tmp_path, through(client))
+
+    assert report.purged == []
+    assert "pig-run.json" in report.problems[str(tmp_path / "runs" / run_id)]
+    assert done(pig, run_id).is_dir()
+    assert not purged_file(tmp_path, run_id).exists()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"run_id": "someone-else"},
+        {"task_code": "flanker"},
+        {"type": "something_else"},
+    ],
+)
+def test_a_run_file_for_another_run_isnt_purged(
+    pig: Pig, client: TestClient, tmp_path: Path, change: dict
+):
+    run_id = admitted_run(pig, tmp_path)
+    run_file = tmp_path / "runs" / run_id / "pig-run.json"
+    run_file.write_text(json.dumps({**json.loads(run_file.read_text()), **change}))
+
+    report = purge.purge_runs("stroop", tmp_path, through(client))
+
+    assert report.purged == []
+    assert "doesn't describe" in report.problems[str(tmp_path / "runs" / run_id)]
+    assert done(pig, run_id).is_dir()
+
+
+def test_an_unreadable_run_file_isnt_purged(
+    pig: Pig, client: TestClient, tmp_path: Path
+):
+    run_id = admitted_run(pig, tmp_path)
+    (tmp_path / "runs" / run_id / "pig-run.json").write_text("{not json")
+
+    report = purge.purge_runs("stroop", tmp_path, through(client))
+
+    assert report.purged == []
+    assert "can't be read" in report.problems[str(tmp_path / "runs" / run_id)]
+    assert done(pig, run_id).is_dir()
+
+
 def test_a_purged_run_isnt_asked_about_again(
     pig: Pig, client: TestClient, tmp_path: Path
 ):
