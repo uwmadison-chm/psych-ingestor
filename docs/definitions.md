@@ -188,7 +188,7 @@ done/stroop/9f3c1a7e-6b2d-4f80-9c11-2a5e8d40b7c3/
                 000002.part
 ```
 
-`events.jsonl` is the events, one JSON object per line, in the order they arrived. Pig
+`events.jsonl` is the events, one JSON object per line, in the order Pig stored them (events sent together, in any order). Pig
 never rewrites it: no sorting, no tidying. It can hold the same line twice — the retry
 after a crash at the wrong moment writes it again — so a line count is an upper bound on
 the number of events until whatever reads the data drops the repeats. `pigsty organize`

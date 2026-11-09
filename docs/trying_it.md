@@ -99,7 +99,7 @@ ls local/data/done/interview/YOUR-RUN-ID/media/00001/     # the parts, if you se
 ```
 
 The manifest says what the run is — who, which session, which run number, when — and the
-events file is what your task sent, one line per event, in the order it arrived. A
+events file is what your task sent, one line per event. A
 readable tree named for participants and sessions is what `pigsty admit` and
 `pigsty organize` build from these, on the machine where the data ends up.
 [organizing.md](organizing.md) says how to try them on a laptop.
