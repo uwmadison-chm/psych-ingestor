@@ -42,35 +42,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from . import storage
-from .config import os_error_reason
-from .keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
-
-RUNS_DIRECTORY = "runs"
-
-# What a run is, without its file hashes. Written by admit into `runs/{run_id}/`, and
-# copied by organize into the readable tree.
-RUN_FILE = "pig-run.json"
-RUN_FILE_TYPE = "pig_run"
-RUN_FILE_VERSION = 2
-
-# The manifest's fields that describe the run rather than its files.
-RUN_FIELDS = (
-    "run_id",
-    "task_code",
-    "run_number",
-    "run_key_parameters",
-    "path_parameters",
-    "signed_parameters",
-    "disposition",
-    "started_at",
-    "closed_at",
-    "done_at",
-    "parameters",
-    "extra_parameters",
-    "media",
-    "signed_by",
-)
+from .. import files, formats
+from ..common import os_error_reason
+from ..keys import CantDecrypt, Keyring, PrivateKey, is_encrypted_text
 
 # What a run is copied into before it's renamed into `runs/`. Starts with a dot, so a
 # listing of `runs/` never mistakes it for an admitted run.
@@ -81,7 +55,7 @@ CIPHERTEXT_SUFFIX = ".ciphertext"
 # Manifests admit reads. Version 2 is from before encryption, and its runs never are.
 # Versions 2 and 3 are from before signing, and before parameters were split into path
 # parameters and signed ones; see `_from_before_signing`.
-MANIFEST_VERSIONS = (2, 3, storage.MANIFEST_VERSION)
+MANIFEST_VERSIONS = (2, 3, formats.MANIFEST_VERSION)
 
 # Held while an admit works on a task's datastore, so two at once can't both admit the
 # same run.
@@ -138,18 +112,18 @@ def admit(
     `copy_ciphertext_to`, each encrypted run's ciphertext is kept there too.
     """
     report = AdmitReport()
-    runs = datastore / RUNS_DIRECTORY
+    runs = datastore / formats.RUNS_DIRECTORY
     if not incoming.is_dir():
         # Nothing of this task's has arrived yet. The copy from the bucket makes the
         # directory along with its first run.
         return report
-    storage.make_directories(runs)
+    files.make_directories(runs)
 
     try:
-        with storage.hold_lock(datastore / LOCK_FILE):
-            admitted = set(storage.directories_in(runs))
+        with files.hold_lock(datastore / LOCK_FILE):
+            admitted = set(files.directories_in(runs))
             new = []
-            for run_id in storage.directories_in(incoming):
+            for run_id in files.directories_in(incoming):
                 if run_id in admitted:
                     report.already_admitted += 1
                 else:
@@ -173,7 +147,7 @@ def admit(
                         report.arriving.append(run_id)
                     else:
                         report.problems[str(incoming / run_id)] = outcome.why
-    except storage.LockHeld:
+    except files.LockHeld:
         report.problems[str(datastore)] = (
             "another pigsty admit is working on this task. Nothing was admitted. "
             "Run this again once it's finished."
@@ -216,7 +190,7 @@ def _admit_one(
 
 def _read_manifest(task_code: str, source: Path) -> dict[str, Any]:
     try:
-        text = (source / storage.MANIFEST_FILE).read_text(encoding="utf-8")
+        text = (source / formats.MANIFEST_FILE).read_text(encoding="utf-8")
     except FileNotFoundError:
         # Neither copy promises an order, so the manifest can arrive before the files
         # it lists, after them, or not yet at all.
@@ -226,7 +200,7 @@ def _read_manifest(task_code: str, source: Path) -> dict[str, Any]:
     except ValueError as error:
         raise RunProblem(f"can't read manifest.json: {error}") from error
     if not isinstance(manifest, dict) or manifest.get("type") != (
-        storage.MANIFEST_TYPE
+        formats.MANIFEST_TYPE
     ):
         raise RunProblem("manifest.json isn't a Pig run manifest.")
     if manifest.get("manifest_version") not in MANIFEST_VERSIONS:
@@ -268,8 +242,8 @@ def _check_listing(source: Path, manifest: dict[str, Any]) -> None:
     listed = {_listed_path(entry["path"]): entry for entry in manifest["files"]}
     # First, so that nothing below follows a symbolic link anywhere in the run.
     try:
-        present = storage.files_in(source)
-    except storage.SymbolicLink as link:
+        present = files.files_in(source)
+    except files.SymbolicLink as link:
         raise RunProblem(
             f"{link}. Pig never makes one, so nothing was admitted."
         ) from None
@@ -286,7 +260,7 @@ def _check_listing(source: Path, manifest: dict[str, Any]) -> None:
                 f"{entry['bytes']}. Nothing was admitted."
             )
     for relative in present:
-        if relative != PurePosixPath(storage.MANIFEST_FILE) and relative not in listed:
+        if relative != PurePosixPath(formats.MANIFEST_FILE) and relative not in listed:
             raise RunProblem(
                 f"{relative} is here but not in the manifest. Nothing was admitted."
             )
@@ -320,14 +294,14 @@ def _copy_into_place(source: Path, destination: Path, manifest: dict[str, Any]) 
     Every file and directory is fsynced before the rename, and `runs/` after, so a run
     in `runs/` is on disk.
     """
-    scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
+    scratch = files.fresh_scratch(destination, SCRATCH_SUFFIX)
     try:
         made = _copy_checked(source, scratch, manifest)
         _write_run_file(scratch, manifest, decrypted_with=[])
     except BaseException:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
-    storage.rename_into_place(scratch, destination, made)
+    files.rename_into_place(scratch, destination, made)
 
 
 def _decrypt_into_place(
@@ -351,23 +325,23 @@ def _decrypt_into_place(
             "private_keys_dir to decrypt it with. Nothing was admitted."
         )
     kept = copy_ciphertext_to / destination.name if copy_ciphertext_to else None
-    ciphertext = storage.fresh_scratch(kept or destination, CIPHERTEXT_SUFFIX)
+    ciphertext = files.fresh_scratch(kept or destination, CIPHERTEXT_SUFFIX)
     scratch = None
     try:
         ciphertext_made = _copy_checked(source, ciphertext, manifest)
-        scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
+        scratch = files.fresh_scratch(destination, SCRATCH_SUFFIX)
         made = {scratch}
         keyring = Keyring(private_keys)
         for entry in manifest["files"]:
             relative = _listed_path(entry["path"])
-            storage.make_parent(scratch / relative, made)
+            files.make_parent(scratch / relative, made)
             _decrypt_file(ciphertext / relative, scratch / relative, relative, keyring)
         _write_run_file(scratch, manifest, decrypted_with=sorted(keyring.used))
 
         if kept is not None:
-            storage.copy_file(
-                source / storage.MANIFEST_FILE,
-                ciphertext / storage.MANIFEST_FILE,
+            files.copy_file(
+                source / formats.MANIFEST_FILE,
+                ciphertext / formats.MANIFEST_FILE,
                 ciphertext_made,
             )
             if kept.exists():
@@ -375,13 +349,13 @@ def _decrypt_into_place(
                 # renamed into place. The same run ID is the same ciphertext.
                 shutil.rmtree(ciphertext)
             else:
-                storage.rename_into_place(ciphertext, kept, ciphertext_made)
+                files.rename_into_place(ciphertext, kept, ciphertext_made)
     except BaseException:
         if scratch is not None:
             shutil.rmtree(scratch, ignore_errors=True)
         shutil.rmtree(ciphertext, ignore_errors=True)
         raise
-    storage.rename_into_place(scratch, destination, made)
+    files.rename_into_place(scratch, destination, made)
     shutil.rmtree(ciphertext, ignore_errors=True)
 
 
@@ -390,16 +364,16 @@ def _decrypt_file(
 ) -> None:
     """Decrypt one of a run's files: `events.jsonl` an event at a time, a media part
     whole. The plaintext is fsynced before this returns."""
-    if relative == PurePosixPath(storage.EVENTS_FILE):
+    if relative == PurePosixPath(formats.EVENTS_FILE):
         with (
             open(source, encoding="utf-8") as reading,
             open(target, "w", encoding="utf-8") as writing,
         ):
             writing.writelines(_decrypt_line(line, keyring) for line in reading)
-            storage.flush_and_fsync(writing)
+            files.flush_and_fsync(writing)
         return
-    if relative.parts[0] == storage.MEDIA_DIRECTORY and relative.suffix == (
-        storage.PART_SUFFIX
+    if relative.parts[0] == formats.MEDIA_DIRECTORY and relative.suffix == (
+        formats.PART_SUFFIX
     ):
         try:
             plaintext = keyring.decrypt(source.read_bytes())
@@ -410,7 +384,7 @@ def _decrypt_file(
             ) from None
         with open(target, "wb") as writing:
             writing.write(plaintext)
-            storage.flush_and_fsync(writing)
+            files.flush_and_fsync(writing)
         return
     raise RunProblem(
         f"{relative} isn't a file Pig writes, so there's no telling how to decrypt it. "
@@ -422,7 +396,7 @@ def _decrypt_line(line: str, keyring: Keyring) -> str:
     """One line of `events.jsonl`, with its `data` decrypted.
 
     A line that isn't JSON is one an interrupted append cut short (see
-    `storage.read_lines`). It's kept as it is, the way an unencrypted run keeps it,
+    `formats.read_lines`). It's kept as it is, the way an unencrypted run keeps it,
     and whatever reads the file skips it.
     """
     try:
@@ -449,16 +423,16 @@ def _decrypt_line(line: str, keyring: Keyring) -> str:
             f"event {event_id!r} decrypts to something that isn't JSON. The browser "
             "encrypted something other than the event. Nothing was admitted."
         ) from None
-    return storage.canonical({**stored, "data": data}) + "\n"
+    return formats.canonical({**stored, "data": data}) + "\n"
 
 
 def _copy_checked(source: Path, scratch: Path, manifest: dict[str, Any]) -> set[Path]:
     """Copy every file the manifest lists into `scratch`, checking each hash as it's
-    copied. Returns the directories made, for `storage.rename_into_place` to fsync."""
+    copied. Returns the directories made, for `files.rename_into_place` to fsync."""
     made = {scratch}
     for entry in manifest["files"]:
         relative = _listed_path(entry["path"])
-        digest = storage.copy_file(source / relative, scratch / relative, made)
+        digest = files.copy_file(source / relative, scratch / relative, made)
         if digest != entry["sha256"]:
             raise RunProblem(
                 f"{relative} doesn't match the manifest (sha256 {digest}; the "
@@ -472,16 +446,16 @@ def _write_run_file(
     scratch: Path, manifest: dict[str, Any], decrypted_with: list[str]
 ) -> None:
     described = {
-        "type": RUN_FILE_TYPE,
-        "run_file_version": RUN_FILE_VERSION,
-        **{name: manifest[name] for name in RUN_FIELDS},
+        "type": formats.RUN_FILE_TYPE,
+        "run_file_version": formats.RUN_FILE_VERSION,
+        **{name: manifest[name] for name in formats.RUN_FIELDS},
         # Which public key the task encrypted to, and which private keys opened it.
         # Normally one and the same key; they differ only if the browser had an old copy
         # of the task's settings. Null and empty for a run that isn't encrypted.
         "encrypted_to": manifest.get("encrypted_to"),
         "decrypted_with": decrypted_with,
     }
-    with open(scratch / RUN_FILE, "w", encoding="utf-8") as written:
+    with open(scratch / formats.RUN_FILE, "w", encoding="utf-8") as written:
         json.dump(described, written, indent=2, ensure_ascii=False)
         written.write("\n")
-        storage.flush_and_fsync(written)
+        files.flush_and_fsync(written)

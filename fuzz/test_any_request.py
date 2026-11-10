@@ -29,7 +29,8 @@ from support import (
     time_limit,
 )
 
-from psych_ingestor import service, signing, sweep
+from psych_ingestor import signing
+from psych_ingestor.pig import service, sweep
 
 # ----------------------------------------------------------------- what a body holds
 

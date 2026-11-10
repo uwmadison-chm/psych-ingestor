@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from psych_ingestor import db
-from psych_ingestor.cli import app as pig_cli
-from psych_ingestor.config import ConfigurationError, load_config
-from psych_ingestor.service import Pig
+from psych_ingestor.pig import db
+from psych_ingestor.pig.cli import app as pig_cli
+from psych_ingestor.pig.config import ConfigurationError, load_config
+from psych_ingestor.pig.service import Pig
 
 CONFIG = """
 data_dir = "./data"

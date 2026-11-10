@@ -38,8 +38,9 @@ from hypothesis.stateful import (
 )
 from support import answer, check_answer, fresh_pig, send_part, strict_json
 
-from psych_ingestor import db, media, purge, runs, storage, sweep
-from psych_ingestor.runs import Phase
+from psych_ingestor import formats
+from psych_ingestor.pig import db, media, runs, sweep
+from psych_ingestor.pig.runs import Phase
 
 CONFIG = """
 data_dir = "./data"
@@ -339,11 +340,11 @@ class RunLives(RuleBasedStateMachine):
         run = self.runs[run_id]
         directory = self.directory(run_id, done=True)
         if run.done and not run.purged:
-            hashes = purge.purge_hashes(directory)
+            hashes = formats.purge_hashes(directory)
         else:
-            hashes = {storage.EVENTS_FILE: "0" * 64}
+            hashes = {formats.EVENTS_FILE: "0" * 64}
         if tamper:
-            hashes[storage.EVENTS_FILE] = "f" * 64
+            hashes[formats.EVENTS_FILE] = "f" * 64
         status, body = self.ask(
             lambda: self.pig.purge_run(run.task_code, run_id, {"purge_hashes": hashes})
         )
@@ -380,7 +381,7 @@ class RunLives(RuleBasedStateMachine):
         ):
             if self.runs[row["run_id"]].purged:
                 continue
-            path = storage.part_path(
+            path = formats.part_path(
                 self.directory(row["run_id"]), row["media_id"], row["part"]
             )
             assert path.exists(), f"{path} has a receipt and isn't there"
@@ -408,8 +409,8 @@ class RunLives(RuleBasedStateMachine):
             if not run.done or run.purged:
                 continue
             directory = self.directory(run_id, done=True)
-            files = storage.describe_files(directory)
-            assert storage.read_manifest(directory)["files"] == files
+            files = formats.describe_files(directory)
+            assert formats.read_manifest(directory)["files"] == files
             hashes = {
                 path.relative_to(directory).as_posix(): sha256(path)
                 for path in directory.rglob("*")
@@ -435,19 +436,19 @@ class RunLives(RuleBasedStateMachine):
         if done is None:
             done = run.done
         root = self.pig.config.done_root if done else self.pig.config.in_progress_root
-        return storage.run_directory(root, run.task_code, run_id)
+        return formats.run_directory(root, run.task_code, run_id)
 
     def lines(self, run_id: str) -> set[tuple[str, str]]:
         """Each line in a run's events file, as its event ID and the hash Pig records
         for it."""
-        events = self.directory(run_id) / storage.EVENTS_FILE
+        events = self.directory(run_id) / formats.EVENTS_FILE
         if not events.exists():
             return set()
         found = set()
         for text in events.read_text(encoding="utf-8").split("\n"):
             if text:
                 line = strict_json(text)
-                hashed = storage.content_hash(storage.hashed_text(line))
+                hashed = formats.content_hash(formats.hashed_text(line))
                 found.add((line["event_id"], hashed))
         return found
 

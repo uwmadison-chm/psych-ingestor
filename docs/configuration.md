@@ -480,7 +480,7 @@ gate a restart on it.
 
 | Variable | Read by | What it does |
 | --- | --- | --- |
-| `PIG_CONFIG` | every `pig` command, and the web app | The configuration file, when `--config` isn't given. Defaults to `./local/pig.toml`. `pig serve` sets it for the web app, so you only set it yourself to start the app some other way, such as `uvicorn psych_ingestor.app:app --factory`. |
+| `PIG_CONFIG` | every `pig` command, and the web app | The configuration file, when `--config` isn't given. Defaults to `./local/pig.toml`. `pig serve` sets it for the web app, so you only set it yourself to start the app some other way, such as `uvicorn psych_ingestor.pig.app:app --factory`. |
 | `PIGSTY_CONFIG` | every `pigsty` command | The secure side's configuration file, when `--config` isn't given. Defaults to `./local/pigsty.toml`. See [organizing.md](organizing.md). |
 | `LISTEN_PID`, `LISTEN_FDS` | `pig serve` | Set by systemd when it starts Pig from a socket unit, never by you. When they name this process, `pig serve` uses the socket systemd opened and ignores `--host` and `--port`. |
 

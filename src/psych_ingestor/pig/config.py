@@ -6,138 +6,20 @@ and the database never holds a second opinion about a task definition.
 
 from __future__ import annotations
 
-import os
-import pwd
-import re
-import string
 import threading
-import tomllib
-import unicodedata
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# A safe value: letters, digits, underscore, and a non-leading dash, 1-64 characters.
-# Narrow enough that "." and ".." can't be expressed, so traversal isn't something we
-# have to defend against. Pig itself never puts a parameter value in a path any more —
-# run directories are named for the run ID — but `pigsty organize` will, on another machine,
-# and checking at run start is what makes that safe. See docs/configuration.md.
-SAFE_VALUE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
-
-SAFE_VALUE_EXPLANATION = (
-    "letters, digits, underscore, and dash (not first), 1 to 64 characters"
-)
-
-# A parameter that's signed but isn't a path parameter, like Teddy's `modules`, is text:
-# kept exactly as it arrives, but never part of a path, so it isn't held to the
-# safe-value rule. The cap keeps it from being anything but a parameter. Provisional,
-# like allowing characters outside ASCII; see issue #44.
-MAX_TEXT_VALUE_LENGTH = 2048
-
-TEXT_VALUE_EXPLANATION = (
-    f"any text up to {MAX_TEXT_VALUE_LENGTH} characters, without control characters "
-    "like tabs or line breaks"
-)
-
+from ..common import ConfigurationError, check_run_as, read_toml
+from ..keys import is_signing_public_key, read_public_keys
+from ..rules import TASK_CODE_EXPLANATION, is_task_code, parse_duration, parse_size
 
 # A working copy keeps its configuration, database, and data under `local/`, which is the
 # one path version control ignores. Everything in the file is relative to the file, so
 # moving the whole directory somewhere else needs no edits.
 DEFAULT_CONFIG = "local/pig.toml"
-
-
-class ConfigurationError(Exception):
-    """The configuration file is wrong in a way we can describe."""
-
-
-def os_error_reason(error: OSError, path: Path | None = None) -> str:
-    """What went wrong, like "permission denied (/srv/stroop/runs)", without the
-    "[Errno 13]" Python adds. The path is left out if it's `path`, which the message
-    around it already names."""
-    if not error.strerror:
-        return str(error)
-    reason = error.strerror.lower()
-    if error.filename is not None and str(error.filename) != str(path):
-        reason += f" ({error.filename})"
-    return reason
-
-
-def is_safe_value(value: str) -> bool:
-    return bool(SAFE_VALUE.match(value))
-
-
-def is_text_value(value: str) -> bool:
-    """Whether a value is usable as a text parameter: not too long, and nothing in it
-    that can't be written to a file as it is."""
-    return len(value) <= MAX_TEXT_VALUE_LENGTH and not any(
-        # Cc is control characters; Cs is half of a UTF-16 pair, which JSON can carry
-        # but UTF-8 can't write.
-        unicodedata.category(character) in ("Cc", "Cs")
-        for character in value
-    )
-
-
-def parse_size(value: str | int) -> int:
-    """Turn '1M' into 1048576. Bare numbers are bytes."""
-    return _parse_with_units(
-        value,
-        units={"": 1, "b": 1, "k": 1024, "m": 1024**2, "g": 1024**3},
-        what="size",
-        examples="'1M', '500k', '2048'",
-    )
-
-
-def parse_duration(value: str | int) -> int:
-    """Turn '30m' into 1800. Bare numbers are seconds."""
-    return _parse_with_units(
-        value,
-        units={"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800},
-        what="duration",
-        examples="'30m', '24h', '7d'",
-    )
-
-
-def _parse_with_units(
-    value: str | int, units: dict[str, int], what: str, examples: str
-) -> int:
-    if isinstance(value, int):
-        number, suffix = value, ""
-    else:
-        text = value.strip()
-        digits = text.rstrip(string.ascii_letters)
-        suffix = text[len(digits) :].lower()
-        try:
-            number = int(digits)
-        except ValueError:
-            raise ValueError(
-                f"{value!r} isn't a {what} I understand. Try something like {examples}."
-            ) from None
-    if suffix not in units:
-        known = ", ".join(sorted(u for u in units if u))
-        raise ValueError(
-            f"{value!r} uses an unknown {what} unit {suffix!r}. Known units: {known}."
-        )
-    if number < 0:
-        raise ValueError(f"{value!r} is a negative {what}.")
-    return number * units[suffix]
-
-
-def describe_duration(seconds: int) -> str:
-    """Say '24 hours' rather than '86400', for anything a person reads."""
-    for size, name in ((86400, "day"), (3600, "hour"), (60, "minute")):
-        if seconds >= size and seconds % size == 0:
-            count = seconds // size
-            return f"{count} {name}{'s' if count != 1 else ''}"
-    return f"{seconds} second{'s' if seconds != 1 else ''}"
-
-
-def describe_size(size: int) -> str:
-    """Say '8M' rather than '8388608', for anything a person reads."""
-    for unit, name in ((1024**3, "G"), (1024**2, "M"), (1024, "k")):
-        if size >= unit and size % unit == 0:
-            return f"{size // unit}{name}"
-    return f"{size} bytes"
 
 
 class TaskDefinition(BaseModel):
@@ -360,14 +242,9 @@ class TaskFile(BaseModel):
 
 def _check_task_codes(tasks: dict[str, TaskDefinition]) -> None:
     for code, task in tasks.items():
-        if code != code.lower():
+        if not is_task_code(code):
             raise ValueError(
-                f"task code {code!r} has capital letters; task codes are lowercase"
-            )
-        if not is_safe_value(code):
-            raise ValueError(
-                f"task code {code!r} isn't usable as a directory name: "
-                f"{SAFE_VALUE_EXPLANATION}"
+                f"task code {code!r} isn't usable. Task codes are {TASK_CODE_EXPLANATION}."
             )
         task.code = code
 
@@ -476,59 +353,6 @@ def _load_task_file(path: Path) -> TaskFile:
     return included
 
 
-def check_run_as(path: Path, run_as: str | None) -> None:
-    """Raise ConfigurationError if run_as names a user this machine doesn't have."""
-    if run_as is None:
-        return
-    try:
-        pwd.getpwnam(run_as)
-    except KeyError:
-        raise ConfigurationError(
-            f"{path} has a problem: run_as is {run_as!r}, and there's no user by that "
-            "name on this machine."
-        ) from None
-
-
-def user_name(uid: int) -> str:
-    """The name of the user with this ID, or the ID itself if it has no name."""
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except KeyError:
-        return f"user {uid}"
-
-
-def wrong_user(path: Path, run_as: str | None, command: str) -> str | None:
-    """Why this process isn't allowed to run, or None if it is.
-
-    Compared by user ID, not by name, because two names can share an ID. The effective
-    ID, because that's who owns what the command makes.
-    """
-    if run_as is None:
-        return None
-    if os.geteuid() == pwd.getpwnam(run_as).pw_uid:
-        return None
-    running = user_name(os.geteuid())
-    return (
-        f"{path} says to run {command} as {run_as}, and this is {running}. Anything "
-        f"it made would belong to {running}, and {run_as} might not be able to use it. "
-        f"Run it as {run_as}: sudo -u {run_as} {command} ..."
-    )
-
-
-def read_toml(path: Path) -> dict[str, Any]:
-    try:
-        text = path.read_bytes()
-    except OSError as error:
-        raise ConfigurationError(
-            f"Can't read {path}: {os_error_reason(error, path)}."
-        ) from error
-
-    try:
-        return tomllib.loads(text.decode("utf-8"))
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
-        raise ConfigurationError(f"{path} isn't valid TOML: {error}") from error
-
-
 def _pigsty_hint(raw: dict[str, Any]) -> str:
     """Pydantic refuses pigsty.toml anyway, but by listing keys it doesn't know."""
     tasks = raw.get("task")
@@ -554,9 +378,6 @@ def _resolve_public_keys(
     only ever uses the keys named in its own file, so one study's task can't encrypt to
     another study's key by mistake. `public_keys_file` is relative to `base`. Returns
     where the keys file is."""
-    # Imported here, because keys.py uses this module's safe-value rule.
-    from .keys import is_signing_public_key, read_public_keys
-
     using = sorted(
         code
         for code, task in tasks.items()

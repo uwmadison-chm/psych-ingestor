@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from psych_ingestor import config as config_module
-from psych_ingestor.config import ConfigSource
+from psych_ingestor.pig import config as config_module
+from psych_ingestor.pig.config import ConfigSource
 
 BASELINE = {"participant_id": "10351", "session": "baseline"}
 

@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import db, purge, runs, storage, sweep
-from psych_ingestor.service import Pig
+from psych_ingestor import files, formats
+from psych_ingestor.pig import db, runs, sweep
+from psych_ingestor.pig.service import Pig
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -23,11 +24,11 @@ def finished_run(pig: Pig, parameters: dict = BASELINE) -> str:
 
 
 def done(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.done_root, "stroop", run_id)
+    return formats.run_directory(pig.config.done_root, "stroop", run_id)
 
 
 def purging(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.purging_root, "stroop", run_id)
+    return formats.run_directory(pig.config.purging_root, "stroop", run_id)
 
 
 def secure_copy(pig: Pig, run_id: str, tmp_path: Path) -> Path:
@@ -51,7 +52,7 @@ def test_a_purge_hash_is_the_sha256_of_the_prefix_and_the_bytes(tmp_path: Path):
     path.write_bytes(b'{"event_id":"1"}\n')
 
     expected = hashlib.sha256(b'pig-purge:{"event_id":"1"}\n').hexdigest()
-    assert purge.purge_hash(path) == expected
+    assert formats.purge_hash(path) == expected
     # Not the hash the manifest lists, which is the whole point.
     assert expected != hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -59,7 +60,7 @@ def test_a_purge_hash_is_the_sha256_of_the_prefix_and_the_bytes(tmp_path: Path):
 def test_every_file_is_hashed_manifest_included(pig: Pig):
     run_id = finished_run(pig)
 
-    assert sorted(purge.purge_hashes(done(pig, run_id))) == [
+    assert sorted(formats.purge_hashes(done(pig, run_id))) == [
         "events.jsonl",
         "manifest.json",
     ]
@@ -71,8 +72,8 @@ def test_hashing_refuses_a_symbolic_link(tmp_path: Path):
     (tmp_path / "secret").write_text("key")
     (run / "events.jsonl").symlink_to(tmp_path / "secret")
 
-    with pytest.raises(purge.PurgeProblem):
-        purge.purge_hashes(run)
+    with pytest.raises(formats.PurgeProblem):
+        formats.purge_hashes(run)
 
 
 # ------------------------------------------------------------------- purging
@@ -82,7 +83,7 @@ def test_matching_hashes_purge_the_run(pig: Pig, client: TestClient, tmp_path: P
     run_id = finished_run(pig)
     copy = secure_copy(pig, run_id, tmp_path)
 
-    reply = ask(client, run_id, purge.purge_hashes(copy))
+    reply = ask(client, run_id, formats.purge_hashes(copy))
 
     assert reply.status_code == 200
     assert reply.json() == {"status": "purged"}
@@ -94,7 +95,7 @@ def test_purge_forgets_the_identifiers_and_keeps_the_counter(
     pig: Pig, client: TestClient, tmp_path: Path
 ):
     run_id = finished_run(pig)
-    ask(client, run_id, purge.purge_hashes(secure_copy(pig, run_id, tmp_path)))
+    ask(client, run_id, formats.purge_hashes(secure_copy(pig, run_id, tmp_path)))
 
     run = runs.get(pig.connection, run_id)
     assert run is not None
@@ -118,7 +119,7 @@ def test_the_identifiers_arent_left_in_the_database_file(
     db.checkpoint(pig.connection)
     assert b"find-me-later" in pig.config.database.read_bytes()
 
-    ask(client, run_id, purge.purge_hashes(secure_copy(pig, run_id, tmp_path)))
+    ask(client, run_id, formats.purge_hashes(secure_copy(pig, run_id, tmp_path)))
     pig.connection.close()
 
     database = pig.config.database
@@ -130,7 +131,7 @@ def test_the_identifiers_arent_left_in_the_database_file(
 
 def test_purging_twice_is_fine(pig: Pig, client: TestClient, tmp_path: Path):
     run_id = finished_run(pig)
-    hashes = purge.purge_hashes(secure_copy(pig, run_id, tmp_path))
+    hashes = formats.purge_hashes(secure_copy(pig, run_id, tmp_path))
     ask(client, run_id, hashes)
 
     reply = ask(client, run_id, hashes)
@@ -146,7 +147,7 @@ def test_a_copy_missing_a_file_purges_nothing(
     copy = secure_copy(pig, run_id, tmp_path)
     (copy / "events.jsonl").unlink()
 
-    reply = ask(client, run_id, purge.purge_hashes(copy))
+    reply = ask(client, run_id, formats.purge_hashes(copy))
 
     assert reply.status_code == 409
     assert "events.jsonl" in reply.json()["message"]
@@ -162,7 +163,7 @@ def test_a_copy_that_differs_purges_nothing(
     with open(copy / "events.jsonl", "a") as events:
         events.write('{"event_id":"2"}\n')
 
-    reply = ask(client, run_id, purge.purge_hashes(copy))
+    reply = ask(client, run_id, formats.purge_hashes(copy))
 
     assert reply.status_code == 409
     assert "events.jsonl" in reply.json()["message"]
@@ -176,7 +177,7 @@ def test_a_copy_with_an_extra_file_purges_nothing(
     copy = secure_copy(pig, run_id, tmp_path)
     (copy / "notes.txt").write_text("mine")
 
-    reply = ask(client, run_id, purge.purge_hashes(copy))
+    reply = ask(client, run_id, formats.purge_hashes(copy))
 
     assert reply.status_code == 409
     assert "notes.txt" in reply.json()["message"]
@@ -186,8 +187,8 @@ def test_a_copy_with_an_extra_file_purges_nothing(
 def test_the_manifests_hashes_purge_nothing(pig: Pig, client: TestClient):
     """Someone holding only the manifest can't purge a run they've never seen."""
     run_id = finished_run(pig)
-    manifest_path = done(pig, run_id) / storage.MANIFEST_FILE
-    manifest = storage.read_manifest(done(pig, run_id))
+    manifest_path = done(pig, run_id) / formats.MANIFEST_FILE
+    manifest = formats.read_manifest(done(pig, run_id))
     hashes = {entry["path"]: entry["sha256"] for entry in manifest["files"]}
     hashes["manifest.json"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
@@ -216,7 +217,7 @@ def test_a_run_asked_for_under_another_task_is_a_404(
     pig: Pig, client: TestClient, tmp_path: Path
 ):
     run_id = finished_run(pig)
-    hashes = purge.purge_hashes(secure_copy(pig, run_id, tmp_path))
+    hashes = formats.purge_hashes(secure_copy(pig, run_id, tmp_path))
 
     assert ask(client, run_id, hashes, task="balloons").status_code == 404
     assert done(pig, run_id).is_dir()
@@ -245,7 +246,7 @@ def test_a_task_taken_out_of_the_configuration_can_still_be_purged(
     pig: Pig, client: TestClient, config_path: Path, tmp_path: Path
 ):
     run_id = finished_run(pig)
-    hashes = purge.purge_hashes(secure_copy(pig, run_id, tmp_path))
+    hashes = formats.purge_hashes(secure_copy(pig, run_id, tmp_path))
     text = config_path.read_text()
     config_path.write_text(text.replace("[task.stroop]", "[task.stroop_gone]"))
 
@@ -259,7 +260,7 @@ def test_a_run_missing_from_done_that_pig_didnt_purge_is_reported(
     pig: Pig, client: TestClient, tmp_path: Path
 ):
     run_id = finished_run(pig)
-    hashes = purge.purge_hashes(secure_copy(pig, run_id, tmp_path))
+    hashes = formats.purge_hashes(secure_copy(pig, run_id, tmp_path))
     shutil.rmtree(done(pig, run_id))
 
     reply = ask(client, run_id, hashes)
@@ -275,7 +276,7 @@ def test_a_run_missing_from_done_that_pig_didnt_purge_is_reported(
 def interrupted_purge(pig: Pig) -> str:
     """A run Pig moved into purging/ and then stopped before deleting."""
     run_id = finished_run(pig)
-    storage.move_directory(done(pig, run_id), purging(pig, run_id))
+    files.move_directory(done(pig, run_id), purging(pig, run_id))
     return run_id
 
 
@@ -283,8 +284,8 @@ def test_a_retried_request_finishes_an_interrupted_purge(
     pig: Pig, client: TestClient, tmp_path: Path
 ):
     run_id = finished_run(pig)
-    hashes = purge.purge_hashes(secure_copy(pig, run_id, tmp_path))
-    storage.move_directory(done(pig, run_id), purging(pig, run_id))
+    hashes = formats.purge_hashes(secure_copy(pig, run_id, tmp_path))
+    files.move_directory(done(pig, run_id), purging(pig, run_id))
 
     reply = ask(client, run_id, hashes)
 
@@ -314,10 +315,10 @@ def test_a_sweep_with_nothing_to_purge_reports_nothing(pig: Pig):
 def test_pig_runs_lists_a_purged_run(
     pig: Pig, client: TestClient, config_path: Path, tmp_path: Path, capsys
 ):
-    from psych_ingestor import cli
+    from psych_ingestor.pig import cli
 
     run_id = finished_run(pig)
-    ask(client, run_id, purge.purge_hashes(secure_copy(pig, run_id, tmp_path)))
+    ask(client, run_id, formats.purge_hashes(secure_copy(pig, run_id, tmp_path)))
 
     cli.runs(config=config_path)
 
@@ -338,7 +339,7 @@ def test_the_manifest_isnt_needed_by_the_server_to_compare(
     manifest["run_number"] = 7
     (copy / "manifest.json").write_text(json.dumps(manifest))
 
-    reply = ask(client, run_id, purge.purge_hashes(copy))
+    reply = ask(client, run_id, formats.purge_hashes(copy))
 
     assert reply.status_code == 409
     assert "manifest.json" in reply.json()["message"]

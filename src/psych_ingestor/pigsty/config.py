@@ -21,16 +21,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .config import (
-    SAFE_VALUE_EXPLANATION,
-    ConfigurationError,
-    TaskDefinition,
-    check_run_as,
-    is_safe_value,
-    read_toml,
-)
+from ..common import ConfigurationError, check_run_as, read_toml
+from ..rules import TASK_CODE_EXPLANATION, is_task_code
 
-DEFAULT_STY_CONFIG = "local/pigsty.toml"
+DEFAULT_PIGSTY_CONFIG = "local/pigsty.toml"
 
 
 # ------------------------------------------------------------------- patterns
@@ -122,7 +116,7 @@ def split_organized(organized: str) -> tuple[str, str]:
 # --------------------------------------------------------------- the file
 
 
-class StyTask(BaseModel):
+class PigstyTask(BaseModel):
     """One task's entry in `pigsty.toml`."""
 
     model_config = ConfigDict(extra="forbid")
@@ -147,7 +141,7 @@ class StyTask(BaseModel):
         return split_organized(self.organized)[1]
 
 
-class StyConfig(BaseModel):
+class PigstyConfig(BaseModel):
     """The whole of `pigsty.toml`."""
 
     model_config = ConfigDict(extra="forbid")
@@ -169,10 +163,10 @@ class StyConfig(BaseModel):
     # filesystem that reports permissions it doesn't enforce. `--ignore-permissions`
     # does the same for one command.
     ignore_permissions: bool = False
-    task: dict[str, StyTask] = Field(default_factory=dict)
+    task: dict[str, PigstyTask] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _check(self) -> StyConfig:
+    def _check(self) -> PigstyConfig:
         if self.pig_url is not None and not self.pig_url.startswith(
             ("https://", "http://")
         ):
@@ -181,10 +175,10 @@ class StyConfig(BaseModel):
                 "server is, like https://pig.example.edu."
             )
         for code, task in self.task.items():
-            if code != code.lower() or not is_safe_value(code):
+            if not is_task_code(code):
                 raise ValueError(
                     f"task code {code!r} isn't one Pig could have used. Task codes are "
-                    f"lowercase {SAFE_VALUE_EXPLANATION}."
+                    f"{TASK_CODE_EXPLANATION}."
                 )
             try:
                 split_organized(task.organized)
@@ -232,13 +226,20 @@ SETTINGS = {
     ),
 }
 
-# A task's settings in pig.toml, so a task copied from there can be called that. The
-# fields load_config fills in itself aren't settings anyone writes.
-PIG_TASK_SETTINGS = set(TaskDefinition.model_fields) - {
-    "code",
-    "source",
-    "public_key",
-    "signing_keys",
+# A task's settings in pig.toml, so a task copied from there can be called that.
+# Written out rather than taken from pig's own model, because pigsty never imports pig.
+# tests/test_separation.py checks it still matches.
+PIG_TASK_SETTINGS = {
+    "path_parameters",
+    "run_key_parameters",
+    "open",
+    "max_event_size",
+    "expires_after",
+    "media",
+    "max_part_size",
+    "encrypt_to",
+    "signed_parameters",
+    "signed_by",
 }
 
 
@@ -252,7 +253,7 @@ def describe_problems(error: ValidationError, raw: dict[str, Any]) -> list[str]:
     for problem in error.errors():
         location = [str(part) for part in problem["loc"]]
         if problem["type"] == "value_error":
-            # From StyConfig._check, which already says it plainly.
+            # From PigstyConfig._check, which already says it plainly.
             by_table.setdefault(None, []).append(str(problem["ctx"]["error"]))
             continue
         if location == ["task"]:
@@ -321,7 +322,7 @@ def describe_problems(error: ValidationError, raw: dict[str, Any]) -> list[str]:
             )
         else:
             by_table[code].append(
-                f"A task in pigsty.toml can have {_listed(list(StyTask.model_fields))}."
+                f"A task in pigsty.toml can have {_listed(list(PigstyTask.model_fields))}."
                 " See pigsty.example.toml."
             )
 
@@ -353,11 +354,11 @@ def _listed(names: list[str]) -> str:
     return ", ".join(names[:-1]) + f", and {names[-1]}"
 
 
-def load_sty_config(path: Path) -> StyConfig:
+def load_pigsty_config(path: Path) -> PigstyConfig:
     """Read and check `pigsty.toml`, or raise ConfigurationError saying why."""
     raw = read_toml(path)
     try:
-        config = StyConfig.model_validate(raw)
+        config = PigstyConfig.model_validate(raw)
     except ValidationError as error:
         problems = "\n".join(
             f"  {problem}" for problem in describe_problems(error, raw)

@@ -15,23 +15,30 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
 import cyclopts
 
+from .. import formats, keys, signing
+from ..common import ConfigurationError, os_error_reason, user_name, wrong_user
 from . import admit as admit_module
-from . import db, keys, signing, sty
 from . import organize as organize_module
 from . import purge as purge_module
-from .config import ConfigurationError, os_error_reason, user_name, wrong_user
+from .config import (
+    DEFAULT_PIGSTY_CONFIG,
+    PigstyConfig,
+    PigstyTask,
+    load_pigsty_config,
+)
 
 app = cyclopts.App(
     name="pigsty",
     help="Psych Ingestor's secure side: where collected data ends up.",
 )
 
-StyConfigPath = Annotated[
+PigstyConfigPath = Annotated[
     Path,
     cyclopts.Parameter(
         name=["--config", "-c"],
@@ -51,8 +58,8 @@ IgnorePermissions = Annotated[
 ]
 
 
-def _load(path: Path | None, ignore_permissions: bool) -> sty.StyConfig:
-    chosen = path or Path(os.environ.get("PIGSTY_CONFIG", sty.DEFAULT_STY_CONFIG))
+def _load(path: Path | None, ignore_permissions: bool) -> PigstyConfig:
+    chosen = path or Path(os.environ.get("PIGSTY_CONFIG", DEFAULT_PIGSTY_CONFIG))
     if not chosen.exists():
         print(f"There's no configuration file at {chosen}.", file=sys.stderr)
         if path is None:
@@ -64,7 +71,7 @@ def _load(path: Path | None, ignore_permissions: bool) -> sty.StyConfig:
             )
         raise SystemExit(1)
     try:
-        loaded = sty.load_sty_config(chosen)
+        loaded = load_pigsty_config(chosen)
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
@@ -87,18 +94,18 @@ def _load(path: Path | None, ignore_permissions: bool) -> sty.StyConfig:
 CHECK_TIMEOUT_SECONDS = 10
 
 
-def _private_keys(loaded: sty.StyConfig) -> list[keys.PrivateKey]:
+def _private_keys(loaded: PigstyConfig) -> list[keys.PrivateKey]:
     """Every private key for decrypting in private_keys_dir, or none if there isn't
     one. Exits saying what's wrong with a key that can't be used."""
     return [key for key in _every_key(loaded) if isinstance(key, keys.PrivateKey)]
 
 
-def _signing_keys(loaded: sty.StyConfig) -> list[keys.SigningKey]:
+def _signing_keys(loaded: PigstyConfig) -> list[keys.SigningKey]:
     """Every signing key in private_keys_dir, or none if there isn't one."""
     return [key for key in _every_key(loaded) if isinstance(key, keys.SigningKey)]
 
 
-def _every_key(loaded: sty.StyConfig) -> list[keys.PrivateKey | keys.SigningKey]:
+def _every_key(loaded: PigstyConfig) -> list[keys.PrivateKey | keys.SigningKey]:
     if loaded.private_keys_dir is None:
         return []
     try:
@@ -113,7 +120,7 @@ def _every_key(loaded: sty.StyConfig) -> list[keys.PrivateKey | keys.SigningKey]
 @app.command
 def check(
     *,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     fix: bool = False,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
@@ -181,7 +188,7 @@ def check(
         _check_web_server(loaded, private_keys)
 
 
-def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
+def _missing_directories(loaded: PigstyConfig) -> list[tuple[Path, int]]:
     """The directories pigsty.toml names that aren't there, each with the mode to make
     it with. Only private_keys_dir is kept from everyone else; the data directories get
     whatever the umask gives them, like everything admit and organize write."""
@@ -190,12 +197,12 @@ def _missing_directories(loaded: sty.StyConfig) -> list[tuple[Path, int]]:
         wanted.append((loaded.private_keys_dir, 0o700))
     wanted.append((loaded.incoming_dir, 0o777))
     for _, task in sorted(loaded.task.items()):
-        wanted.append((task.datastore_dir / admit_module.RUNS_DIRECTORY, 0o777))
+        wanted.append((task.datastore_dir / formats.RUNS_DIRECTORY, 0o777))
         wanted.append((task.organized_root, 0o777))
     return [(directory, mode) for directory, mode in wanted if not directory.is_dir()]
 
 
-def _require_incoming(loaded: sty.StyConfig) -> Path:
+def _require_incoming(loaded: PigstyConfig) -> Path:
     """incoming_dir, or stop if it isn't there. A task's own directory in it can be
     missing, which only means nothing of that task's has arrived, but a missing
     incoming_dir means the copy from the bucket has never run, or it's set wrong."""
@@ -216,7 +223,7 @@ def _make_directory(directory: Path, mode: int) -> None:
 
 
 def _check_web_server(
-    loaded: sty.StyConfig, private_keys: list[keys.PrivateKey]
+    loaded: PigstyConfig, private_keys: list[keys.PrivateKey]
 ) -> None:
     """Warn about any task the web server says encrypts to a public key that no private
     key here matches, or signs other parameters than pigsty.toml says. Only ever a
@@ -251,7 +258,7 @@ def _check_web_server(
 
 
 def _check_signed_parameters(
-    code: str, task: sty.StyTask, settings: dict[str, Any]
+    code: str, task: PigstyTask, settings: dict[str, Any]
 ) -> None:
     """Warn if the web server signs other parameters for a task than pigsty.toml says.
     Links signed here would then never start a run there."""
@@ -304,7 +311,7 @@ def _task_settings(pig_url: str, code: str) -> dict[str, Any] | None:
 @app.command
 def admit(
     *,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     copy_ciphertext_to: Path | None = None,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
@@ -355,7 +362,7 @@ def admit(
 @app.command
 def organize(
     *,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     dry_run: bool = False,
     full: bool = False,
     ignore_permissions: IgnorePermissions = False,
@@ -399,7 +406,7 @@ def organize(
 @app.command
 def purge(
     *,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
     """Ask the web server to delete each run that's been admitted here.
@@ -448,7 +455,7 @@ def sign(
         signing.LINK_PARAMETER
     ),
     url: str | None = None,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
     """Sign a link's parameters, so a task that checks signatures will start a run
@@ -519,7 +526,7 @@ def sign(
     print(f"{url}{'&' if '?' in url else '?'}{query}")
 
 
-def _signed_parameters(loaded: sty.StyConfig, code: str) -> list[str]:
+def _signed_parameters(loaded: PigstyConfig, code: str) -> list[str]:
     task = loaded.task.get(code)
     if task is None:
         _fail(f"pigsty.toml has no task {code!r}.")
@@ -532,7 +539,7 @@ def _signed_parameters(loaded: sty.StyConfig, code: str) -> list[str]:
     return task.signed_parameters
 
 
-def _signing_key(loaded: sty.StyConfig, name: str) -> keys.SigningKey:
+def _signing_key(loaded: PigstyConfig, name: str) -> keys.SigningKey:
     signing_keys = _signing_keys(loaded)
     for signing_key in signing_keys:
         if signing_key.name == name:
@@ -627,7 +634,7 @@ def new(
     name: str,
     *,
     signing: bool = False,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
     """Make a new private key in private_keys_dir.
@@ -660,7 +667,7 @@ def new(
         raise SystemExit(1)
     make = keys.new_signing_key if signing else keys.new_private_key
     try:
-        made = make(loaded.private_keys_dir, name, db.now())
+        made = make(loaded.private_keys_dir, name, datetime.now(UTC))
     except ValueError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
@@ -679,7 +686,7 @@ def new(
 @keys_app.command
 def export(
     *,
-    config: StyConfigPath | None = None,
+    config: PigstyConfigPath | None = None,
     ignore_permissions: IgnorePermissions = False,
 ) -> None:
     """Print the public keys file for the web server.
@@ -704,7 +711,10 @@ def export(
     except ConfigurationError as error:
         print(error, file=sys.stderr)
         raise SystemExit(1) from error
-    print(keys.public_keys_text(every_key, loaded.private_keys_dir, db.now()), end="")
+    print(
+        keys.public_keys_text(every_key, loaded.private_keys_dir, datetime.now(UTC)),
+        end="",
+    )
 
 
 def main(tokens: list[str] | None = None) -> None:

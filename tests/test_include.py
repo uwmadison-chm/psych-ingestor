@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from psych_ingestor import keys
-from psych_ingestor.config import ConfigSource, ConfigurationError, load_config
+from psych_ingestor.pig.config import ConfigSource, ConfigurationError, load_config
 
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 

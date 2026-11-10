@@ -12,6 +12,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import files, formats
 from . import db, media, purge, runs, storage
 from .config import Config
 from .runs import Disposition
@@ -54,11 +55,11 @@ def sweep(config: Config, connection: sqlite3.Connection) -> SweepReport:
     """
     report = SweepReport()
     try:
-        with storage.hold_lock(lock_path(config)):
+        with files.hold_lock(lock_path(config)):
             expire_runs(config, connection, report)
             finish_closed_runs(config, connection, report)
             finish_purges(config, connection, report)
-    except storage.LockHeld:
+    except files.LockHeld:
         report.busy = True
     return report
 
@@ -80,10 +81,10 @@ def finish_closed_runs(
     quietly becoming `done`. There's no retry beyond the next sweep.
     """
     for run in runs.awaiting_sweep(connection):
-        source = storage.run_directory(
+        source = formats.run_directory(
             config.in_progress_root, run.task_code, run.run_id
         )
-        destination = storage.run_directory(config.done_root, run.task_code, run.run_id)
+        destination = formats.run_directory(config.done_root, run.task_code, run.run_id)
         now = db.now()
 
         # The sweep's own crash window: it died after the rename and before the row
@@ -118,7 +119,7 @@ def finish_closed_runs(
         # recording the receipt, so a receipt means the line was on disk. Receipts with
         # no file means the data is gone, and an empty file in its place would make that
         # permanent and silent. See issue #18.
-        events = source / storage.EVENTS_FILE
+        events = source / formats.EVENTS_FILE
         stored = runs.count_stored_events(connection, run.run_id)
         if not events.exists() and stored > 0:
             report.refused[run.run_id] = (
@@ -131,9 +132,9 @@ def finish_closed_runs(
         # receipt with no file is data that's gone, and finishing the run would make
         # that permanent and silent.
         gone = [
-            storage.part_path(source, media_id, part).relative_to(source).as_posix()
+            formats.part_path(source, media_id, part).relative_to(source).as_posix()
             for media_id, part in media.parts_for_run(connection, run.run_id)
-            if not storage.part_path(source, media_id, part).exists()
+            if not formats.part_path(source, media_id, part).exists()
         ]
         if gone:
             report.refused[run.run_id] = (
@@ -159,7 +160,7 @@ def finish_closed_runs(
                     media.describe_for_manifest(connection, run.run_id),
                 ),
             )
-            storage.move_directory(source, destination)
+            files.move_directory(source, destination)
         except OSError as error:
             if destination.exists() and not source.exists():
                 # Another sweep finished this run between our check and our rename.

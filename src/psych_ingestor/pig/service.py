@@ -14,15 +14,15 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import db, keys, media, purge, runs, signing, storage
-from .config import (
+from .. import files, formats, keys, signing
+from ..rules import (
     SAFE_VALUE_EXPLANATION,
     TEXT_VALUE_EXPLANATION,
-    Config,
-    TaskDefinition,
     is_safe_value,
     is_text_value,
 )
+from . import db, media, purge, runs, storage
+from .config import Config, TaskDefinition
 from .media import MediaItem
 from .runs import Disposition, Phase, RequestProblem, Run
 
@@ -141,8 +141,8 @@ class Pig:
         # a row with no directory is a run the sweep will have to report. The directory
         # exists from the start so that "is it there" has one meaning by sweep time,
         # whether or not the run ever sent an event.
-        storage.make_directories(
-            storage.run_directory(self.config.in_progress_root, task.code, run_id)
+        files.make_directories(
+            formats.run_directory(self.config.in_progress_root, task.code, run_id)
         )
 
         run_number = runs.insert(
@@ -240,8 +240,8 @@ class Pig:
                 checked[event_id] = (event["data"], digest)
 
         events_file = (
-            storage.run_directory(self.config.in_progress_root, task_code, run_id)
-            / storage.EVENTS_FILE
+            formats.run_directory(self.config.in_progress_root, task_code, run_id)
+            / formats.EVENTS_FILE
         )
 
         # From reading the run's phase to recording the receipts, under the database's
@@ -267,7 +267,7 @@ class Pig:
             for event_id, (data, digest) in checked.items():
                 known = runs.receipt_hash(self.connection, run_id, event_id)
                 if known is None:
-                    line = storage.event_line(event_id, data, stored_at)
+                    line = formats.event_line(event_id, data, stored_at)
                     new[event_id] = (line, digest)
                 elif known != digest:
                     errors[event_id] = _collision(event_id)
@@ -279,7 +279,7 @@ class Pig:
             # task its event was stored when it wasn't. See docs/design_assumptions.md.
             if new:
                 storage.append_lines(
-                    events_file, [storage.canonical(line) for line, _ in new.values()]
+                    events_file, [formats.canonical(line) for line, _ in new.values()]
                 )
             for event_id, (_, digest) in new.items():
                 if not runs.record_receipt(
@@ -379,7 +379,7 @@ class Pig:
         stored_at = db.now()
         # The hash and the size limit cover what the task sent, and the media ID isn't
         # part of that, so both are settled before there is a media ID.
-        hashed = storage.hashed_text(storage.event_line(event_id, data, stored_at))
+        hashed = formats.hashed_text(formats.event_line(event_id, data, stored_at))
         if len(hashed.encode("utf-8")) > task.max_event_size:
             return self._start_refused(
                 run,
@@ -387,10 +387,10 @@ class Pig:
                 f"This event is bigger than this task allows ({task.max_event_size} "
                 "bytes).",
             )
-        digest = storage.content_hash(hashed)
+        digest = formats.content_hash(hashed)
 
-        run_dir = storage.run_directory(self.config.in_progress_root, task_code, run_id)
-        events_file = run_dir / storage.EVENTS_FILE
+        run_dir = formats.run_directory(self.config.in_progress_root, task_code, run_id)
+        events_file = run_dir / formats.EVENTS_FILE
 
         # One transaction from the phase check to the row, because the media ID is
         # handed out inside it and has to be written on the event's line before the row
@@ -434,9 +434,9 @@ class Pig:
                     f"This run already has {media.MAX_MEDIA_ID} media items, which is "
                     "as many as media IDs go.",
                 )
-            line = storage.event_line(event_id, data, stored_at, media_id)
-            storage.make_directories(storage.media_directory(run_dir, media_id))
-            storage.append_lines(events_file, [storage.canonical(line)])
+            line = formats.event_line(event_id, data, stored_at, media_id)
+            files.make_directories(formats.media_directory(run_dir, media_id))
+            storage.append_lines(events_file, [formats.canonical(line)])
             media.insert(self.connection, run_id, media_id, event_id)
             if not runs.record_receipt(
                 self.connection, run_id, event_id, digest, stored_at
@@ -507,9 +507,9 @@ class Pig:
                 413, run, item, key, _part_too_large(task), can_retry=False
             )
 
-        run_dir = storage.run_directory(self.config.in_progress_root, task_code, run_id)
+        run_dir = formats.run_directory(self.config.in_progress_root, task_code, run_id)
         writer = storage.PartWriter(
-            storage.part_path(run_dir, media_id, part),
+            formats.part_path(run_dir, media_id, part),
             storage.scratch_path(self.config.uploading_root, run_id, media_id, part),
             task.max_part_size,
         )
@@ -701,7 +701,7 @@ class Pig:
     #
     # The secure side asks for this once it has a run, so the copy here can go. It sends
     # a purge hash of every file in its copy, and the run is deleted only if they all
-    # match this one. See purge.py, and docs/api.md for why there's no key.
+    # match this one. See formats.py, and docs/api.md for why there's no key.
 
     def purge_run(self, task_code: str, run_id: str, submitted: Any) -> dict[str, Any]:
         sent = _as_purge_hashes(submitted)
@@ -717,8 +717,8 @@ class Pig:
                 "purged once the sweep has finished it and it's in done/.",
             )
 
-        done = storage.run_directory(self.config.done_root, task_code, run_id)
-        purging = storage.run_directory(self.config.purging_root, task_code, run_id)
+        done = formats.run_directory(self.config.done_root, task_code, run_id)
+        purging = formats.run_directory(self.config.purging_root, task_code, run_id)
         if not done.exists():
             if purging.exists() or run.parameters is None:
                 # Purged already, or purging was interrupted after the run left done/.
@@ -733,12 +733,12 @@ class Pig:
             )
 
         try:
-            ours = purge.purge_hashes(done)
-        except purge.PurgeProblem as problem:
+            ours = formats.purge_hashes(done)
+        except formats.PurgeProblem as problem:
             raise RequestProblem(
                 409, f"Pig can't check its copy of this run: {problem}"
             ) from None
-        found = purge.differences(sent, ours)
+        found = formats.differences(sent, ours)
         if found:
             raise RequestProblem(
                 409,
@@ -749,7 +749,7 @@ class Pig:
         # Out of done/ in one rename, so the copy to the bucket sees the whole run or
         # none of it, never half a deleted one.
         try:
-            storage.move_directory(done, purging)
+            files.move_directory(done, purging)
         except OSError:
             if done.exists():
                 raise
@@ -813,13 +813,13 @@ def _check_event(
         return _problem(_NOT_ENCRYPTED, False), ""
 
     # The size limit and the hash both cover what the task sent, not what Pig adds.
-    hashed = storage.hashed_text({"event_id": event_id, "data": event["data"]})
+    hashed = formats.hashed_text({"event_id": event_id, "data": event["data"]})
     if len(hashed.encode("utf-8")) > task.max_event_size:
         return _problem(
             f"This event is bigger than this task allows ({task.max_event_size} bytes).",
             False,
         ), ""
-    return None, storage.content_hash(hashed)
+    return None, formats.content_hash(hashed)
 
 
 def _run_closed(disposition: Disposition | None) -> str:

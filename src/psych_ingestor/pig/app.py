@@ -179,7 +179,7 @@ class _pig:
 
 
 def app() -> FastAPI:
-    """Entry point for `uvicorn psych_ingestor.app:app --factory`.
+    """Entry point for `uvicorn psych_ingestor.pig.app:app --factory`.
 
     Reads PIG_CONFIG for the configuration file; `pig serve` sets it for you.
     """
