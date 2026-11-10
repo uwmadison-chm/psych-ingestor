@@ -144,3 +144,64 @@ def test_parts_are_written_outside_the_run_and_the_sweep_clears_them(
         for entry in formats.read_manifest(done(pig, "interview", run_id))["files"]
     ]
     assert paths == ["events.jsonl", "media/00001/000001.part"]
+
+
+def start_interview_media(client: TestClient) -> str:
+    run_id = client.post(
+        "/v1/task/interview/run", json={"parameters": {"participant_id": "10351"}}
+    ).json()["run_id"]
+    client.post(
+        f"/v1/task/interview/run/{run_id}/media",
+        json={"event_id": "audio", "data": {"content_type": "audio/webm"}},
+    )
+    return run_id
+
+
+def test_a_part_arriving_as_the_run_closes_is_refused(
+    pig: Pig, client: TestClient, monkeypatch
+):
+    run_id = start_interview_media(client)
+    real = storage.PartWriter.finish
+
+    # The body is all in and on disk, in scratch, and the request is about to take the
+    # lock and put it in place.
+    def sweep_first(writer):
+        expire_and_finish(pig, run_id)
+        return real(writer)
+
+    monkeypatch.setattr(storage.PartWriter, "finish", sweep_first)
+    put = client.put(f"/v1/task/interview/run/{run_id}/media/1/1", content=b"a")
+
+    assert put.status_code == 409
+    assert put.json()["status"] == "expired"
+    assert put.json()["errors"]["1"]["can_retry"] is True
+    assert not (done(pig, "interview", run_id) / "media" / "00001" / "000001.part").exists()
+    assert not storage.scratch_path(pig.config.uploading_root, run_id, 1, 1).exists()
+    assert not formats.run_directory(
+        pig.config.in_progress_root, "interview", run_id
+    ).exists()
+
+
+def test_finishing_media_as_the_run_closes_is_refused(
+    pig: Pig, client: TestClient, monkeypatch
+):
+    run_id = start_interview_media(client)
+    assert client.put(
+        f"/v1/task/interview/run/{run_id}/media/1/1", content=b"a"
+    ).is_success
+    real = Pig._media_item
+
+    def sweep_first(self, *args):
+        found = real(self, *args)
+        expire_and_finish(pig, run_id)
+        return found
+
+    monkeypatch.setattr(Pig, "_media_item", sweep_first)
+    finished = client.post(
+        f"/v1/task/interview/run/{run_id}/media/1/finish", json={"parts": 1}
+    )
+
+    assert finished.status_code == 409
+    assert finished.json()["status"] == "expired"
+    assert finished.json()["media"]["finished"] is False
+    assert finished.json()["errors"]["media"]["can_retry"] is False
