@@ -9,18 +9,19 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import sweep
-from psych_ingestor.admit import RUN_FILE, admit
-from psych_ingestor.config import ConfigurationError, load_config
-from psych_ingestor.organize import LOCK_FILE, RECORD_FILE, organize
-from psych_ingestor.service import Pig
-from psych_ingestor.sty import (
+from psych_ingestor.formats import RUN_FILE
+from psych_ingestor.pig import sweep
+from psych_ingestor.pig.config import ConfigurationError, load_config
+from psych_ingestor.pig.service import Pig
+from psych_ingestor.pigsty.admit import admit
+from psych_ingestor.pigsty.cli import app
+from psych_ingestor.pigsty.config import (
     PatternError,
     check_pattern,
-    load_sty_config,
+    load_pigsty_config,
     split_organized,
 )
-from psych_ingestor.sty_cli import app
+from psych_ingestor.pigsty.organize import LOCK_FILE, RECORD_FILE, organize
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 PATTERN = "{session}/{participant_id}_{run_number}"
@@ -534,7 +535,7 @@ def test_unusable_organized_settings_are_refused(organized: str):
 # ------------------------------------------------------------- pigsty.toml
 
 
-STY = """
+PIGSTY = """
 incoming_dir = "./incoming"
 
 [task.stroop]
@@ -545,9 +546,9 @@ organized = "./organized/stroop/{session}/{participant_id}_{run_number}"
 
 def test_pigsty_paths_are_relative_to_the_file(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text(STY)
+    path.write_text(PIGSTY)
 
-    stroop = load_sty_config(path).task["stroop"]
+    stroop = load_pigsty_config(path).task["stroop"]
 
     assert stroop.datastore_dir == tmp_path / "stroop-data"
     assert stroop.organized_root == tmp_path / "organized" / "stroop"
@@ -556,10 +557,10 @@ def test_pigsty_paths_are_relative_to_the_file(tmp_path: Path):
 
 def test_pigsty_with_a_bad_pattern_is_refused(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text(STY.replace("_{run_number}", ""))
+    path.write_text(PIGSTY.replace("_{run_number}", ""))
 
     with pytest.raises(ConfigurationError, match="run_number"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 @pytest.mark.parametrize(
@@ -573,27 +574,27 @@ def test_pigsty_with_a_bad_pattern_is_refused(tmp_path: Path):
 def test_two_tasks_cant_share_an_organized_root(tmp_path: Path, balloons: str):
     path = tmp_path / "pigsty.toml"
     path.write_text(
-        STY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
+        PIGSTY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
         f'organized = "{balloons}"\n'
     )
 
     with pytest.raises(ConfigurationError, match="directory of its own"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 def test_two_tasks_can_have_neighboring_organized_roots(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(
-        STY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
+        PIGSTY + '\n[task.balloons]\ndatastore_dir = "./balloons-data"\n'
         'organized = "./organized/stroop-2/{participant_id}/{run_number}"\n'
     )
 
-    assert len(load_sty_config(path).task) == 2
+    assert len(load_pigsty_config(path).task) == 2
 
 
 def test_pig_says_when_its_handed_pigsty(tmp_path: Path):
     path = tmp_path / "pig.toml"
-    path.write_text(STY)
+    path.write_text(PIGSTY)
 
     with pytest.raises(ConfigurationError, match="looks like pigsty.toml"):
         load_config(path)
@@ -601,7 +602,7 @@ def test_pig_says_when_its_handed_pigsty(tmp_path: Path):
 
 def test_pigsty_says_when_its_handed_pig_toml(config_path: Path):
     with pytest.raises(ConfigurationError, match="looks like pig.toml"):
-        load_sty_config(config_path)
+        load_pigsty_config(config_path)
 
 
 def test_pigsty_says_when_a_task_is_copied_from_pig_toml(tmp_path: Path):
@@ -615,7 +616,7 @@ def test_pigsty_says_when_a_task_is_copied_from_pig_toml(tmp_path: Path):
     )
 
     with pytest.raises(ConfigurationError) as refused:
-        load_sty_config(path)
+        load_pigsty_config(path)
 
     message = str(refused.value)
     assert "[task.stroop] needs datastore_dir" in message
@@ -629,10 +630,10 @@ def test_pigsty_says_when_a_task_is_copied_from_pig_toml(tmp_path: Path):
 
 def test_pigsty_says_what_a_setting_should_look_like(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text(STY + 'signed_parameters = "participant_id"\n')
+    path.write_text(PIGSTY + 'signed_parameters = "participant_id"\n')
 
     with pytest.raises(ConfigurationError) as refused:
-        load_sty_config(path)
+        load_pigsty_config(path)
 
     assert (
         'In [task.stroop], signed_parameters is "participant_id". It should look '
@@ -642,10 +643,10 @@ def test_pigsty_says_what_a_setting_should_look_like(tmp_path: Path):
 
 def test_pigsty_says_when_it_doesnt_know_a_setting(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text('pig_ulr = "https://pig.example.edu"\n' + STY)
+    path.write_text('pig_ulr = "https://pig.example.edu"\n' + PIGSTY)
 
     with pytest.raises(ConfigurationError, match="pig_ulr isn't a setting pigsty"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 # ------------------------------------------------------------------- the CLI
@@ -653,10 +654,10 @@ def test_pigsty_says_when_it_doesnt_know_a_setting(tmp_path: Path):
 
 def test_the_cli_organizes_each_task(pig: Pig, tmp_path: Path, capsys):
     admitted_run(pig, tmp_path / "stroop-data")
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
-    app(["organize", "--config", str(sty)], result_action="return_value")
+    app(["organize", "--config", str(pigsty_toml)], result_action="return_value")
 
     assert "stroop: placed 1 run(s)" in capsys.readouterr().out
     assert (tmp_path / "organized" / "stroop" / PLACED / RUN_FILE).is_file()
@@ -664,10 +665,13 @@ def test_the_cli_organizes_each_task(pig: Pig, tmp_path: Path, capsys):
 
 def test_the_cli_dry_run_says_where_runs_would_go(pig: Pig, tmp_path: Path, capsys):
     admitted_run(pig, tmp_path / "stroop-data")
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
-    app(["organize", "--config", str(sty), "--dry-run"], result_action="return_value")
+    app(
+        ["organize", "--config", str(pigsty_toml), "--dry-run"],
+        result_action="return_value",
+    )
 
     out = capsys.readouterr().out
     assert "stroop: would place 1 run(s)" in out
@@ -680,19 +684,19 @@ def test_the_cli_exits_nonzero_when_a_run_isnt_placed(pig: Pig, tmp_path: Path):
     admitted_run(
         pig, tmp_path / "stroop-data", {**BASELINE, "participant_id": "ppt-1003"}
     )
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
     with pytest.raises(SystemExit) as exited:
-        app(["organize", "--config", str(sty)], result_action="return_value")
+        app(["organize", "--config", str(pigsty_toml)], result_action="return_value")
     assert exited.value.code == 1
 
 
 def test_pigsty_checks_pigsty_toml(tmp_path: Path, capsys):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
-    app(["check", "--config", str(sty)], result_action="return_value")
+    app(["check", "--config", str(pigsty_toml)], result_action="return_value")
 
     out = capsys.readouterr().out
     assert "Configuration looks good: 1 task(s)" in out
@@ -702,7 +706,7 @@ def test_pigsty_checks_pigsty_toml(tmp_path: Path, capsys):
 def test_the_example_pigsty_loads():
     example = Path(__file__).parent.parent / "pigsty.example.toml"
 
-    loaded = load_sty_config(example)
+    loaded = load_pigsty_config(example)
 
     assert "stroop" in loaded.task
 

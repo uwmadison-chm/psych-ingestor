@@ -6,10 +6,10 @@ import stat
 
 import pytest
 
-from psych_ingestor import db
-from psych_ingestor.cli import app as pig
-from psych_ingestor.cli import health_command
-from psych_ingestor.sty_cli import app as pigsty
+from psych_ingestor.pig import db
+from psych_ingestor.pig.cli import app as pig
+from psych_ingestor.pig.cli import health_command
+from psych_ingestor.pigsty.cli import app as pigsty
 
 
 def listed_commands(help_text: str) -> set[str]:
@@ -54,7 +54,7 @@ def test_pig_health_exits_like_the_health_check_answers(config_path, pig, capsys
 
 # ------------------------------------------------------------------- check --fix
 
-STY = """
+PIGSTY = """
 private_keys_dir = "./private_keys"
 incoming_dir = "./mount/incoming"
 
@@ -91,11 +91,11 @@ def test_pig_check_fix_makes_the_data_directory_and_the_database(config_path, ca
 def test_pigsty_check_refuses_a_missing_private_keys_dir_and_says_how_to_fix_it(
     tmp_path, capsys
 ):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
     with pytest.raises(SystemExit) as exited:
-        pigsty(["check", "--config", str(sty)], result_action="return_value")
+        pigsty(["check", "--config", str(pigsty_toml)], result_action="return_value")
 
     assert exited.value.code == 1
     assert "pigsty check --fix makes it" in capsys.readouterr().err
@@ -103,11 +103,11 @@ def test_pigsty_check_refuses_a_missing_private_keys_dir_and_says_how_to_fix_it(
 
 
 def test_pigsty_check_lists_directories_that_arent_there(tmp_path, capsys):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
     (tmp_path / "private_keys").mkdir(mode=0o700)
 
-    pigsty(["check", "--config", str(sty)], result_action="return_value")
+    pigsty(["check", "--config", str(pigsty_toml)], result_action="return_value")
 
     out = capsys.readouterr().out
     assert f"  {tmp_path / 'mount' / 'incoming'}\n" in out
@@ -117,10 +117,12 @@ def test_pigsty_check_lists_directories_that_arent_there(tmp_path, capsys):
 
 
 def test_pigsty_check_fix_makes_every_directory_it_needs(tmp_path, capsys):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
 
-    pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+    pigsty(
+        ["check", "--config", str(pigsty_toml), "--fix"], result_action="return_value"
+    )
 
     out = capsys.readouterr().out
     assert "Not there yet" not in out
@@ -140,8 +142,8 @@ def test_pigsty_check_fix_makes_every_directory_it_needs(tmp_path, capsys):
 def test_pigsty_check_fix_leaves_what_is_there_alone(tmp_path, capsys):
     """A private_keys_dir others can read isn't tightened, and a key others can read is
     still refused: what to do about a key that may have been read is a person's call."""
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(PIGSTY)
     keys_dir = tmp_path / "private_keys"
     keys_dir.mkdir(mode=0o755)
     keys_dir.chmod(0o755)
@@ -150,7 +152,10 @@ def test_pigsty_check_fix_leaves_what_is_there_alone(tmp_path, capsys):
     key.chmod(0o644)
 
     with pytest.raises(SystemExit):
-        pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+        pigsty(
+            ["check", "--config", str(pigsty_toml), "--fix"],
+            result_action="return_value",
+        )
 
     assert "chmod 600" in capsys.readouterr().err
     assert stat.S_IMODE(keys_dir.stat().st_mode) == 0o755
@@ -241,11 +246,14 @@ def test_run_as_belongs_in_the_main_file(config_path, capsys):
 def test_pigsty_refuses_the_wrong_user_and_makes_nothing(
     tmp_path, someone_else, capsys
 ):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(f'run_as = "{ME}"\n' + STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(f'run_as = "{ME}"\n' + PIGSTY)
 
     with pytest.raises(SystemExit) as exited:
-        pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+        pigsty(
+            ["check", "--config", str(pigsty_toml), "--fix"],
+            result_action="return_value",
+        )
 
     assert exited.value.code == 1
     assert f"sudo -u {ME} pigsty" in capsys.readouterr().err
@@ -254,9 +262,11 @@ def test_pigsty_refuses_the_wrong_user_and_makes_nothing(
 
 
 def test_pigsty_check_says_who_ran_it(tmp_path, capsys):
-    sty = tmp_path / "pigsty.toml"
-    sty.write_text(f'run_as = "{ME}"\n' + STY)
+    pigsty_toml = tmp_path / "pigsty.toml"
+    pigsty_toml.write_text(f'run_as = "{ME}"\n' + PIGSTY)
 
-    pigsty(["check", "--config", str(sty), "--fix"], result_action="return_value")
+    pigsty(
+        ["check", "--config", str(pigsty_toml), "--fix"], result_action="return_value"
+    )
 
     assert f"Run by {ME}.\n" in capsys.readouterr().out

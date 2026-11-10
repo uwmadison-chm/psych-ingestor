@@ -2,14 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from psych_ingestor.config import (
+from psych_ingestor.pig.config import (
     ConfigurationError,
-    describe_size,
-    is_safe_value,
     load_config,
     parse_duration,
     parse_size,
 )
+from psych_ingestor.rules import describe_size, is_safe_value
 
 VALID_CONFIG = """
 data_dir = "./data"

@@ -8,9 +8,10 @@ the request has read the run, before it writes.
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import db, runs, service, storage, sweep
-from psych_ingestor.runs import Disposition
-from psych_ingestor.service import Pig
+from psych_ingestor import formats
+from psych_ingestor.pig import db, runs, service, storage, sweep
+from psych_ingestor.pig.runs import Disposition
+from psych_ingestor.pig.service import Pig
 
 PARTICIPANT = {"participant_id": "10351", "session": "baseline"}
 
@@ -29,7 +30,7 @@ def expire_and_finish(pig: Pig, run_id: str) -> None:
 
 
 def done(pig: Pig, task: str, run_id: str):
-    return storage.run_directory(pig.config.done_root, task, run_id)
+    return formats.run_directory(pig.config.done_root, task, run_id)
 
 
 def test_an_event_arriving_as_the_run_closes_is_refused_not_lost(pig: Pig, monkeypatch):
@@ -52,7 +53,7 @@ def test_an_event_arriving_as_the_run_closes_is_refused_not_lost(pig: Pig, monke
     # Nothing was written anywhere, least of all a fresh directory under in_progress/.
     events = (done(pig, "stroop", run_id) / "events.jsonl").read_text()
     assert '"trial":2' not in events
-    in_progress = storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    in_progress = formats.run_directory(pig.config.in_progress_root, "stroop", run_id)
     assert not in_progress.exists()
 
 
@@ -62,7 +63,7 @@ def test_appending_to_a_run_that_has_moved_is_an_error(pig: Pig):
     sweep.sweep(pig.config, pig.connection)
 
     events = (
-        storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+        formats.run_directory(pig.config.in_progress_root, "stroop", run_id)
         / "events.jsonl"
     )
     with pytest.raises(FileNotFoundError):
@@ -106,7 +107,7 @@ def test_a_media_start_arriving_as_the_run_closes_is_refused(
     assert started.status_code == 409
     assert started.json()["status"] == "expired"
     assert (done(pig, "interview", run_id) / "events.jsonl").read_text() == ""
-    assert not storage.run_directory(
+    assert not formats.run_directory(
         pig.config.in_progress_root, "interview", run_id
     ).exists()
 
@@ -140,6 +141,6 @@ def test_parts_are_written_outside_the_run_and_the_sweep_clears_them(
     assert someone_else.exists()
     paths = [
         entry["path"]
-        for entry in storage.read_manifest(done(pig, "interview", run_id))["files"]
+        for entry in formats.read_manifest(done(pig, "interview", run_id))["files"]
     ]
     assert paths == ["events.jsonl", "media/00001/000001.part"]

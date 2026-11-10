@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import purge, runs, storage, sweep
-from psych_ingestor.admit import admit
-from psych_ingestor.service import Pig
-from psych_ingestor.sty import load_sty_config
-from psych_ingestor.sty_cli import app
+from psych_ingestor import formats
+from psych_ingestor.pig import runs, sweep
+from psych_ingestor.pig.service import Pig
+from psych_ingestor.pigsty import purge
+from psych_ingestor.pigsty.admit import admit
+from psych_ingestor.pigsty.cli import app
+from psych_ingestor.pigsty.config import load_pigsty_config
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -47,7 +49,7 @@ def admitted_run(pig: Pig, root: Path, parameters: dict = BASELINE) -> str:
 
 
 def done(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.done_root, "stroop", run_id)
+    return formats.run_directory(pig.config.done_root, "stroop", run_id)
 
 
 def purged_file(root: Path, run_id: str) -> Path:
@@ -379,10 +381,10 @@ def closed_port() -> str:
 
 def test_pig_url_has_to_be_a_web_address(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
-    path.write_text('pig_url = "pig.example.edu"\n' + sty_task(tmp_path))
+    path.write_text('pig_url = "pig.example.edu"\n' + pigsty_task(tmp_path))
 
     with pytest.raises(Exception, match="isn't a web address"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 # ------------------------------------------------------------------ the CLI
@@ -390,7 +392,7 @@ def test_pig_url_has_to_be_a_web_address(tmp_path: Path):
 
 def test_the_cli_needs_a_pig_url(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
-    path.write_text(sty_task(tmp_path))
+    path.write_text(pigsty_task(tmp_path))
 
     with pytest.raises(SystemExit) as exited:
         app(["purge", "--config", str(path)], result_action="return_value")
@@ -402,7 +404,7 @@ def test_the_cli_needs_a_pig_url(tmp_path: Path, capsys):
 def test_the_cli_exits_nonzero_when_pig_cant_be_reached(pig: Pig, tmp_path: Path):
     admitted_run(pig, tmp_path)
     path = tmp_path / "pigsty.toml"
-    path.write_text(f'pig_url = "{closed_port()}"\n' + sty_task(tmp_path))
+    path.write_text(f'pig_url = "{closed_port()}"\n' + pigsty_task(tmp_path))
 
     with pytest.raises(SystemExit) as exited:
         app(["purge", "--config", str(path)], result_action="return_value")
@@ -412,7 +414,7 @@ def test_the_cli_exits_nonzero_when_pig_cant_be_reached(pig: Pig, tmp_path: Path
 # ------------------------------------------------------------------ helpers
 
 
-def sty_task(tmp_path: Path) -> str:
+def pigsty_task(tmp_path: Path) -> str:
     return (
         f'incoming_dir = "{tmp_path / "incoming"}"\n'
         "[task.stroop]\n"

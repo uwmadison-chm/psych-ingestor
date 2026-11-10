@@ -2,7 +2,7 @@
 
 import os
 
-from psych_ingestor.cli import _activated_fd
+from psych_ingestor.pig.cli import _activated_fd
 
 
 def test_no_socket_when_systemd_did_not_start_us(monkeypatch):

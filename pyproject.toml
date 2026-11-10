@@ -22,8 +22,8 @@ Documentation = "https://github.com/uwmadison-chm/psych-ingestor/tree/main/docs"
 Issues = "https://github.com/uwmadison-chm/psych-ingestor/issues"
 
 [project.scripts]
-pig = "psych_ingestor.cli:main"
-pigsty = "psych_ingestor.sty_cli:main"
+pig = "psych_ingestor.pig.cli:main"
+pigsty = "psych_ingestor.pigsty.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.22,<0.12.0"]

@@ -1,140 +1,38 @@
-"""Purge hashes: how the secure side shows the web server it has a run's bytes.
+"""`pigsty purge`: ask the web server to delete its copy of each run this side has.
 
 Once a run is safely on the secure side, its copy on the web server should go, so that
-human-subjects data isn't left sitting on the public-facing machine. `pigsty purge` asks
-for that by sending a hash of every file in its copy of the run, and the web server deletes
-its copy only if every hash matches its own. See issue #2.
+human-subjects data isn't left sitting on the public-facing machine. For each run this
+side has admitted, this sends the web server the purge hash of every file in its copy
+(see `formats.py`), and the web server deletes its own copy only if every hash matches.
+See issue #2.
 
-The hashes aren't the plain sha256 the manifest lists. Each is the sha256 of `pig-purge:`
-followed by the file's bytes. The manifest travels with the data and can be
-copied anywhere, and if purge took the manifest's hashes, anyone holding a manifest could
-purge a run without ever having seen its data. The prefix makes a hash that can only be
-computed from the bytes themselves, so producing one means having the file.
+It hashes the copy in `incoming/`, never `runs/`: `incoming/` is a mirror of the bucket,
+so its bytes are the web server's bytes, and the files in `runs/` have been decrypted.
+A run that's in `incoming/` but not `runs/` isn't admitted, so it isn't purged. One
+that's in `runs/` but not `incoming/` has already left the bucket, so there's nothing to
+ask about.
 
-Neither side stores them. Both compute them when a purge happens, from the files they
-have: the web server from `done/`, the secure side from its copy of the bucket.
+A run that's been purged gets `runs/{run_id}/.state/purged`, so the next pass doesn't
+hash it again while the syncs catch up and drop it from `incoming/`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-import shutil
-import sqlite3
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import admit, db, runs, storage
-from .config import os_error_reason
-
-# Plain text with nothing to escape, so a purge hash can be checked by hand:
-#     { printf 'pig-purge:'; cat events.jsonl; } | sha256sum
-PURGE_HASH_PREFIX = b"pig-purge:"
-
-
-class PurgeProblem(Exception):
-    """A run directory that can't be hashed for purging, and why."""
-
-
-def purge_hash(path: Path) -> str:
-    """One file's purge hash: the sha256 of the prefix, then the file's bytes."""
-    digest = hashlib.sha256(PURGE_HASH_PREFIX)
-    with open(path, "rb") as reading:
-        while chunk := reading.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def purge_hashes(run_directory: Path) -> dict[str, str]:
-    """The purge hash of every file in a run directory, `manifest.json` included, by
-    path relative to the directory.
-
-    Raises PurgeProblem if anything in it, the directory included, is a symbolic link.
-    Pig never makes one, and on the secure side one could point anywhere on the machine.
-    """
-    try:
-        files = storage.files_in(run_directory)
-    except storage.SymbolicLink as link:
-        raise PurgeProblem(f"{link}.") from None
-    hashes = {
-        relative.as_posix(): purge_hash(run_directory / relative) for relative in files
-    }
-    return dict(sorted(hashes.items()))
-
-
-def differences(theirs: dict[str, str], ours: dict[str, str]) -> list[str]:
-    """How two sets of purge hashes differ, as sentences, or nothing if they match.
-
-    `theirs` is what the secure side sent and `ours` is what the web server computed, so
-    the sentences are written from the web server's side.
-    """
-    missing = sorted(ours.keys() - theirs.keys())
-    extra = sorted(theirs.keys() - ours.keys())
-    different = sorted(
-        path for path in ours.keys() & theirs.keys() if ours[path] != theirs[path]
-    )
-    found = []
-    if missing:
-        found.append(f"Your copy doesn't have {_some(missing)}.")
-    if extra:
-        found.append(f"Pig's copy doesn't have {_some(extra)}.")
-    if different:
-        found.append(f"These don't match Pig's copy: {_some(different)}.")
-    return found
-
-
-def _some(paths: list[str]) -> str:
-    """'a' or 'a, b, c' or 'a, b, c, d, e and 4 more', for a message."""
-    shown = ", ".join(paths[:5])
-    if len(paths) > 5:
-        shown += f" and {len(paths) - 5} more"
-    return shown
-
-
-# ------------------------------------------------------------- the web server's side
-
-
-def finish(connection: sqlite3.Connection, run_id: str, directory: Path) -> None:
-    """Finish purging a run that's already been moved out of `done/` into `directory`,
-    under `purging/`.
-
-    Its identifiers go first, then its files. Either order leaves the run out of `done/`
-    from the moment it's moved, which is what matters to the copy to the bucket. This
-    order means a run whose files are still in `purging/` can always be finished by the
-    next purge request or the next sweep, whichever comes first, and both are safe to
-    run at once.
-    """
-    runs.forget_identifiers(connection, run_id)
-    db.checkpoint(connection)
-    shutil.rmtree(directory, onexc=_ignore_missing)
-    storage.fsync_directory(directory.parent)
-
-
-def _ignore_missing(function: Any, path: str, error: BaseException) -> None:
-    # Another purge, or a sweep, deleting the same directory at the same time.
-    if not isinstance(error, FileNotFoundError):
-        raise error
-
-
-# ------------------------------------------------------------- the secure side's
-#
-# `pigsty purge` asks the web server to purge each run this side has admitted. It hashes
-# the copy in `incoming/`, never `runs/`: `incoming/` is a mirror of the bucket, so its
-# bytes are the web server's bytes, and once decryption (#10) happens in admit, the
-# files in `runs/` won't be. A run that's in `incoming/` but not `runs/` isn't admitted,
-# so it isn't purged. One that's in `runs/` but not `incoming/` has already left the
-# bucket, so there's nothing to ask about.
-#
-# A run that's been purged gets `runs/{run_id}/.state/purged`, so the next pass doesn't
-# hash it again while the syncs catch up and drop it from `incoming/`.
+from .. import files, formats
+from ..common import os_error_reason
 
 # Where the secure side records what it's done to a run. Organize never copies it.
-STATE_DIRECTORY = storage.STATE_DIRECTORY
+STATE_DIRECTORY = formats.STATE_DIRECTORY
 PURGED_FILE = "purged"
 
 # The web server hashes its copy of the run before it answers, which for a run with a
@@ -170,12 +68,12 @@ def purge_runs(
     """Ask Pig to purge every run in `datastore/runs/` that's still in `incoming_dir`, this
     task's directory in `incoming_dir`."""
     report = PurgeReport()
-    admitted = datastore / admit.RUNS_DIRECTORY
+    admitted = datastore / formats.RUNS_DIRECTORY
     if not incoming.is_dir() or not admitted.is_dir():
         return report
 
     for run_id in sorted(
-        set(storage.directories_in(incoming)) & set(storage.directories_in(admitted))
+        set(files.directories_in(incoming)) & set(files.directories_in(admitted))
     ):
         if (admitted / run_id).is_symlink():
             report.problems[str(admitted / run_id)] = (
@@ -195,8 +93,8 @@ def purge_runs(
             )
             continue
         try:
-            hashes = purge_hashes(incoming / run_id)
-        except PurgeProblem as problem:
+            hashes = formats.purge_hashes(incoming / run_id)
+        except formats.PurgeProblem as problem:
             report.problems[str(incoming / run_id)] = f"couldn't hash it: {problem}"
             continue
         except OSError as error:
@@ -231,20 +129,22 @@ def _not_admitted(task_code: str, directory: Path) -> str:
     run into `runs/`, so every run it admitted has one, naming the run and its task.
     """
     try:
-        described = json.loads((directory / admit.RUN_FILE).read_text(encoding="utf-8"))
+        described = json.loads(
+            (directory / formats.RUN_FILE).read_text(encoding="utf-8")
+        )
     except FileNotFoundError:
-        return f"There's no {admit.RUN_FILE} in it."
+        return f"There's no {formats.RUN_FILE} in it."
     except (OSError, ValueError) as error:
         reason = os_error_reason(error) if isinstance(error, OSError) else error
-        return f"Its {admit.RUN_FILE} can't be read ({reason})."
+        return f"Its {formats.RUN_FILE} can't be read ({reason})."
     if (
         not isinstance(described, dict)
-        or described.get("type") != admit.RUN_FILE_TYPE
+        or described.get("type") != formats.RUN_FILE_TYPE
         or described.get("run_id") != directory.name
         or described.get("task_code") != task_code
     ):
         return (
-            f"Its {admit.RUN_FILE} doesn't describe run {directory.name} of task "
+            f"Its {formats.RUN_FILE} doesn't describe run {directory.name} of task "
             f"{task_code}."
         )
     return ""
@@ -254,11 +154,11 @@ def _record_purged(state: Path) -> None:
     """Write `.state/purged`, saying when, and make sure it's on disk."""
     state.mkdir(exist_ok=True)
     with open(state / PURGED_FILE, "w", encoding="utf-8") as written:
-        json.dump({"purged_at": db.now().isoformat()}, written)
+        json.dump({"purged_at": datetime.now(UTC).isoformat()}, written)
         written.write("\n")
-        storage.flush_and_fsync(written)
-    storage.fsync_directory(state)
-    storage.fsync_directory(state.parent)
+        files.flush_and_fsync(written)
+    files.fsync_directory(state)
+    files.fsync_directory(state.parent)
 
 
 def http_sender(pig_url: str) -> Sender:

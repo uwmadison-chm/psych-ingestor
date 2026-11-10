@@ -2,9 +2,10 @@
 
 import pytest
 
-from psych_ingestor import db, runs, storage
-from psych_ingestor.runs import Disposition, RequestProblem
-from psych_ingestor.service import Pig
+from psych_ingestor import formats
+from psych_ingestor.pig import db, runs
+from psych_ingestor.pig.runs import Disposition, RequestProblem
+from psych_ingestor.pig.service import Pig
 
 BASELINE = {"participant_id": "10351", "session": "baseline"}
 
@@ -27,8 +28,8 @@ def expire(pig: Pig, run_id: str) -> None:
 
 
 def dataset_lines(pig: Pig, run_id: str) -> list[dict]:
-    directory = storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
-    return storage.read_lines(directory / storage.EVENTS_FILE)
+    directory = formats.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    return formats.read_lines(directory / formats.EVENTS_FILE)
 
 
 def without_metadata(lines: list[dict]) -> list[dict]:
@@ -61,7 +62,7 @@ def test_starting_a_run_creates_its_directory(pig: Pig):
     """So that by sweep time "is the directory there" means one thing, whether or not
     the run ever sent an event."""
     run_id = start(pig)
-    directory = storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    directory = formats.run_directory(pig.config.in_progress_root, "stroop", run_id)
     assert directory.is_dir()
     assert list(directory.iterdir()) == []
 
@@ -183,15 +184,15 @@ def test_a_field_outside_data_is_refused(pig: Pig):
 def test_the_size_limit_and_the_hash_ignore_what_pig_added(pig: Pig):
     """Both cover the line minus `metadata`, so neither drifts as Pig adds fields."""
     run_id = start(pig)
-    line = storage.event_line("1", {"trial": 1}, db.now())
-    hashed = storage.hashed_text(line)
+    line = formats.event_line("1", {"trial": 1}, db.now())
+    hashed = formats.hashed_text(line)
     assert "metadata" not in hashed
     assert "stored_at" not in hashed
 
     pig.config.task["stroop"].max_event_size = len(hashed.encode("utf-8"))
     result = pig.store_events("stroop", run_id, {"1": {"data": {"trial": 1}}})
     assert result.status_code == 201
-    assert runs.receipt_hash(pig.connection, run_id, "1") == storage.content_hash(
+    assert runs.receipt_hash(pig.connection, run_id, "1") == formats.content_hash(
         hashed
     )
 

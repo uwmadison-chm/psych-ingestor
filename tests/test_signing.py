@@ -15,15 +15,17 @@ import pytest
 from fastapi.testclient import TestClient
 from pyrage import x25519
 
-from psych_ingestor import bech32, db, keys, signing, storage, sweep
-from psych_ingestor.admit import RUN_FILE, admit
-from psych_ingestor.app import create_app
-from psych_ingestor.config import ConfigurationError, load_config
-from psych_ingestor.organize import organize
-from psych_ingestor.runs import RequestProblem
-from psych_ingestor.service import Pig
-from psych_ingestor.sty_cli import app as pigsty
-from psych_ingestor.sty_cli import main
+from psych_ingestor import bech32, formats, keys, signing
+from psych_ingestor.formats import RUN_FILE
+from psych_ingestor.pig import db, sweep
+from psych_ingestor.pig.app import create_app
+from psych_ingestor.pig.config import ConfigurationError, load_config
+from psych_ingestor.pig.runs import RequestProblem
+from psych_ingestor.pig.service import Pig
+from psych_ingestor.pigsty.admit import admit
+from psych_ingestor.pigsty.cli import app as pigsty
+from psych_ingestor.pigsty.cli import main
+from psych_ingestor.pigsty.organize import organize
 
 NOW = datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
 MODULES = "questions:1,2,3|reels:03,22|sentences:05,52|videolog:1,2"
@@ -214,7 +216,7 @@ def test_a_signed_link_starts_a_run(pig: Pig, signing_key: keys.SigningKey):
 
     pig.finalize_run("teddy", started["run_id"])
     sweep.sweep(pig.config, pig.connection)
-    manifest = storage.read_manifest(pig.config.done_root / "teddy" / started["run_id"])
+    manifest = formats.read_manifest(pig.config.done_root / "teddy" / started["run_id"])
     assert manifest["signed_by"] == "lucida/signing"
     assert manifest["parameters"] == SIGNED
     assert manifest["path_parameters"] == ["id", "event"]
@@ -415,10 +417,10 @@ def test_pigsty_sign_refuses_a_csv_without_a_column(
 def test_pigsty_check_warns_when_the_signed_lists_differ(
     secure: Path, monkeypatch, capsys
 ):
-    from psych_ingestor import sty_cli
+    from psych_ingestor.pigsty import cli as pigsty_cli
 
     published = {"teddy": {"parameter_signing": {"signed_parameters": ["id", "event"]}}}
-    monkeypatch.setattr(sty_cli, "_task_settings", lambda url, code: published[code])
+    monkeypatch.setattr(pigsty_cli, "_task_settings", lambda url, code: published[code])
     secure.write_text('pig_url = "https://pig.example.edu"\n' + secure.read_text())
     pigsty(["check", "--config", str(secure)], result_action="return_value")
     out = capsys.readouterr().out
@@ -469,12 +471,12 @@ def test_admit_reads_a_manifest_from_before_signing(
     sweep.sweep(pig.config, pig.connection)
     incoming = tmp_path / "incoming" / "stroop" / run_id
     shutil.copytree(pig.config.done_root / "stroop" / run_id, incoming)
-    manifest = storage.read_manifest(incoming)
+    manifest = formats.read_manifest(incoming)
     for name in ("path_parameters", "signed_parameters", "signed_by"):
         del manifest[name]
     manifest["run_key"] = manifest.pop("run_key_parameters")
     manifest["manifest_version"] = 3
-    (incoming / storage.MANIFEST_FILE).write_text(json.dumps(manifest))
+    (incoming / formats.MANIFEST_FILE).write_text(json.dumps(manifest))
 
     assert admit(
         "stroop", tmp_path / "incoming" / "stroop", tmp_path / "stroop"

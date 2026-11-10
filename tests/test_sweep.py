@@ -4,8 +4,9 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from psych_ingestor import runs, storage, sweep
-from psych_ingestor.service import Pig
+from psych_ingestor import formats
+from psych_ingestor.pig import runs, storage, sweep
+from psych_ingestor.pig.service import Pig
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -17,11 +18,11 @@ def event(trial: int) -> dict:
 
 
 def in_progress(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.in_progress_root, "stroop", run_id)
+    return formats.run_directory(pig.config.in_progress_root, "stroop", run_id)
 
 
 def done(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.done_root, "stroop", run_id)
+    return formats.run_directory(pig.config.done_root, "stroop", run_id)
 
 
 def test_finishing_writes_a_manifest_and_moves_the_directory(pig: Pig):
@@ -56,7 +57,7 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
     pig.finalize_run("stroop", run_id)
     sweep.sweep(pig.config, pig.connection)
 
-    manifest = storage.read_manifest(done(pig, run_id))
+    manifest = formats.read_manifest(done(pig, run_id))
     assert manifest["type"] == "pig_run_manifest"
     assert manifest["manifest_version"] == 4
     assert manifest["run_id"] == run_id
@@ -81,7 +82,7 @@ def test_the_manifest_describes_the_run_without_pig(pig: Pig):
         {
             "path": "events.jsonl",
             "bytes": events_file.stat().st_size,
-            "sha256": storage.content_hash(events_file.read_text()),
+            "sha256": formats.content_hash(events_file.read_text()),
         }
     ]
     assert "count" not in json.dumps(manifest)
@@ -97,9 +98,9 @@ def test_events_are_left_exactly_as_written(pig: Pig):
     events_file = in_progress(pig, run_id) / "events.jsonl"
     before = events_file.read_text()
     storage.append_lines(
-        events_file, [storage.canonical(storage.read_lines(events_file)[0])]
+        events_file, [formats.canonical(formats.read_lines(events_file)[0])]
     )
-    assert len(storage.read_lines(events_file)) == 3
+    assert len(formats.read_lines(events_file)) == 3
 
     pig.finalize_run("stroop", run_id)
     sweep.sweep(pig.config, pig.connection)
@@ -108,7 +109,7 @@ def test_events_are_left_exactly_as_written(pig: Pig):
     assert after.startswith(before)
     assert [
         line["event_id"]
-        for line in storage.read_lines(done(pig, run_id) / "events.jsonl")
+        for line in formats.read_lines(done(pig, run_id) / "events.jsonl")
     ] == ["2", "1", "2"]
 
 
@@ -120,15 +121,15 @@ def test_two_lines_that_share_an_id_but_differ_are_both_kept(pig: Pig):
     events_file = in_progress(pig, run_id) / "events.jsonl"
     storage.append_lines(
         events_file,
-        [storage.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}})],
+        [formats.canonical({"event_id": "1", "data": {"trial": 99}, "metadata": {}})],
     )
 
     pig.finalize_run("stroop", run_id)
     sweep.sweep(pig.config, pig.connection)
 
     finished = done(pig, run_id) / "events.jsonl"
-    assert len(storage.read_lines(finished)) == 2
-    assert storage.duplicate_event_ids(finished) == ["1"]
+    assert len(formats.read_lines(finished)) == 2
+    assert formats.duplicate_event_ids(finished) == ["1"]
 
 
 def test_a_run_open_too_long_expires_and_is_finished_in_the_same_sweep(pig: Pig):
@@ -145,7 +146,7 @@ def test_a_run_open_too_long_expires_and_is_finished_in_the_same_sweep(pig: Pig)
     assert report.finished == [run_id]
 
     # Expired runs go to the same tree as finalized ones; the manifest says which.
-    assert storage.read_manifest(done(pig, run_id))["disposition"] == "expired"
+    assert formats.read_manifest(done(pig, run_id))["disposition"] == "expired"
     run = runs.get(pig.connection, run_id)
     assert run is not None
     assert run.api_status == "expired"
@@ -223,7 +224,7 @@ def test_a_task_deleted_from_the_configuration_is_still_finished(pig: Pig):
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == [run_id]
-    assert storage.read_manifest(done(pig, run_id))["run_key_parameters"] == [
+    assert formats.read_manifest(done(pig, run_id))["run_key_parameters"] == [
         "participant_id",
         "session",
     ]
@@ -243,7 +244,7 @@ def test_a_run_that_sent_no_events_still_gets_an_empty_events_file(pig: Pig):
     events_file = done(pig, run_id) / "events.jsonl"
     assert events_file.exists()
     assert events_file.stat().st_size == 0
-    assert storage.read_manifest(done(pig, run_id))["files"][0]["bytes"] == 0
+    assert formats.read_manifest(done(pig, run_id))["files"][0]["bytes"] == 0
 
 
 # ------------------------------------------------------- the sweep's own crash window
@@ -310,7 +311,7 @@ def test_a_run_in_both_trees_is_reported_and_neither_is_touched(pig: Pig):
     assert run_id in report.refused
     assert report.failed == {}
     assert (stray / "events.jsonl").read_text() == "not the real data\n"
-    assert len(storage.read_lines(done(pig, run_id) / "events.jsonl")) == 1
+    assert len(formats.read_lines(done(pig, run_id) / "events.jsonl")) == 1
 
 
 def test_a_destination_that_appears_mid_sweep_is_refused_not_called_a_failure(
@@ -380,7 +381,7 @@ def test_a_line_cut_short_by_a_crash_costs_only_itself(pig: Pig):
 
     lines = events_file.read_text().split("\n")
     assert lines[1] == '{"event_id":"2","da'
-    assert [line["event_id"] for line in storage.read_lines(events_file)] == [
+    assert [line["event_id"] for line in formats.read_lines(events_file)] == [
         "1",
         "2",
         "3",

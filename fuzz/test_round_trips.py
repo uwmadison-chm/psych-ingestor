@@ -16,22 +16,18 @@ from hypothesis import strategies as st
 from support import signing_key
 
 from psych_ingestor import bech32, signing
-from psych_ingestor.admit import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, _listed_path
-from psych_ingestor.admit import RunProblem as AdmitProblem
-from psych_ingestor.config import (
-    describe_duration,
-    describe_size,
-    is_safe_value,
-    parse_duration,
-    parse_size,
-)
-from psych_ingestor.organize import (
+from psych_ingestor.formats import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION
+from psych_ingestor.pig.config import parse_duration, parse_size
+from psych_ingestor.pigsty.admit import RunProblem as AdmitProblem
+from psych_ingestor.pigsty.admit import _listed_path
+from psych_ingestor.pigsty.organize import (
     OrganizeReport,
     Recorded,
     RunProblem,
     _plan,
     render,
 )
+from psych_ingestor.rules import describe_duration, describe_size, is_safe_value
 
 # ------------------------------------------------------------- sizes and durations
 

@@ -54,13 +54,9 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from pyrage import x25519
 
-from . import bech32, storage
-from .config import (
-    SAFE_VALUE_EXPLANATION,
-    ConfigurationError,
-    is_safe_value,
-    os_error_reason,
-)
+from . import bech32, files
+from .common import ConfigurationError, os_error_reason
+from .rules import SAFE_VALUE_EXPLANATION, is_safe_value
 
 KEY_SUFFIX = ".key"
 
@@ -399,7 +395,7 @@ def _write_key_file(path: Path, text: str) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as written:
         written.write(text)
-        storage.flush_and_fsync(written)
+        files.flush_and_fsync(written)
 
 
 def public_keys_text(

@@ -10,8 +10,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from psych_ingestor import db, runs
-from psych_ingestor.runs import Disposition, Phase, Run
+from psych_ingestor.pig import db, runs
+from psych_ingestor.pig.runs import Disposition, Phase, Run
 
 STARTED = datetime(2026, 7, 26, 18, 0, tzinfo=UTC)
 

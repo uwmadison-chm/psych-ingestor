@@ -8,12 +8,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import storage, sweep
-from psych_ingestor.admit import LOCK_FILE, RUN_FILE, admit
-from psych_ingestor.config import ConfigurationError
-from psych_ingestor.service import Pig
-from psych_ingestor.sty import load_sty_config
-from psych_ingestor.sty_cli import app
+from psych_ingestor import files, formats
+from psych_ingestor.formats import RUN_FILE
+from psych_ingestor.pig import sweep
+from psych_ingestor.pig.config import ConfigurationError
+from psych_ingestor.pig.service import Pig
+from psych_ingestor.pigsty.admit import LOCK_FILE, admit
+from psych_ingestor.pigsty.cli import app
+from psych_ingestor.pigsty.config import load_pigsty_config
 
 BASELINE = {"participant_id": "PPT-1003", "session": "Baseline"}
 
@@ -63,7 +65,7 @@ def test_an_admitted_run_has_pig_run_json_and_no_manifest(pig: Pig, tmp_path: Pa
     admitted = tmp_path / "datastore" / "runs" / incoming.name
     assert sorted(files_under(admitted)) == ["events.jsonl", RUN_FILE]
     described = json.loads((admitted / RUN_FILE).read_text())
-    manifest = storage.read_manifest(incoming)
+    manifest = formats.read_manifest(incoming)
     assert described["type"] == "pig_run"
     assert described["run_id"] == incoming.name
     assert described["parameters"] == BASELINE
@@ -195,7 +197,7 @@ def test_a_manifest_path_outside_the_run_isnt_admitted(
     pig: Pig, tmp_path: Path, path: str
 ):
     incoming = downloaded_run(pig, tmp_path)
-    manifest = storage.read_manifest(incoming)
+    manifest = formats.read_manifest(incoming)
     manifest["files"].append({"path": path, "bytes": 0, "sha256": "0" * 64})
     (incoming / "manifest.json").write_text(json.dumps(manifest))
 
@@ -247,13 +249,13 @@ def test_the_first_admit_makes_runs_durably(
     datastore is fsynced. Without that, a crash could take every run admitted with it."""
     downloaded_run(pig, tmp_path)
     synced: list[Path] = []
-    real = storage.fsync_directory
+    real = files.fsync_directory
 
     def record(directory: Path) -> None:
         synced.append(Path(directory))
         real(directory)
 
-    monkeypatch.setattr(storage, "fsync_directory", record)
+    monkeypatch.setattr(files, "fsync_directory", record)
 
     admit("stroop", tmp_path / "incoming" / "stroop", tmp_path / "datastore")
 
@@ -306,7 +308,7 @@ def test_datastore_dir_is_relative_to_the_file(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(TOP + sty_toml("./stroop-data"))
 
-    loaded = load_sty_config(path)
+    loaded = load_pigsty_config(path)
 
     assert loaded.task["stroop"].datastore_dir == tmp_path / "stroop-data"
 
@@ -316,14 +318,14 @@ def test_pigsty_toml_needs_incoming(tmp_path: Path):
     path.write_text(sty_toml("./stroop-data"))
 
     with pytest.raises(ConfigurationError, match="needs incoming_dir"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 def test_incoming_is_relative_to_the_file(tmp_path: Path):
     path = tmp_path / "pigsty.toml"
     path.write_text(TOP + sty_toml("./stroop-data"))
 
-    assert load_sty_config(path).incoming_dir == tmp_path / "incoming"
+    assert load_pigsty_config(path).incoming_dir == tmp_path / "incoming"
 
 
 @pytest.mark.parametrize(
@@ -337,7 +339,7 @@ def test_incoming_and_a_datastore_cant_be_inside_each_other(
     path.write_text(f'incoming_dir = "{incoming}"\n' + sty_toml(datastore))
 
     with pytest.raises(ConfigurationError, match="One is inside the other"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 def test_two_tasks_cant_share_a_datastore(tmp_path: Path):
@@ -347,7 +349,7 @@ def test_two_tasks_cant_share_a_datastore(tmp_path: Path):
     )
 
     with pytest.raises(ConfigurationError, match="same datastore_dir"):
-        load_sty_config(path)
+        load_pigsty_config(path)
 
 
 # ------------------------------------------------------------------ the CLI

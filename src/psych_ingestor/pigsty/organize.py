@@ -32,10 +32,11 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Literal
 
-from . import storage
-from .admit import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, RUNS_DIRECTORY
-from .config import SAFE_VALUE_EXPLANATION, is_safe_value, os_error_reason
-from .sty import BUILT_IN_NAMES, PLACEHOLDER
+from .. import files, formats
+from ..common import os_error_reason
+from ..formats import RUN_FILE, RUN_FILE_TYPE, RUN_FILE_VERSION, RUNS_DIRECTORY
+from ..rules import SAFE_VALUE_EXPLANATION, is_safe_value
+from .config import BUILT_IN_NAMES, PLACEHOLDER
 
 # What a run is copied into before it's renamed into place, so a tree never holds half
 # a run. Starts with a dot so it can't collide with a path a pattern produces.
@@ -127,9 +128,9 @@ def organize(
         return _organize(task_code, datastore, root, pattern, dry_run, full)
     root.mkdir(parents=True, exist_ok=True)
     try:
-        with storage.hold_lock(root / LOCK_FILE):
+        with files.hold_lock(root / LOCK_FILE):
             return _organize(task_code, datastore, root, pattern, dry_run, full)
-    except storage.LockHeld:
+    except files.LockHeld:
         report = OrganizeReport()
         report.errors[str(root)] = (
             "another pigsty organize is working on this tree. Nothing was placed. "
@@ -149,7 +150,7 @@ def _organize(
     report = OrganizeReport()
     runs = datastore / RUNS_DIRECTORY
     try:
-        run_ids = storage.directories_in(runs)
+        run_ids = files.directories_in(runs)
     except FileNotFoundError:
         report.errors[str(runs)] = (
             "There's no runs directory here. pigsty admit makes it, and puts this "
@@ -263,10 +264,10 @@ def _open_record(root: Path, full: bool) -> BinaryIO:
     path = _record_path(root, full)
     if full:
         record = open(path, "wb")  # noqa: SIM115 -- closed by the caller
-        storage.fsync_directory(root)
+        files.fsync_directory(root)
         return record
     record = open(path, "a+b")  # noqa: SIM115 -- closed by the caller
-    storage.fsync_directory(root)
+    files.fsync_directory(root)
     # A last line an earlier organize didn't finish is cut off, so this one's first
     # line starts on a line of its own. Usually only the last byte is read.
     record.seek(0, os.SEEK_END)
@@ -290,7 +291,7 @@ def _append_record(record: BinaryIO, placement: Placement) -> None:
         "destination": placement.destination.as_posix(),
     }
     record.write((json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
-    storage.flush_and_fsync(record)
+    files.flush_and_fsync(record)
 
 
 def _replace_record(root: Path, wrote: bool) -> None:
@@ -304,7 +305,7 @@ def _replace_record(root: Path, wrote: bool) -> None:
         _record_path(root, full=True).replace(_record_path(root, full=False))
     else:
         _record_path(root, full=False).unlink(missing_ok=True)
-    storage.fsync_directory(root)
+    files.fsync_directory(root)
 
 
 # --------------------------------------------------------------------- planning
@@ -526,7 +527,7 @@ def _media_names(run: dict[str, Any]) -> dict[str, str]:
                 "differ only in case, so they'd be one directory on a Mac."
             )
         seen[event_id.casefold()] = event_id
-        directory = storage.media_directory(Path(), int(item["media_id"])).name
+        directory = formats.media_directory(Path(), int(item["media_id"])).name
         names[directory] = event_id
     return names
 
@@ -569,38 +570,38 @@ def _copy_run(placement: Placement, destination: Path) -> None:
     """
     # Before anything is made, so a run with a symbolic link leaves nothing behind.
     try:
-        files = storage.files_in(placement.source)
-    except storage.SymbolicLink as link:
+        listed = files.files_in(placement.source)
+    except files.SymbolicLink as link:
         raise RunProblem(
             f"{link}. Pig never makes one, so the run wasn't placed."
         ) from None
     # One left by an organize that was interrupted is deleted. Ours by its name, never
     # runs/'s.
-    scratch = storage.fresh_scratch(destination, SCRATCH_SUFFIX)
+    scratch = files.fresh_scratch(destination, SCRATCH_SUFFIX)
     made = {scratch}
 
-    for relative in files:
+    for relative in listed:
         if relative == PurePosixPath(RUN_FILE):
             continue
-        if relative.parts[0] == storage.STATE_DIRECTORY:
+        if relative.parts[0] == formats.STATE_DIRECTORY:
             # What secure-side commands record about the run, not part of it.
             continue
         target = scratch / _renamed(relative, placement.media_names)
-        storage.copy_file(placement.source / relative, target, made)
+        files.copy_file(placement.source / relative, target, made)
 
     # pig-run.json goes in last, and it's what a later organize looks for to know this
     # run is already placed. It's the bytes read while planning, so it isn't read twice.
     with open(scratch / RUN_FILE, "wb") as run_file:
         run_file.write(placement.run_file_bytes)
-        storage.flush_and_fsync(run_file)
-    storage.rename_into_place(scratch, destination, made)
+        files.flush_and_fsync(run_file)
+    files.rename_into_place(scratch, destination, made)
 
 
 def _renamed(relative: PurePosixPath, media_names: dict[str, str]) -> PurePosixPath:
     """A file's path in the tree: the same as in `runs/`, except that a media item's
     directory is named for its event ID."""
     parts = relative.parts
-    is_media = len(parts) >= 3 and parts[0] == storage.MEDIA_DIRECTORY
+    is_media = len(parts) >= 3 and parts[0] == formats.MEDIA_DIRECTORY
     if is_media and parts[1] in media_names:
         return PurePosixPath(parts[0], media_names[parts[1]], *parts[2:])
     return relative

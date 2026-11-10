@@ -13,12 +13,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pyrage import x25519
 
-from psych_ingestor import db, keys, storage, sweep
-from psych_ingestor.admit import RUN_FILE, admit
-from psych_ingestor.app import create_app
-from psych_ingestor.config import ConfigSource, ConfigurationError, load_config
-from psych_ingestor.service import Pig
-from psych_ingestor.sty_cli import app as pigsty
+from psych_ingestor import formats, keys
+from psych_ingestor.formats import RUN_FILE
+from psych_ingestor.pig import db, sweep
+from psych_ingestor.pig.app import create_app
+from psych_ingestor.pig.config import ConfigSource, ConfigurationError, load_config
+from psych_ingestor.pig.service import Pig
+from psych_ingestor.pigsty.admit import admit
+from psych_ingestor.pigsty.cli import app as pigsty
 
 NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
 PARTICIPANT = {"participant_id": "10351"}
@@ -202,7 +204,7 @@ def test_the_manifest_says_what_the_run_was_encrypted_to(
     run_id = pig.start_run("secret", PARTICIPANT)["run_id"]
     pig.finalize_run("secret", run_id)
     sweep.sweep(pig.config, pig.connection)
-    manifest = storage.read_manifest(pig.config.done_root / "secret" / run_id)
+    manifest = formats.read_manifest(pig.config.done_root / "secret" / run_id)
     assert manifest["encrypted_to"] == "lucida/2026a"
 
 
@@ -257,7 +259,7 @@ def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
 
 
 def test_every_pigsty_command_takes_ignore_permissions(capsys):
-    from psych_ingestor.sty_cli import keys_app
+    from psych_ingestor.pigsty.cli import keys_app
 
     commands = [
         [name] for name in pigsty if not name.startswith("-") and name != "keys"
@@ -324,7 +326,7 @@ def test_admit_decrypts_events_and_parts(
     assert report.problems == {}
     assert report.admitted == [run_id]
     admitted = datastore / "runs" / run_id
-    lines = storage.read_lines(admitted / "events.jsonl")
+    lines = formats.read_lines(admitted / "events.jsonl")
     assert [line["data"] for line in lines] == [{"trial": 1, "rt": 523}, {"prompt": 3}]
     assert lines[1]["metadata"]["media_id"] == media_id
     assert (admitted / part.relative_to(part.parents[2])).read_bytes() == b"audio bytes"
@@ -413,14 +415,14 @@ def test_a_cut_short_line_is_kept_as_it_is(
 def test_pigsty_check_warns_about_a_public_key_no_private_key_matches(
     private_keys_dir: Path, private_key: keys.PrivateKey, monkeypatch, capsys
 ):
-    from psych_ingestor import sty_cli
+    from psych_ingestor.pigsty import cli as pigsty_cli
 
     stranger = x25519.Identity.generate().to_public()
     published = {
         "secret": {"encryption": {"public_key": private_key.public_key}},
         "other": {"encryption": {"public_key": str(stranger)}},
     }
-    monkeypatch.setattr(sty_cli, "_task_settings", lambda url, code: published[code])
+    monkeypatch.setattr(pigsty_cli, "_task_settings", lambda url, code: published[code])
     path = private_keys_dir.parent / "pigsty.toml"
     path.write_text(
         'pig_url = "https://pig.example.edu"\n'

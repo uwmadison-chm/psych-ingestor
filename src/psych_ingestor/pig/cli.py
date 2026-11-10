@@ -2,7 +2,7 @@
 
 Checking configuration, running the service, and the scheduled work — finishing closed
 runs and expiring runs that have been open too long. These run on the web server and read
-pig.toml. The secure side's commands are a separate command, `pigsty`; see sty_cli.py.
+pig.toml. The secure side's commands are a separate command, `pigsty`; see pigsty/cli.py.
 """
 
 from __future__ import annotations
@@ -16,19 +16,12 @@ from typing import Annotated
 
 import cyclopts
 
+from ..common import ConfigurationError, user_name, wrong_user
+from ..rules import describe_duration, describe_size
 from . import db, health
 from . import runs as runs_module
 from . import sweep as sweep_module
-from .config import (
-    DEFAULT_CONFIG,
-    Config,
-    ConfigurationError,
-    describe_duration,
-    describe_size,
-    load_config,
-    user_name,
-    wrong_user,
-)
+from .config import DEFAULT_CONFIG, Config, load_config
 from .runs import API_STATUSES, Phase
 
 app = cyclopts.App(
@@ -240,9 +233,9 @@ def serve(
 
     given = _activated_fd()
     if given is None:
-        uvicorn.run("psych_ingestor.app:app", host=host, port=port, factory=True)
+        uvicorn.run("psych_ingestor.pig.app:app", host=host, port=port, factory=True)
     else:
-        uvicorn.run("psych_ingestor.app:app", fd=given, factory=True)
+        uvicorn.run("psych_ingestor.pig.app:app", fd=given, factory=True)
 
 
 @app.command

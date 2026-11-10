@@ -7,8 +7,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from psych_ingestor import media, storage, sweep
-from psych_ingestor.service import Pig
+from psych_ingestor import formats
+from psych_ingestor.pig import media, sweep
+from psych_ingestor.pig.service import Pig
 
 PARTICIPANT = {"participant_id": "10351"}
 START = {
@@ -86,10 +87,10 @@ def test_starting_a_media_item_stores_an_ordinary_event(pig: Pig, client: TestCl
     start_media(client, run_id)
 
     events_file = (
-        storage.run_directory(pig.config.in_progress_root, "interview", run_id)
-        / storage.EVENTS_FILE
+        formats.run_directory(pig.config.in_progress_root, "interview", run_id)
+        / formats.EVENTS_FILE
     )
-    [line] = storage.read_lines(events_file)
+    [line] = formats.read_lines(events_file)
     assert line["event_id"] == "prompt3_audio"
     assert line["data"] == START["data"]
     assert line["metadata"]["media_id"] == 1
@@ -114,7 +115,7 @@ def test_parts_land_in_the_run_directory(pig: Pig, client: TestClient):
     start_media(client, run_id)
     put_part(client, run_id, 1, 3, b"three")
 
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
     part = run_dir / "media" / "00001" / "000003.part"
     assert part.read_bytes() == b"three"
     assert list((run_dir / "media" / "00001").iterdir()) == [part]
@@ -176,8 +177,8 @@ def test_a_part_with_the_same_number_and_different_bytes_is_refused(
     assert refused.status_code == 422
     assert refused.json()["errors"]["1"]["can_retry"] is False
     assert refused.json()["media"]["stored"] == [1]
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
-    assert storage.part_path(run_dir, 1, 1).read_bytes() == b"the real part"
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
+    assert formats.part_path(run_dir, 1, 1).read_bytes() == b"the real part"
     # And no scratch file was left behind.
     assert list(run_dir.rglob("*.partial")) == []
 
@@ -331,7 +332,7 @@ def test_a_part_bigger_than_the_task_allows_is_refused_by_content_length(
     assert problem["can_retry"] is False
     assert "1024 bytes" in problem["message"]
     assert refused.json()["media"]["stored"] == []
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
     assert list((run_dir / "media" / "00001").iterdir()) == []
 
 
@@ -350,7 +351,7 @@ def test_a_part_bigger_than_the_task_allows_is_refused_while_streaming(
     refused = client.put(f"/v1/task/interview/run/{run_id}/media/1/1", content=chunks())
     assert refused.status_code == 413
     assert refused.json()["errors"]["1"]["can_retry"] is False
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
     assert list((run_dir / "media" / "00001").iterdir()) == []
 
 
@@ -425,7 +426,7 @@ def test_a_browser_can_preflight_a_part_upload(client: TestClient):
 
 
 def done(pig: Pig, run_id: str) -> Path:
-    return storage.run_directory(pig.config.done_root, "interview", run_id)
+    return formats.run_directory(pig.config.done_root, "interview", run_id)
 
 
 def test_the_manifest_carries_the_media_and_hashes_every_part(
@@ -448,7 +449,7 @@ def test_the_manifest_carries_the_media_and_hashes_every_part(
     assert report.finished == [run_id]
     assert report.refused == {}
 
-    manifest = storage.read_manifest(done(pig, run_id))
+    manifest = formats.read_manifest(done(pig, run_id))
     assert manifest["media"] == [
         {"media_id": 1, "event_id": "prompt3_audio", "finished": True, "parts": 2},
         {"media_id": 2, "event_id": "prompt4_audio", "finished": False},
@@ -473,7 +474,7 @@ def test_the_sweep_removes_scratch_files_an_upload_left_behind(
     run_id = start_run(client)
     start_media(client, run_id)
     put_part(client, run_id, 1, 1, b"a")
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
     stray = run_dir / "media" / "00001" / "000002.part.deadbeef.partial"
     stray.write_bytes(b"half of a part")
     client.post(f"/v1/task/interview/run/{run_id}/finalize")
@@ -482,7 +483,7 @@ def test_the_sweep_removes_scratch_files_an_upload_left_behind(
     assert report.finished == [run_id]
     assert list(done(pig, run_id).rglob("*.partial")) == []
     paths = [
-        entry["path"] for entry in storage.read_manifest(done(pig, run_id))["files"]
+        entry["path"] for entry in formats.read_manifest(done(pig, run_id))["files"]
     ]
     assert paths == ["events.jsonl", "media/00001/000001.part"]
 
@@ -495,8 +496,8 @@ def test_a_run_whose_part_vanished_is_reported_not_finished(
     put_part(client, run_id, 1, 1, b"a")
     put_part(client, run_id, 1, 2, b"b")
     client.post(f"/v1/task/interview/run/{run_id}/finalize")
-    run_dir = storage.run_directory(pig.config.in_progress_root, "interview", run_id)
-    storage.part_path(run_dir, 1, 2).unlink()
+    run_dir = formats.run_directory(pig.config.in_progress_root, "interview", run_id)
+    formats.part_path(run_dir, 1, 2).unlink()
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.finished == []
@@ -516,7 +517,7 @@ def test_an_expired_run_keeps_its_unfinished_media(pig: Pig, client: TestClient)
 
     report = sweep.sweep(pig.config, pig.connection)
     assert report.expired == [run_id]
-    manifest = storage.read_manifest(done(pig, run_id))
+    manifest = formats.read_manifest(done(pig, run_id))
     assert manifest["disposition"] == "expired"
     assert manifest["media"] == [
         {"media_id": 1, "event_id": "prompt3_audio", "finished": False}

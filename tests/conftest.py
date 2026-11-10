@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from psych_ingestor import db
-from psych_ingestor.app import create_app
-from psych_ingestor.config import load_config
-from psych_ingestor.service import Pig
+from psych_ingestor.pig import db
+from psych_ingestor.pig.app import create_app
+from psych_ingestor.pig.config import load_config
+from psych_ingestor.pig.service import Pig
 
 CONFIG = """
 data_dir = "./data"
