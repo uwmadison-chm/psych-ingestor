@@ -72,11 +72,7 @@ Let SSH in from the secure server's address only.
 
 ## On the secure server
 
-Each study needs the directories its `pigsty.toml` names, which `pigsty check --fix` makes, and the one for purged runs:
-
-```
-install -d -o pigsty -g pigsty /secure/lucida/pig/purged
-```
+Each study needs the directories its `pigsty.toml` names, which `pigsty check --fix` makes, and the one for purged runs, which [Undoing a purge](#undoing-a-purge) has systemd make.
 
 ### SSH keys and settings
 
@@ -302,39 +298,27 @@ Runs already in `runs/` are left alone. Don't run purge with that file: those ru
 
 This covers mistakes on the secure side, like a run admitted to the wrong place or deleted from `runs/`. It doesn't cover losing the secure server's storage, which a bucket on another system did. Back the datastores up for that.
 
-Deleting what's been set aside for more than 30 days, `/etc/systemd/system/pigsty-clear-purged@.service`:
+Deletisystemd-tmpfiles makes each study's directory of purged runs and deletes what's been in it for more than 30 days. `/etc/tmpfiles.d/pigsty.conf`, with a line for each study:
 
-```ini
-[Unit]
-Description=Delete %i's purged runs set aside more than 30 days ago
-
-[Service]
-Type=oneshot
-User=pigsty
-ExecStart=/usr/bin/find /secure/%i/pig/purged -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -r {} +
+```
+d /secure/lucida/pig/purged 0750 pigsty pigsty 30d
 ```
 
-And `/etc/systemd/system/pigsty-clear-purged@.timer`:
+`systemd-tmpfiles --create /etc/tmpfiles.d/pigsty.conf` makes the directories now; at boot, systemd does it. `systemd-tmpfiles-clean.timer`, which systemd turns on already, deletes once a day. It goes by the newest of a file's access, change, and modification times, and moving a run in sets the change time, so the 30 days count from when the run was set aside, not from when it was recorded. It deletes what's inside the directory, never the directory itself.
 
-```ini
-[Unit]
-Description=Delete %i's old purged runs once a day
+systemd-tmpfiles runs as root. If the purged runs are on a network share that maps root to nobody, it can't delete them. Use a timer running as `pigsty` instead, with a service that runs this:
 
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
+```
+find /secure/lucida/pig/purged -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -r {} +
 ```
 
-### Turning it on
+rning it on
 
 For each study:
 
 ```
 systemctl daemon-reload
-systemctl enable --now pigsty-watch@lucida.service pigsty-sync@lucida.timer pigsty-clear-purged@lucida.timer
+systemctl enable --now pigsty-watch@lucida.service pigsty-sync@lucida.timer
 ```
 
 `journalctl -u pigsty-watch@lucida -u pigsty-pull@lucida -u pigsty-sync@lucida` shows what each did. A failed admit or purge shows up as a failed `pigsty-sync@lucida.service`, as it would from a timer.
