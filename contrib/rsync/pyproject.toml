@@ -1,0 +1,19 @@
+[project]
+name = "pig-rsync"
+version = "0.1.0"
+description = "Copy Psych Ingestor runs from the web server's done/ into incoming_dir, with rsync over SSH"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+pigsty-pull = "pig_rsync.pull:main"
+
+[build-system]
+requires = ["uv_build>=0.11.22,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.16.0",
+]
