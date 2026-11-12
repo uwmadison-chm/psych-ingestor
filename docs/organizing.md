@@ -84,6 +84,8 @@ rclone sync pigbucket:chm-wilbur-01/ /secure/pig/incoming/ \
 
 Run the copy, `pigsty admit`, and `pigsty purge` one after another, from one scheduled job, never at the same time. rclone downloads each file under a temporary name, and admit refuses a run with a file its manifest doesn't list. In systemd, a `oneshot` service with an `ExecStart=` for each does it, and stops at the first one that fails. Every 15 minutes to an hour is plenty: nothing is waiting except the web server, to be rid of the data.
 
+There doesn't have to be a bucket. The secure side can pull runs straight from the web server over SSH instead: see [pulling_over_ssh.md](pulling_over_ssh.md).
+
 ## Admitting downloaded runs
 
 On a real secure server, runs arrive by a copy Pig doesn't run: `rclone sync` from the bucket the web server uploads to, or something like it, into `incoming_dir`. That copy isn't all-at-once. A run can be half there for a while, and its manifest can arrive before the files it lists. `pigsty admit` is what stands between that and everything else: it moves a run into place only once it's whole.
