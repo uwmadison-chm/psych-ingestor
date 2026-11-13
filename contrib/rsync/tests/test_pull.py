@@ -101,13 +101,13 @@ def test_ssh_config_and_anything_after_dashes_reach_rsync(tmp_path, fake_rsync):
         tmp_path,
         rsync,
         "--ssh-config",
-        "/etc/pigsty/lucida/ssh/config",
+        "/etc/pigsty/circe/ssh/config",
         "--",
         "--dry-run",
     )
 
     args = json.loads(record.read_text())
-    assert args[args.index("-e") + 1] == "ssh -F /etc/pigsty/lucida/ssh/config"
+    assert args[args.index("-e") + 1] == "ssh -F /etc/pigsty/circe/ssh/config"
     # Before the source and destination, where rsync expects its options.
     assert args.index("--dry-run") < args.index("pig-pull:/")
 

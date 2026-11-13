@@ -594,7 +594,7 @@ A task that checks signatures only starts a run from a link whose parameters wer
     "event": "base",
     "modules": "questions:1,2,3|reels:03,22"
   },
-  "signature": "lucida/signing.Xk3p…"
+  "signature": "circe/signing.Xk3p…"
 }
 ```
 

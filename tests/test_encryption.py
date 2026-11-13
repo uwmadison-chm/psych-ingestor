@@ -34,7 +34,7 @@ public_keys_file = "public_keys.txt"
 path_parameters = ["participant_id"]
 run_key_parameters = ["participant_id"]
 media = true
-encrypt_to = "lucida/2026a"
+encrypt_to = "circe/2026a"
 
 [task.plain]
 path_parameters = ["participant_id"]
@@ -45,7 +45,7 @@ run_key_parameters = ["participant_id"]
 @pytest.fixture
 def private_keys_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "secure" / "private_keys"
-    keys.new_private_key(directory, "lucida/2026a", NOW)
+    keys.new_private_key(directory, "circe/2026a", NOW)
     return directory
 
 
@@ -117,7 +117,7 @@ def test_encrypt_to_needs_a_public_keys_file(tmp_path: Path):
 
 
 def test_encrypt_to_has_to_name_a_key_in_the_file(web: Path):
-    web.write_text(CONFIG.replace('"lucida/2026a"', '"lucida/2027"'))
+    web.write_text(CONFIG.replace('"circe/2026a"', '"circe/2027"'))
     with pytest.raises(ConfigurationError, match="no key by that name"):
         load_config(web)
 
@@ -135,7 +135,7 @@ def test_a_new_public_keys_file_takes_effect_without_a_restart(
 ):
     source = ConfigSource(web)
     first = source.current().task["secret"].public_key
-    other = keys.new_private_key(tmp_path / "other", "lucida/2026a", NOW)
+    other = keys.new_private_key(tmp_path / "other", "circe/2026a", NOW)
     keys_file = web.parent / "public_keys.txt"
     keys_file.write_text(keys.public_keys_text([other], tmp_path / "other", NOW))
     stat = keys_file.stat()
@@ -205,7 +205,7 @@ def test_the_manifest_says_what_the_run_was_encrypted_to(
     pig.finalize_run("secret", run_id)
     sweep.sweep(pig.config, pig.connection)
     manifest = formats.read_manifest(pig.config.done_root / "secret" / run_id)
-    assert manifest["encrypted_to"] == "lucida/2026a"
+    assert manifest["encrypted_to"] == "circe/2026a"
 
 
 # ------------------------------------------------------------------ keys
@@ -221,7 +221,7 @@ def test_a_new_key_is_private_and_age_can_read_it(private_key: keys.PrivateKey):
 
 def test_a_key_is_never_replaced(private_keys_dir: Path):
     with pytest.raises(FileExistsError):
-        keys.new_private_key(private_keys_dir, "lucida/2026a", NOW)
+        keys.new_private_key(private_keys_dir, "circe/2026a", NOW)
 
 
 def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
@@ -233,7 +233,7 @@ def test_a_key_others_can_read_is_refused(private_key: keys.PrivateKey):
 def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
     path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
-    made = keys.new_private_key(tmp_path / "keys", "lucida/2026a", NOW)
+    made = keys.new_private_key(tmp_path / "keys", "circe/2026a", NOW)
     made.path.chmod(0o644)
 
     with pytest.raises(SystemExit):
@@ -245,7 +245,7 @@ def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
         result_action="return_value",
     )
     output = capsys.readouterr()
-    assert "lucida/2026a" in output.out
+    assert "circe/2026a" in output.out
     assert "ignoring permissions" in output.err
 
     path.write_text(
@@ -254,7 +254,7 @@ def test_ignore_permissions_reads_a_key_others_can_read(tmp_path: Path, capsys):
     )
     pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
     output = capsys.readouterr()
-    assert "lucida/2026a" in output.out
+    assert "circe/2026a" in output.out
     assert "ignoring permissions" in output.err
 
 
@@ -277,24 +277,24 @@ def test_export_lists_every_key_by_name(private_keys_dir: Path):
         keys.read_private_keys(private_keys_dir), private_keys_dir, NOW
     )
     names = [line.split()[0] for line in exported.splitlines() if line[0] != "#"]
-    assert names == ["lucida/2026a", "other"]
+    assert names == ["circe/2026a", "other"]
 
 
 def test_pigsty_makes_and_exports_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
     path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
-        ["keys", "new", "lucida/2026b", "--config", str(path)],
+        ["keys", "new", "circe/2026b", "--config", str(path)],
         result_action="return_value",
     )
-    assert (tmp_path / "keys" / "lucida" / "2026b.key").exists()
+    assert (tmp_path / "keys" / "circe" / "2026b.key").exists()
     capsys.readouterr()
 
     pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
     exported = capsys.readouterr().out
     keys_file = tmp_path / "public_keys.txt"
     keys_file.write_text(exported)
-    assert list(keys.read_public_keys(keys_file)) == ["lucida/2026b"]
+    assert list(keys.read_public_keys(keys_file)) == ["circe/2026b"]
 
 
 # ------------------------------------------------------------------ admitting
@@ -331,8 +331,8 @@ def test_admit_decrypts_events_and_parts(
     assert lines[1]["metadata"]["media_id"] == media_id
     assert (admitted / part.relative_to(part.parents[2])).read_bytes() == b"audio bytes"
     run = json.loads((admitted / RUN_FILE).read_text())
-    assert run["encrypted_to"] == "lucida/2026a"
-    assert run["decrypted_with"] == ["lucida/2026a"]
+    assert run["encrypted_to"] == "circe/2026a"
+    assert run["decrypted_with"] == ["circe/2026a"]
     # Nothing in incoming/ changes, and no scratch is left behind.
     assert (incoming / "manifest.json").exists()
     assert sorted(path.name for path in (datastore / "runs").iterdir()) == [run_id]
@@ -435,5 +435,5 @@ def test_pigsty_check_warns_about_a_public_key_no_private_key_matches(
     pigsty(["check", "--config", str(path)], result_action="return_value")
 
     out = capsys.readouterr().out
-    assert "secret: encrypted to lucida/2026a, which is here." in out
+    assert "secret: encrypted to circe/2026a, which is here." in out
     assert "Warning: other:" in out

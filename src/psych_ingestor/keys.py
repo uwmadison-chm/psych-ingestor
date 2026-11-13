@@ -20,7 +20,7 @@ so the two kinds can't be mistaken for each other.
 - **Secure side.** `private_keys_dir` in `pigsty.toml` is a directory of `.key` files,
   one private key each. An encryption key is in the format `age-keygen` writes, and a
   signing key is the same but for its prefix. A key's name is its path inside the
-  directory without `.key`, so `lucida/2026a.key` is `lucida/2026a`. `pigsty keys new`
+  directory without `.key`, so `circe/2026a.key` is `circe/2026a`. `pigsty keys new`
   makes one of either kind; `pigsty keys export` writes the public keys file, with both.
 - **Web side.** `public_keys_file` in `pig.toml`, or in a study's file in one of its
   include directories, is that exported file, copied over whole. A task's `encrypt_to`
@@ -77,13 +77,13 @@ SIGNING_PRIVATE_KEY_PREFIX = SIGNING_PRIVATE_PREFIX + "1"
 
 
 def check_key_name(name: str) -> None:
-    """A key name is one or more safe values joined by `/`, like `lucida/2026a`. Raises
+    """A key name is one or more safe values joined by `/`, like `circe/2026a`. Raises
     ValueError saying what's wrong."""
     parts = name.split("/")
     if not name or not all(is_safe_value(part) for part in parts):
         raise ValueError(
             f"{name!r} isn't usable as a key name. A key name is one or more parts "
-            f"separated by '/', like lucida/2026a, each made of {SAFE_VALUE_EXPLANATION}."
+            f"separated by '/', like circe/2026a, each made of {SAFE_VALUE_EXPLANATION}."
         )
 
 
@@ -116,7 +116,7 @@ def read_public_keys(path: Path) -> dict[str, str]:
         if len(fields) != 2:
             raise ConfigurationError(
                 f"{where}: expected a key name and a public key, like "
-                "'lucida/2026a age1…'. This file is written by pigsty keys export; "
+                "'circe/2026a age1…'. This file is written by pigsty keys export; "
                 "export it again rather than editing it."
             )
         name, public_key = fields
@@ -349,7 +349,7 @@ def new_private_key(directory: Path, name: str, now: datetime) -> PrivateKey:
     its owner. Refuses to replace a key that's already there.
 
     The file is the one `age-keygen` writes, with one more comment line saying what
-    made it, so the stock `age` command can always read it: `age -d -i lucida/2026a.key`.
+    made it, so the stock `age` command can always read it: `age -d -i circe/2026a.key`.
     """
     check_key_name(name)
     path = directory / f"{name}{KEY_SUFFIX}"

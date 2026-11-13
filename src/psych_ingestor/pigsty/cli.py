@@ -464,14 +464,14 @@ def sign(
     Signs exactly the parameters the task's signed_parameters in pigsty.toml lists,
     and prints the signature that goes in the link alongside them, as sig:
 
-        pigsty sign stroop --key lucida/signing participant_id=10351 session=baseline
+        pigsty sign stroop --key circe/signing participant_id=10351 session=baseline
 
     With --csv, signs every row of a CSV file instead, and writes it to standard output
     with a sig column added. The file needs a column named for each signed
     parameter. Other columns are kept as they are, so a REDCap export can be signed and
     imported again:
 
-        pigsty sign stroop --key lucida/signing --csv roster.csv > signed.csv
+        pigsty sign stroop --key circe/signing --csv roster.csv > signed.csv
 
     Signatures don't expire. To stop a key's links working, take it out of the task's
     signed_by in pig.toml.
@@ -640,7 +640,7 @@ def new(
     """Make a new private key in private_keys_dir.
 
     The key is written to {private_keys_dir}/{name}.key, readable only by you. A name
-    can have directories in it, like lucida/2026a. Afterwards, export the public keys,
+    can have directories in it, like circe/2026a. Afterwards, export the public keys,
     copy the file to the web server, and set encrypt_to for the tasks that should use
     this key, or signed_by for a signing key.
 
@@ -652,7 +652,7 @@ def new(
     Parameters
     ----------
     name
-        What to call the key, like lucida/2026a.
+        What to call the key, like circe/2026a.
     signing
         Make a key for signing links, for pigsty sign, rather than one for
         decrypting.

@@ -19,16 +19,16 @@ uv tool install "git+https://github.com/uwmadison-chm/psych-ingestor#subdirector
 Then:
 
 ```
-pigsty-pull --from pig-pull: --config /etc/pigsty/lucida/pigsty.toml \
-  --ssh-config /etc/pigsty/lucida/ssh/config --keep-purged /secure/lucida/pig/purged
+pigsty-pull --from pig-pull: --config /etc/pigsty/circe/pigsty.toml \
+  --ssh-config /etc/pigsty/circe/ssh/config --keep-purged /secure/circe/pig/purged
 ```
 
 `--from` is where the web server's `done/` is, as rsync names it: an SSH host, a colon, and a path. With the web server's key limited to `done/` by `rrsync`, as [pulling_over_ssh.md](../../docs/pulling_over_ssh.md) sets it up, the path is relative to `done/`, so `pig-pull:` is all of it. It prints the rsync command, then runs it:
 
 ```
-rsync --recursive --times --delete --ignore-existing --backup --backup-dir=/secure/lucida/pig/purged/2026-11-12 \
-  --include=/teddy/ --include=/teddy_followup/ '--exclude=/*' -e 'ssh -F /etc/pigsty/lucida/ssh/config' \
-  pig-pull:/ /secure/lucida/pig/incoming/
+rsync --recursive --times --delete --ignore-existing --backup --backup-dir=/secure/circe/pig/purged/2026-11-12 \
+  --include=/teddy/ --include=/teddy_followup/ '--exclude=/*' -e 'ssh -F /etc/pigsty/circe/ssh/config' \
+  pig-pull:/ /secure/circe/pig/incoming/
 ```
 
 Anything after `--` goes to rsync as it is. `-- --dry-run --itemize-changes` shows what would be copied and deleted without doing either.

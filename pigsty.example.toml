@@ -19,8 +19,8 @@ pig_url = "http://127.0.0.1:8000"
 
 # The private keys encrypted runs are decrypted with and links are signed with, one .key
 # file each. Only needed once a task encrypts or checks signatures: uncomment it, and
-# make a key with `pigsty keys new lucida/2026a` or
-# `pigsty keys new --signing lucida/signing`. See docs/organizing.md.
+# make a key with `pigsty keys new circe/2026a` or
+# `pigsty keys new --signing circe/signing`. See docs/organizing.md.
 # private_keys_dir = "./private_keys"
 
 # The user every pigsty command has to run as, so nothing it makes belongs to someone

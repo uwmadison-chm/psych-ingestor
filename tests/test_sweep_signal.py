@@ -86,7 +86,7 @@ def test_a_touch_that_fails_doesnt_fail_the_finalize(tmp_path, caplog):
 
 def test_an_included_file_cant_set_it(tmp_path):
     (tmp_path / "studies").mkdir()
-    (tmp_path / "studies" / "lucida.toml").write_text(
+    (tmp_path / "studies" / "circe.toml").write_text(
         'touch_after_finalizing = "./sweep-due"\n'
     )
     path = tmp_path / "pig.toml"
