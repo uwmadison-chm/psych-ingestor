@@ -183,6 +183,8 @@ def test_a_directory_without_pig_run_json_is_not_a_run(tmp_path):
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg and ffprobe")
 def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
+    # Vorbis, not Opus: on GitHub's runners, ffmpeg warns "Error parsing Opus packet
+    # header" remuxing the Opus it just made, which this test isn't about.
     recording = tmp_path / "source.webm"
     subprocess.run(
         [
@@ -194,7 +196,7 @@ def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
             "-i",
             "sine=d=1",
             "-c:a",
-            "libopus",
+            "libvorbis",
             "-f",
             "webm",
             recording,
@@ -211,7 +213,7 @@ def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
         [
             event(
                 "0",
-                {"content_type": "audio/webm;codecs=opus", "name": "prompt3"},
+                {"content_type": "audio/webm;codecs=vorbis", "name": "prompt3"},
                 media_id=1,
             )
         ],
