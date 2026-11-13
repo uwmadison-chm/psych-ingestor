@@ -22,13 +22,13 @@ path_parameters = ["participant_id"]
 run_key_parameters = ["participant_id"]
 """
 
-LUCIDA = """
+CIRCE = """
 public_keys_file = "public_keys.txt"
 
 [task.teddy]
 path_parameters = ["id", "event"]
 run_key_parameters = ["id", "event"]
-encrypt_to = "lucida/2026a"
+encrypt_to = "circe/2026a"
 """
 
 
@@ -45,9 +45,9 @@ def main(tmp_path: Path) -> Path:
     path = tmp_path / "pig.toml"
     path.write_text(MAIN)
     studies = tmp_path / "studies"
-    (studies / "lucida").mkdir(parents=True)
-    (studies / "lucida.toml").write_text(LUCIDA)
-    export_keys(tmp_path, "lucida/2026a", studies / "public_keys.txt")
+    (studies / "circe").mkdir(parents=True)
+    (studies / "circe.toml").write_text(CIRCE)
+    export_keys(tmp_path, "circe/2026a", studies / "public_keys.txt")
     return path
 
 
@@ -61,7 +61,7 @@ def test_included_tasks_are_tasks(main: Path, tmp_path: Path):
     config = load_config(main)
     assert sorted(config.task) == ["stroop", "teddy"]
     assert config.task["stroop"].source == main
-    assert config.task["teddy"].source == tmp_path / "studies" / "lucida.toml"
+    assert config.task["teddy"].source == tmp_path / "studies" / "circe.toml"
     assert config.task["teddy"].code == "teddy"
 
 
@@ -74,10 +74,10 @@ def test_an_included_files_keys_are_relative_to_it(main: Path, tmp_path: Path):
 def test_only_toml_files_directly_inside_are_read(main: Path, tmp_path: Path):
     studies = tmp_path / "studies"
     broken = "this isn't [ toml"
-    (studies / ".lucida.toml.swp").write_text(broken)
+    (studies / ".circe.toml.swp").write_text(broken)
     (studies / ".hidden.toml").write_text(broken)
     (studies / "notes.txt").write_text(broken)
-    (studies / "lucida" / "nested.toml").write_text(broken)
+    (studies / "circe" / "nested.toml").write_text(broken)
     assert sorted(load_config(main).task) == ["stroop", "teddy"]
 
 
@@ -101,11 +101,11 @@ def test_a_task_uses_only_its_own_files_keys(main: Path, tmp_path: Path):
     main.write_text(
         MAIN.replace("include", 'public_keys_file = "public_keys.txt"\ninclude')
     )
-    lucida = tmp_path / "studies" / "lucida.toml"
-    lucida.write_text(LUCIDA.replace('public_keys_file = "public_keys.txt"\n', ""))
+    circe = tmp_path / "studies" / "circe.toml"
+    circe.write_text(CIRCE.replace('public_keys_file = "public_keys.txt"\n', ""))
     with pytest.raises(ConfigurationError) as raised:
         load_config(main)
-    assert str(lucida) in str(raised.value)
+    assert str(circe) in str(raised.value)
     assert "no public_keys_file in this file" in str(raised.value)
 
 
@@ -119,7 +119,7 @@ def test_one_studys_task_cant_encrypt_to_anothers_key(main: Path, tmp_path: Path
         "[task.dd]\n"
         'path_parameters = ["p"]\n'
         'run_key_parameters = ["p"]\n'
-        'encrypt_to = "lucida/2026a"\n'
+        'encrypt_to = "circe/2026a"\n'
     )
     with pytest.raises(ConfigurationError) as raised:
         load_config(main)
@@ -127,8 +127,8 @@ def test_one_studys_task_cant_encrypt_to_anothers_key(main: Path, tmp_path: Path
 
 
 def test_an_included_file_cant_say_where_data_goes(main: Path, tmp_path: Path):
-    (tmp_path / "studies" / "lucida.toml").write_text(
-        'data_dir = "/elsewhere"\n' + LUCIDA
+    (tmp_path / "studies" / "circe.toml").write_text(
+        'data_dir = "/elsewhere"\n' + CIRCE
     )
     with pytest.raises(ConfigurationError) as raised:
         load_config(main)
@@ -164,16 +164,16 @@ def test_a_new_studys_file_appears_without_a_restart(main: Path, tmp_path: Path)
 def test_removing_a_studys_file_removes_its_tasks(main: Path, tmp_path: Path):
     source = ConfigSource(main)
     assert "teddy" in source.current().task
-    (tmp_path / "studies" / "lucida.toml").unlink()
+    (tmp_path / "studies" / "circe.toml").unlink()
     assert "teddy" not in source.current().task
 
 
 def test_editing_an_included_file_takes_effect(main: Path, tmp_path: Path):
     source = ConfigSource(main)
     assert source.current().task["teddy"].open
-    lucida = tmp_path / "studies" / "lucida.toml"
-    lucida.write_text(LUCIDA + "open = false\n")
-    touch(lucida)
+    circe = tmp_path / "studies" / "circe.toml"
+    circe.write_text(CIRCE + "open = false\n")
+    touch(circe)
     assert not source.current().task["teddy"].open
 
 
@@ -182,20 +182,20 @@ def test_a_broken_included_file_keeps_the_last_good_one_serving(
 ):
     source = ConfigSource(main)
     source.current()
-    lucida = tmp_path / "studies" / "lucida.toml"
-    lucida.write_text(LUCIDA.replace("[task.teddy]", "[task.teddy"))
-    touch(lucida)
+    circe = tmp_path / "studies" / "circe.toml"
+    circe.write_text(CIRCE.replace("[task.teddy]", "[task.teddy"))
+    touch(circe)
     assert "teddy" in source.current().task
-    assert source.problem and "lucida.toml" in source.problem
+    assert source.problem and "circe.toml" in source.problem
 
 
 def test_a_new_copy_of_an_included_keys_file_takes_effect(main: Path, tmp_path: Path):
     source = ConfigSource(main)
     before = source.current().task["teddy"].public_key
-    secure = tmp_path / "secure" / "lucida"
+    secure = tmp_path / "secure" / "circe"
     for key in secure.rglob("*.key"):
         key.unlink()
-    export_keys(tmp_path, "lucida/2026a", tmp_path / "studies" / "public_keys.txt")
+    export_keys(tmp_path, "circe/2026a", tmp_path / "studies" / "public_keys.txt")
     touch(tmp_path / "studies" / "public_keys.txt")
     after = source.current().task["teddy"].public_key
     assert after and after != before
@@ -207,11 +207,11 @@ def test_a_linked_study_file_finds_its_keys_where_it_really_is(
     """Like nginx's sites-enabled: the study's file and keys stay in its repository, and
     a link in the include directory turns it on."""
     studies = tmp_path / "studies"
-    repository = tmp_path / "lucida-repo"
+    repository = tmp_path / "circe-repo"
     repository.mkdir()
-    (studies / "lucida.toml").rename(repository / "lucida.toml")
+    (studies / "circe.toml").rename(repository / "circe.toml")
     (studies / "public_keys.txt").rename(repository / "public_keys.txt")
-    (studies / "lucida.toml").symlink_to(repository / "lucida.toml")
+    (studies / "circe.toml").symlink_to(repository / "circe.toml")
 
     config = load_config(main)
     assert config.task["teddy"].public_key
@@ -219,5 +219,5 @@ def test_a_linked_study_file_finds_its_keys_where_it_really_is(
 
     source = ConfigSource(main)
     assert "teddy" in source.current().task
-    (studies / "lucida.toml").unlink()
+    (studies / "circe.toml").unlink()
     assert "teddy" not in source.current().task

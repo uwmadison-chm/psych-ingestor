@@ -6,14 +6,14 @@ The secure side can copy finished runs straight from the web server, with no buc
 
 Compared with [copying through a bucket](deployment.md#copying-finished-runs-to-the-bucket), the web server holds no keys for moving data, and a run reaches the secure side seconds after it's finished instead of at the next timer. What you give up is a copy somewhere else. Until the secure side pulls a run, the web server's disk is the only place it exists. Once it's purged, the only undo is the copy this setup keeps on the secure side for 30 days; see [Undoing a purge](#undoing-a-purge).
 
-One web server can serve several studies, and each study on the secure side has its own `pigsty.toml` listing its tasks, its own keys, and its own copy of everything below. The systemd units are templates, so one set of files serves every study: `pigsty-watch@lucida.service` is the watcher for the study `lucida`.
+One web server can serve several studies, and each study on the secure side has its own `pigsty.toml` listing its tasks, its own keys, and its own copy of everything below. The systemd units are templates, so one set of files serves every study: `pigsty-watch@circe.service` is the watcher for the study `circe`.
 
 ## How it works
 
 For each study:
 
-1. A service on the secure server, `pigsty-watch@lucida`, runs `ssh` to the web server. Its key can only run `inotifywait`, a standard Linux tool that watches a directory. It prints a line once it's watching `done/`, and another each time a run moves in or out.
-2. Each burst of lines starts `pigsty-sync@lucida.service`. The watcher waits for five quiet seconds first, so a sweep that finishes many runs starts one sync.
+1. A service on the secure server, `pigsty-watch@circe`, runs `ssh` to the web server. Its key can only run `inotifywait`, a standard Linux tool that watches a directory. It prints a line once it's watching `done/`, and another each time a run moves in or out.
+2. Each burst of lines starts `pigsty-sync@circe.service`. The watcher waits for five quiet seconds first, so a sweep that finishes many runs starts one sync.
 3. The sync runs `pigsty-pull`, which copies the study's tasks from `done/` into its `incoming_dir` with `rsync`, using a second key that can only read `done/`. Then `pigsty admit` and `pigsty purge` run, each in a container of its own.
 4. Purge moves runs out of `done/`, which prints more lines and starts one more sync. That sync's pull takes the purged runs out of `incoming_dir` and sets them aside.
 5. If the connection drops, systemd starts the watcher again 30 seconds later. Its first line starts a sync, which catches up on whatever happened in between.
@@ -25,18 +25,18 @@ Every study's watcher wakes for every change in `done/`, its own tasks or not. A
 
 Every connection goes from the secure server to the web server. The web server never connects to anything.
 
-The examples use these paths and names for a study called `lucida`. The templates build each study's paths from its name, so a second study, `wilbur`, has `/etc/pigsty/wilbur/pigsty.toml` and the rest. If your paths don't follow one pattern, change them for one study with `systemctl edit`.
+The examples use these paths and names for a study called `circe`. The templates build each study's paths from its name, so a second study, `wilbur`, has `/etc/pigsty/wilbur/pigsty.toml` and the rest. If your paths don't follow one pattern, change them for one study with `systemctl edit`.
 
 | Path or name | What it is |
 | --- | --- |
 | `pig.example.edu` | The web server |
 | `/var/lib/pig/data/done/` | Pig's `done/`, on the web server |
-| `/etc/pigsty/lucida/pigsty.toml` | The study's `pigsty.toml`, on the secure server |
-| `/etc/pigsty/lucida/private_keys/` | Its `private_keys_dir` |
-| `/etc/pigsty/lucida/ssh/` | Its SSH keys and settings |
-| `/secure/lucida/pig/incoming/` | Its `incoming_dir` |
-| `/secure/lucida/pig/purged/` | Where its purged runs are set aside. It has to be on the same filesystem as `incoming_dir` |
-| `/secure/lucida/primary_data/pig/` | The directory holding each of its tasks' `datastore_dir` |
+| `/etc/pigsty/circe/pigsty.toml` | The study's `pigsty.toml`, on the secure server |
+| `/etc/pigsty/circe/private_keys/` | Its `private_keys_dir` |
+| `/etc/pigsty/circe/ssh/` | Its SSH keys and settings |
+| `/secure/circe/pig/incoming/` | Its `incoming_dir` |
+| `/secure/circe/pig/purged/` | Where its purged runs are set aside. It has to be on the same filesystem as `incoming_dir` |
+| `/secure/circe/primary_data/pig/` | The directory holding each of its tasks' `datastore_dir` |
 | `teddy`, `teddy_followup` | The tasks in its `pigsty.toml` |
 | `pigsty-local` | A Docker image with pigsty installed |
 
@@ -53,8 +53,8 @@ It needs a real shell, because sshd runs each key's command with it, but it has 
 Then make `/var/lib/pigpull/.ssh/authorized_keys`, owned by `pigpull` and readable only by it (`chmod 600`). Each study adds two lines, one for each of its keys from [SSH keys and settings](#ssh-keys-and-settings):
 
 ```
-restrict,command="inotifywait --monitor --recursive --event create,moved_to,moved_from /var/lib/pig/data/done/ 2>&1" ssh-ed25519 AAAA… lucida watch
-restrict,command="rrsync -ro /var/lib/pig/data/done/" ssh-ed25519 AAAA… lucida pull
+restrict,command="inotifywait --monitor --recursive --event create,moved_to,moved_from /var/lib/pig/data/done/ 2>&1" ssh-ed25519 AAAA… circe watch
+restrict,command="rrsync -ro /var/lib/pig/data/done/" ssh-ed25519 AAAA… circe pull
 ```
 
 - `command=` runs that and only that, whatever the secure side asks for.
@@ -79,28 +79,28 @@ Each study needs the directories its `pigsty.toml` names, which `pigsty check --
 Make the study's two keys, with no passphrase, since nobody is there to type one:
 
 ```
-mkdir -p /etc/pigsty/lucida/ssh
-ssh-keygen -t ed25519 -N '' -C 'lucida watch' -f /etc/pigsty/lucida/ssh/watch_key
-ssh-keygen -t ed25519 -N '' -C 'lucida pull' -f /etc/pigsty/lucida/ssh/pull_key
-ssh-keyscan pig.example.edu > /etc/pigsty/lucida/ssh/known_hosts
-chown -R pigsty: /etc/pigsty/lucida/ssh
-chmod 700 /etc/pigsty/lucida/ssh
+mkdir -p /etc/pigsty/circe/ssh
+ssh-keygen -t ed25519 -N '' -C 'circe watch' -f /etc/pigsty/circe/ssh/watch_key
+ssh-keygen -t ed25519 -N '' -C 'circe pull' -f /etc/pigsty/circe/ssh/pull_key
+ssh-keyscan pig.example.edu > /etc/pigsty/circe/ssh/known_hosts
+chown -R pigsty: /etc/pigsty/circe/ssh
+chmod 700 /etc/pigsty/circe/ssh
 ```
 
 Put the `.pub` halves in the web server's `authorized_keys`, above. `ssh-keyscan` records the web server's host key, so later connections can check they've reached the right machine. Compare what it recorded with the key on the web server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` there) before trusting it.
 
-`/etc/pigsty/lucida/ssh/config` gives each key a name:
+`/etc/pigsty/circe/ssh/config` gives each key a name:
 
 ```
 Host pig-watch
-    IdentityFile /etc/pigsty/lucida/ssh/watch_key
+    IdentityFile /etc/pigsty/circe/ssh/watch_key
 Host pig-pull
-    IdentityFile /etc/pigsty/lucida/ssh/pull_key
+    IdentityFile /etc/pigsty/circe/ssh/pull_key
 Host pig-watch pig-pull
     HostName pig.example.edu
     User pigpull
     IdentitiesOnly yes
-    UserKnownHostsFile /etc/pigsty/lucida/ssh/known_hosts
+    UserKnownHostsFile /etc/pigsty/circe/ssh/known_hosts
     StrictHostKeyChecking yes
     BatchMode yes
     RequestTTY no
@@ -243,7 +243,7 @@ Run `pigsty organize` however you do now. It only reads `runs/`, so it doesn't n
 
 ### The timer
 
-`/etc/systemd/system/pigsty-sync@.timer`. `pigsty-sync@lucida.timer` starts `pigsty-sync@lucida.service`. `OnUnitInactiveSec=` counts from the end of the last sync, whatever started it, so the timer only starts one after 15 quiet minutes:
+`/etc/systemd/system/pigsty-sync@.timer`. `pigsty-sync@circe.timer` starts `pigsty-sync@circe.service`. `OnUnitInactiveSec=` counts from the end of the last sync, whatever started it, so the timer only starts one after 15 quiet minutes:
 
 ```ini
 [Unit]
@@ -275,22 +275,22 @@ polkit.addRule(function (action, subject) {
 
 ### Undoing a purge
 
-With a bucket, the bucket's old versions are the undo for a purge that shouldn't have happened. Here, it's `/secure/lucida/pig/purged/`: each pull moves the runs that left `done/` into a directory named for the day, like `/secure/lucida/pig/purged/2026-11-12/teddy/{run_id}/`, with the same bytes and manifest the web server had.
+With a bucket, the bucket's old versions are the undo for a purge that shouldn't have happened. Here, it's `/secure/circe/pig/purged/`: each pull moves the runs that left `done/` into a directory named for the day, like `/secure/circe/pig/purged/2026-11-12/teddy/{run_id}/`, with the same bytes and manifest the web server had.
 
 That directory has the same shape as `incoming_dir`, so `pigsty admit` can admit from it. To put back a run that's missing from `runs/`, copy the study's `pigsty.toml` with `incoming_dir` changed to that day's directory, and run admit with the copy:
 
 ```toml
-# /etc/pigsty/lucida/restore.toml: pigsty.toml, except for this line
-incoming_dir = "/secure/lucida/pig/purged/2026-11-12"
+# /etc/pigsty/circe/restore.toml: pigsty.toml, except for this line
+incoming_dir = "/secure/circe/pig/purged/2026-11-12"
 ```
 
 ```
 docker run --rm --read-only --tmpfs /tmp --network none --user pigsty \
-    --env PIGSTY_CONFIG=/etc/pigsty/lucida/restore.toml \
-    --mount type=bind,source=/etc/pigsty/lucida/restore.toml,target=/etc/pigsty/lucida/restore.toml,readonly \
-    --mount type=bind,source=/etc/pigsty/lucida/private_keys,target=/etc/pigsty/lucida/private_keys,readonly \
-    --mount type=bind,source=/secure/lucida/pig/purged,target=/secure/lucida/pig/purged,readonly \
-    --mount type=bind,source=/secure/lucida/primary_data/pig,target=/secure/lucida/primary_data/pig \
+    --env PIGSTY_CONFIG=/etc/pigsty/circe/restore.toml \
+    --mount type=bind,source=/etc/pigsty/circe/restore.toml,target=/etc/pigsty/circe/restore.toml,readonly \
+    --mount type=bind,source=/etc/pigsty/circe/private_keys,target=/etc/pigsty/circe/private_keys,readonly \
+    --mount type=bind,source=/secure/circe/pig/purged,target=/secure/circe/pig/purged,readonly \
+    --mount type=bind,source=/secure/circe/primary_data/pig,target=/secure/circe/primary_data/pig \
     pigsty-local pigsty admit
 ```
 
@@ -301,7 +301,7 @@ This covers mistakes on the secure side, like a run admitted to the wrong place 
 Deletisystemd-tmpfiles makes each study's directory of purged runs and deletes what's been in it for more than 30 days. `/etc/tmpfiles.d/pigsty.conf`, with a line for each study:
 
 ```
-d /secure/lucida/pig/purged 0750 pigsty pigsty 30d
+d /secure/circe/pig/purged 0750 pigsty pigsty 30d
 ```
 
 `systemd-tmpfiles --create /etc/tmpfiles.d/pigsty.conf` makes the directories now; at boot, systemd does it. `systemd-tmpfiles-clean.timer`, which systemd turns on already, deletes once a day. It goes by the newest of a file's access, change, and modification times, and moving a run in sets the change time, so the 30 days count from when the run was set aside, not from when it was recorded. It deletes what's inside the directory, never the directory itself.
@@ -309,7 +309,7 @@ d /secure/lucida/pig/purged 0750 pigsty pigsty 30d
 systemd-tmpfiles runs as root. If the purged runs are on a network share that maps root to nobody, it can't delete them. Use a timer running as `pigsty` instead, with a service that runs this:
 
 ```
-find /secure/lucida/pig/purged -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -r {} +
+find /secure/circe/pig/purged -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -r {} +
 ```
 
 rning it on
@@ -318,10 +318,10 @@ For each study:
 
 ```
 systemctl daemon-reload
-systemctl enable --now pigsty-watch@lucida.service pigsty-sync@lucida.timer
+systemctl enable --now pigsty-watch@circe.service pigsty-sync@circe.timer
 ```
 
-`journalctl -u pigsty-watch@lucida -u pigsty-pull@lucida -u pigsty-sync@lucida` shows what each did. A failed admit or purge shows up as a failed `pigsty-sync@lucida.service`, as it would from a timer.
+`journalctl -u pigsty-watch@circe -u pigsty-pull@circe -u pigsty-sync@circe` shows what each did. A failed admit or purge shows up as a failed `pigsty-sync@circe.service`, as it would from a timer.
 
 ## Keeping studies apart
 
@@ -345,7 +345,7 @@ So `pigsty-sync` has several guards, and any one of them stopped it in the test:
 - **`--read-only`** makes the container's own filesystem read-only, so writing anywhere that isn't a mount fails. Admit stopped with "read-only file system." `--tmpfs /tmp` gives Python the scratch space it needs.
 - **`--user pigsty`.** Docker makes any directory it needs for a mount as root, so `pigsty` can't make a missing `datastore_dir` beside it. Admit stopped with "permission denied." With `run_as = "pigsty"` in `pigsty.toml`, pigsty also refuses to run as anyone else. The image needs a `pigsty` user with the same user ID as on the host, so files on the share belong to the same account either way.
 - **`--mount type=bind`** refuses a source that isn't there: "bind source path does not exist." `-v /secure/…:/secure/…` makes the missing directory on the host instead, and carries on. In Compose, the short form, `- /secure/…:/secure/…`, makes it too; the long form, with `type: bind`, doesn't unless you set `create_host_path`.
-- **Mounting deep in the tree.** If the share isn't mounted on the host, everything below its mount point is missing, so a source like `/secure/lucida/primary_data/pig` doesn't exist and the container doesn't start. That only works if nothing has made those directories on the host's own disk under the empty mount point. Check once, with the share unmounted.
+- **Mounting deep in the tree.** If the share isn't mounted on the host, everything below its mount point is missing, so a source like `/secure/circe/primary_data/pig` doesn't exist and the container doesn't start. That only works if nothing has made those directories on the host's own disk under the empty mount point. Check once, with the share unmounted.
 
 Two more things to check about the image:
 

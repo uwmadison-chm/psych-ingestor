@@ -26,7 +26,7 @@ pigsty-fetch --from pigbucket:chm-wilbur-01 \
 `--from` is the bucket as rclone names it: a remote in rclone's configuration, then the bucket. It prints the rclone command, then runs it:
 
 ```
-rclone sync pigbucket:chm-wilbur-01/ /secure/lucida/incoming/ --checksum --immutable \
+rclone sync pigbucket:chm-wilbur-01/ /secure/circe/incoming/ --checksum --immutable \
   --fast-list --include /teddy/** --include /teddy_followup/** --config /etc/pigsty/rclone.conf
 ```
 

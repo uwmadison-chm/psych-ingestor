@@ -140,13 +140,13 @@ Every `.toml` file directly inside an included directory is read, in order by na
 An included file holds tasks, and a `public_keys_file` for them:
 
 ```toml
-# /etc/pig/studies/lucida.toml
-public_keys_file = "lucida_public_keys.txt"
+# /etc/pig/studies/circe.toml
+public_keys_file = "circe_public_keys.txt"
 
 [task.teddy]
 path_parameters = ["id", "event"]
 run_key_parameters = ["id", "event"]
-encrypt_to = "lucida/2026a"
+encrypt_to = "circe/2026a"
 ```
 
 Nothing else: `data_dir`, `database`, `include`, `touch_after_finalizing`, and `run_as` are only ever in the main file, so there's one place to look for them, and an included file can't include more.
@@ -320,7 +320,7 @@ public_keys_file = "public_keys.txt"
 [task.stroop]
 path_parameters = ["participant_id", "session"]
 run_key_parameters = ["participant_id", "session"]
-encrypt_to = "lucida/2026a"
+encrypt_to = "circe/2026a"
 ```
 
 `public_keys_file` is a list of public keys by name. You don't write it: it's made on the secure side, where the matching private keys are, by `pigsty keys export`, and you copy it here whole. See [organizing.md](organizing.md#encrypted-runs). A task without `encrypt_to` doesn't encrypt.
@@ -352,7 +352,7 @@ public_keys_file = "public_keys.txt"
 path_parameters = ["id", "event"]
 run_key_parameters = ["id", "event"]
 signed_parameters = ["id", "event", "modules"]
-signed_by = ["lucida/signing"]
+signed_by = ["circe/signing"]
 ```
 
 `signed_parameters` is the parameters the signature covers, and `signed_by` names the signing keys, from `public_keys_file`, that links for this task may be signed with. The keys are made on the secure side by `pigsty keys new --signing` and exported with the encryption keys, so it's the same file; see [organizing.md](organizing.md#signing-links). A task without `signed_by` doesn't check signatures.
@@ -360,7 +360,7 @@ signed_by = ["lucida/signing"]
 A link for this task looks like this, with the signature as one more parameter, `sig`:
 
 ```
-https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&sig=lucida/signing.Xk3…
+https://teddy.example.edu/?id=10235&event=base&modules=questions%3A1%2C2%7Creels%3A03&sig=circe/signing.Xk3…
 ```
 
 `sig` is the client's name for it, not Pig's. The client takes it out of the link and sends it to Pig beside the parameters (see [api.md](api.md#signed-links)), so a task can still have a parameter called `sig`, and can have the client read the signature from another name instead.

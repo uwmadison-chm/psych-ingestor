@@ -40,7 +40,7 @@ public_keys_file = "public_keys.txt"
 path_parameters = ["id", "event"]
 run_key_parameters = ["id", "event"]
 signed_parameters = ["id", "event", "modules"]
-signed_by = ["lucida/signing"]
+signed_by = ["circe/signing"]
 
 [task.stroop]
 path_parameters = ["participant_id"]
@@ -51,8 +51,8 @@ run_key_parameters = ["participant_id"]
 @pytest.fixture
 def private_keys_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "secure" / "private_keys"
-    keys.new_signing_key(directory, "lucida/signing", NOW)
-    keys.new_private_key(directory, "lucida/2026a", NOW)
+    keys.new_signing_key(directory, "circe/signing", NOW)
+    keys.new_private_key(directory, "circe/2026a", NOW)
     return directory
 
 
@@ -131,12 +131,12 @@ def test_a_mistyped_key_doesnt_decode(signing_key: keys.SigningKey):
 
 def test_signing_keys_and_encryption_keys_share_a_directory(private_keys_dir: Path):
     assert [key.name for key in keys.read_private_keys(private_keys_dir)] == [
-        "lucida/2026a"
+        "circe/2026a"
     ]
     assert [key.name for key in keys.read_signing_keys(private_keys_dir)] == [
-        "lucida/signing"
+        "circe/signing"
     ]
-    key_file = private_keys_dir / "lucida" / "signing.key"
+    key_file = private_keys_dir / "circe" / "signing.key"
     assert key_file.stat().st_mode & 0o077 == 0
     assert "PIG-SIGNING-KEY-1" in key_file.read_text()
 
@@ -151,25 +151,25 @@ def test_a_signing_key_reads_back_the_same(private_keys_dir: Path):
 
 def test_a_signing_key_cant_be_used_to_decrypt(private_keys_dir: Path):
     with pytest.raises(ConfigurationError, match="signing key"):
-        keys.read_private_key_file(private_keys_dir / "lucida" / "signing.key")
+        keys.read_private_key_file(private_keys_dir / "circe" / "signing.key")
 
 
 def test_the_public_keys_file_has_both_kinds(web: Path, signing_key: keys.SigningKey):
     public = keys.read_public_keys(web.parent / "public_keys.txt")
-    assert public["lucida/signing"] == signing_key.public_key
-    assert public["lucida/2026a"].startswith("age1")
+    assert public["circe/signing"] == signing_key.public_key
+    assert public["circe/2026a"].startswith("age1")
 
 
 def test_pigsty_makes_signing_keys(tmp_path: Path, capsys):
     path = tmp_path / "pigsty.toml"
     path.write_text('incoming_dir = "./incoming"\nprivate_keys_dir = "./keys"\n')
     pigsty(
-        ["keys", "new", "--signing", "lucida/signing", "--config", str(path)],
+        ["keys", "new", "--signing", "circe/signing", "--config", str(path)],
         result_action="return_value",
     )
     assert "pigpk1" in capsys.readouterr().out
     pigsty(["keys", "export", "--config", str(path)], result_action="return_value")
-    assert "lucida/signing pigpk1" in capsys.readouterr().out
+    assert "circe/signing pigpk1" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------------ configuration
@@ -187,7 +187,7 @@ def test_a_task_gives_what_it_signs(web: Path):
 @pytest.mark.parametrize(
     "old, new, complaint",
     [
-        ('signed_by = ["lucida/signing"]\n', "", "needs signed_by"),
+        ('signed_by = ["circe/signing"]\n', "", "needs signed_by"),
         (
             'signed_parameters = ["id", "event", "modules"]\n',
             "",
@@ -195,8 +195,8 @@ def test_a_task_gives_what_it_signs(web: Path):
         ),
         ('["id", "event", "modules"]', '["event", "modules"]', "leaves out id"),
         ('["id", "event", "modules"]', '["id", "event", "id"]', "more than once"),
-        ('["lucida/signing"]', '["lucida/2026a"]', "that's an encryption key"),
-        ('["lucida/signing"]', '["lucida/nope"]', "no key by that name"),
+        ('["circe/signing"]', '["circe/2026a"]', "that's an encryption key"),
+        ('["circe/signing"]', '["circe/nope"]', "no key by that name"),
     ],
 )
 def test_signing_settings_that_cant_work_are_refused(web: Path, old, new, complaint):
@@ -217,7 +217,7 @@ def test_a_signed_link_starts_a_run(pig: Pig, signing_key: keys.SigningKey):
     pig.finalize_run("teddy", started["run_id"])
     sweep.sweep(pig.config, pig.connection)
     manifest = formats.read_manifest(pig.config.done_root / "teddy" / started["run_id"])
-    assert manifest["signed_by"] == "lucida/signing"
+    assert manifest["signed_by"] == "circe/signing"
     assert manifest["parameters"] == SIGNED
     assert manifest["path_parameters"] == ["id", "event"]
     assert manifest["signed_parameters"] == ["id", "event", "modules"]
@@ -237,8 +237,8 @@ def test_a_changed_value_is_refused(pig: Pig, signing_key: keys.SigningKey):
     [
         (None, "no signature"),
         ("", "key name"),
-        ("lucida/signing.not-a-signature", "can't be read"),
-        ("lucida/other." + "A" * 86, "doesn't accept"),
+        ("circe/signing.not-a-signature", "can't be read"),
+        ("circe/other." + "A" * 86, "doesn't accept"),
         (12, "text"),
     ],
 )
@@ -301,7 +301,7 @@ def test_the_api_answers_a_bad_signature_with_403(web: Path, signing_key):
     reply = client.post("/v1/task/teddy/run", json={"parameters": SIGNED})
     assert reply.status_code == 403
     assert "no signature" in reply.json()["message"]
-    body = {"parameters": SIGNED, "signature": "lucida/x.AAAA"}
+    body = {"parameters": SIGNED, "signature": "circe/x.AAAA"}
     reply = client.post("/v1/task/teddy/run", json=body)
     assert reply.status_code == 403
     assert "Use the link you were sent" in reply.json()["message"]
@@ -314,18 +314,18 @@ def test_the_api_answers_a_bad_signature_with_403(web: Path, signing_key):
 
 def test_pigsty_sign_signs_what_pigsty_toml_lists(pig: Pig, secure: Path, capsys):
     pigsty(
-        ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+        ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
         + [f"{name}={value}" for name, value in SIGNED.items()],
         result_action="return_value",
     )
     signature = capsys.readouterr().out.strip()
-    assert signature.startswith("lucida/signing.")
+    assert signature.startswith("circe/signing.")
     assert pig.start_run("teddy", SIGNED, signature)["run_number"] == 1
 
 
 def test_pigsty_sign_can_print_a_whole_link(pig: Pig, secure: Path, capsys):
     pigsty(
-        ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+        ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
         + ["--url", "https://teddy.example.edu/"]
         + [f"{name}={value}" for name, value in SIGNED.items()],
         result_action="return_value",
@@ -350,7 +350,7 @@ def test_pigsty_sign_wants_exactly_the_signed_parameters(
 ):
     with pytest.raises(SystemExit):
         pigsty(
-            ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+            ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
             + values,
             result_action="return_value",
         )
@@ -360,10 +360,10 @@ def test_pigsty_sign_wants_exactly_the_signed_parameters(
 def test_pigsty_sign_needs_a_signing_key_by_name(secure: Path, capsys):
     with pytest.raises(SystemExit):
         pigsty(
-            ["sign", "teddy", "--key", "lucida/2026a", "--config", str(secure), "id=1"],
+            ["sign", "teddy", "--key", "circe/2026a", "--config", str(secure), "id=1"],
             result_action="return_value",
         )
-    assert "There is: lucida/signing" in capsys.readouterr().err
+    assert "There is: circe/signing" in capsys.readouterr().err
 
 
 def test_pigsty_sign_signs_a_csv(pig: Pig, secure: Path, tmp_path: Path, capsys):
@@ -375,7 +375,7 @@ def test_pigsty_sign_signs_a_csv(pig: Pig, secure: Path, tmp_path: Path, capsys)
         encoding="utf-8",
     )
     pigsty(
-        ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+        ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
         + ["--csv", str(roster)],
         result_action="return_value",
     )
@@ -390,12 +390,12 @@ def test_pigsty_sign_can_name_the_signature(secure: Path, tmp_path: Path, capsys
     roster = tmp_path / "roster.csv"
     roster.write_text("id,event,modules\n10235,base,reels:01\n")
     pigsty(
-        ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+        ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
         + ["--csv", str(roster), "--name", "signature"],
         result_action="return_value",
     )
     (row,) = csv.DictReader(io.StringIO(capsys.readouterr().out))
-    assert row["signature"].startswith("lucida/signing.")
+    assert row["signature"].startswith("circe/signing.")
 
 
 def test_pigsty_sign_refuses_a_csv_without_a_column(
@@ -405,7 +405,7 @@ def test_pigsty_sign_refuses_a_csv_without_a_column(
     roster.write_text("id,event\n1,base\n")
     with pytest.raises(SystemExit):
         pigsty(
-            ["sign", "teddy", "--key", "lucida/signing", "--config", str(secure)]
+            ["sign", "teddy", "--key", "circe/signing", "--config", str(secure)]
             + ["--csv", str(roster)],
             result_action="return_value",
         )
@@ -448,7 +448,7 @@ def test_admit_keeps_the_parameter_lists(pig: Pig, signing_key, tmp_path: Path):
     assert run["run_file_version"] == 2
     assert run["path_parameters"] == ["id", "event"]
     assert run["signed_parameters"] == ["id", "event", "modules"]
-    assert run["signed_by"] == "lucida/signing"
+    assert run["signed_by"] == "circe/signing"
 
 
 def test_organize_wont_put_text_in_a_path(pig: Pig, signing_key, tmp_path: Path):
@@ -529,7 +529,7 @@ def test_pigsty_says_why_it_stopped_rather_than_crashing(
     monkeypatch.setattr(keys, "new_private_key", refused)
 
     with pytest.raises(SystemExit) as stopped:
-        main(["keys", "new", "lucida/2026a", "--config", str(path)])
+        main(["keys", "new", "circe/2026a", "--config", str(path)])
 
     assert stopped.value.code == 1
     err = capsys.readouterr().err

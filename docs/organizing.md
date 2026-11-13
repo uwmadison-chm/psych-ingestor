@@ -128,14 +128,14 @@ The private keys that decrypt runs live in one directory, named at the top of `p
 private_keys_dir = "/etc/pigsty/private_keys"
 ```
 
-Each key is a file in it, and its name is its path without `.key`: `lucida/2026a.key` is the key `lucida/2026a`. You don't need to write these files by hand. To set up a key:
+Each key is a file in it, and its name is its path without `.key`: `circe/2026a.key` is the key `circe/2026a`. You don't need to write these files by hand. To set up a key:
 
 ```
-pigsty keys new lucida/2026a
+pigsty keys new circe/2026a
 pigsty keys export > public_keys.txt
 ```
 
-The first makes `lucida/2026a.key`, readable only by you. The second writes every key's public half to `public_keys.txt`. Copy that file to the web server, point `public_keys_file` at it, in `pig.toml` or in the study's own file of tasks (see [configuration.md](configuration.md#one-file-per-study)), and set `encrypt_to = "lucida/2026a"` for each task that should use the key. See [configuration.md](configuration.md#encryption). A public key isn't secret; the private key never leaves this machine, except to be backed up.
+The first makes `circe/2026a.key`, readable only by you. The second writes every key's public half to `public_keys.txt`. Copy that file to the web server, point `public_keys_file` at it, in `pig.toml` or in the study's own file of tasks (see [configuration.md](configuration.md#one-file-per-study)), and set `encrypt_to = "circe/2026a"` for each task that should use the key. See [configuration.md](configuration.md#encryption). A public key isn't secret; the private key never leaves this machine, except to be backed up.
 
 Back the key file up somewhere an administrator can reach, like a shared 1Password vault. Anything encrypted to it that hasn't been admitted yet can't be read without it. [security.md](security.md#keeping-the-private-key) says more.
 
@@ -159,9 +159,9 @@ The key files are ordinary age key files, so the stock [`age`](https://age-encry
 
 ```
 jq -r .data events.jsonl | while read -r data; do
-  echo "$data" | base64 -d | age -d -i lucida/2026a.key; echo
+  echo "$data" | base64 -d | age -d -i circe/2026a.key; echo
 done
-age -d -i lucida/2026a.key media/00001/000001.part > 000001.webm-part
+age -d -i circe/2026a.key media/00001/000001.part > 000001.webm-part
 ```
 
 That's also the yearly check that the backed-up key works: decrypt one real run with the backup, on a machine that isn't the secure server.
@@ -171,19 +171,19 @@ That's also the yearly check that the backed-up key works: decrypt one real run 
 A task with `signed_by` in `pig.toml` only starts a run from a link whose parameters were signed with one of its signing keys. The signing keys live in `private_keys_dir`, beside the encryption keys, and their public halves go to the web server in the same exported file:
 
 ```
-pigsty keys new --signing lucida/signing
+pigsty keys new --signing circe/signing
 pigsty keys export > public_keys.txt
 ```
 
-Copy the file to the web server and add `signed_by = ["lucida/signing"]` to the task, with its `signed_parameters`. See [configuration.md](configuration.md#parameter-signing).
+Copy the file to the web server and add `signed_by = ["circe/signing"]` to the task, with its `signed_parameters`. See [configuration.md](configuration.md#parameter-signing).
 
 `pigsty sign` needs to know which parameters to sign, and never reads `pig.toml`, so the task's entry in `pigsty.toml` lists them too, the same list:
 
 ```toml
 # pigsty.toml
 [task.teddy]
-datastore_dir = "/secure/lucida/pig/teddy"
-organized = "/secure/lucida/intermediate_data/pig/teddy/{id}/{event}_{run_number}"
+datastore_dir = "/secure/circe/pig/teddy"
+organized = "/secure/circe/intermediate_data/pig/teddy/{id}/{event}_{run_number}"
 signed_parameters = ["id", "event", "modules"]
 ```
 
@@ -192,19 +192,19 @@ If the two lists differ, links signed here don't start runs there, so the first 
 To sign one link's parameters, give their values. It prints the signature to add to the link, as `sig`:
 
 ```
-pigsty sign teddy --key lucida/signing id=10235 event=base 'modules=questions:1,2,3|reels:03,22'
+pigsty sign teddy --key circe/signing id=10235 event=base 'modules=questions:1,2,3|reels:03,22'
 ```
 
 With `--url`, it prints the whole link, ready to paste into a browser, which is the easy way to test a task that checks signatures:
 
 ```
-pigsty sign teddy --key lucida/signing --url https://teddy.example.edu/ id=10235 event=base modules=reels:01
+pigsty sign teddy --key circe/signing --url https://teddy.example.edu/ id=10235 event=base modules=reels:01
 ```
 
 To sign a whole list of participants, give it a CSV file with a column named for each signed parameter. It writes the file again with a `sig` column added, keeping every other column as it was:
 
 ```
-pigsty sign teddy --key lucida/signing --csv roster.csv > signed.csv
+pigsty sign teddy --key circe/signing --csv roster.csv > signed.csv
 ```
 
 For REDCap, make `sig` a text field, import `signed.csv`, and build the link by piping: `…?id=[record_id]&event=base&modules=…&sig=[sig]`. In a longitudinal project, the field is on each event, so each session gets its own signature. REDCap can't make the signature itself, which is why it's made here, on the machine with the key.

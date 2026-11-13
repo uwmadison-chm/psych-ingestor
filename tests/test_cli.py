@@ -147,7 +147,7 @@ def test_pigsty_check_fix_leaves_what_is_there_alone(tmp_path, capsys):
     keys_dir = tmp_path / "private_keys"
     keys_dir.mkdir(mode=0o755)
     keys_dir.chmod(0o755)
-    key = keys_dir / "lucida.key"
+    key = keys_dir / "circe.key"
     key.write_text("not really a key\n")
     key.chmod(0o644)
 
