@@ -212,7 +212,7 @@ it doesn't, `startMedia()` refuses straight away. See the media section of
 With a `MediaRecorder`, let the client run it:
 
 ```javascript
-const recording = await run.record(recorder, { prompt: 3 });
+const recording = await run.record(recorder, { name: "prompt3", prompt: 3 });
 
 // Later, moving on to the next prompt:
 await recording.stop();
@@ -240,7 +240,7 @@ with the gaps cut out.)
 Anything else is three calls:
 
 ```javascript
-const image = await run.startMedia({ content_type: blob.type, name: "drawing.png" });
+const image = await run.startMedia({ content_type: blob.type, name: "drawing" });
 image.add(blob);
 await image.finish();
 ```
@@ -248,6 +248,13 @@ await image.finish();
 **`run.startMedia(data)`** stores an event, with `data` kept the same way as any other
 event's, and resolves with the item. Put the content type in `data`. Pig doesn't look
 at the bytes, so `data` is the only record of what they are.
+
+Give each item a `name` too, like `drawing` or `prompt3`, with no extension. Pig doesn't
+use it, but [contrib/prepare](../contrib/prepare/README.md) names the item's file by it
+(`drawing.png`, from `name` and `content_type`), and it's the obvious thing for any other
+script to look for. Without one, the file is named by the event ID, which the client
+numbers, so it's `media_12.png`. To name a recording, put `name` in `run.record()`'s
+`data`.
 
 **`item.add(blob)`** queues bytes, and returns at once, like `run.add()`. Each call's
 bytes are given the next part numbers, in the order you call it, and a blob bigger than

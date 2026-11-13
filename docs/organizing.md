@@ -258,6 +258,8 @@ Only one `pigsty organize` works on a task at a time.
 
 It copies data exactly as Pig stored it. It doesn't join media parts into playable files, add file extensions, or drop repeated lines from `events.jsonl`. Those depend on what a task sends, so they belong to a script that understands that task's data.
 
+[contrib/prepare](../contrib/prepare/README.md) is a starting point for that script. It reads an organized tree and writes a CSV of each run's events, every run's events in one CSV, and a playable file for each media item. Copy it into your study and change what your task needs.
+
 It doesn't check files against hashes, either. `pigsty admit` did that, and nothing is in `runs/` unless it matched.
 
 Expired runs are placed like any other. Whether a run was finalized by its task or expired is in its `pig-run.json`, as `disposition`.
