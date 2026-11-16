@@ -477,8 +477,8 @@ def index_row(run, path, rows, problems, notes):
         "events": len(rows),
         "media": len(media),
         "unfinished_media": sum(1 for m in media if not m["finished"]),
-        "problems": problems,
-        "notes": notes,
+        "_prepare_problems_count": problems,
+        "_prepare_notes_count": notes,
         "prepared_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 

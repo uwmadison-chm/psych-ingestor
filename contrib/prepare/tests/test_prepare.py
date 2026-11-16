@@ -178,7 +178,7 @@ def test_a_parameter_that_collides_with_an_event_field_is_a_problem(tmp_path):
     log = (tmp_path / "prepared/circe/10351/baseline/prepare.log").read_text()
     assert log.startswith("problem: ")
     assert "the link parameter utm_source is also an event field" in log
-    assert read_csv(tmp_path / "prepared/runs.csv")[0]["problems"] == "1"
+    assert read_csv(tmp_path / "prepared/runs.csv")[0]["_prepare_problems_count"] == "1"
 
 
 def test_a_directory_without_pig_run_json_is_not_a_run(tmp_path):
@@ -275,4 +275,7 @@ def test_ffmpeg_warnings_are_passed_on_but_not_problems(tmp_path, monkeypatch, c
     assert log.startswith("note: ")
     assert "Error parsing Opus packet header" in log
     index = read_csv(tmp_path / "prepared/runs.csv")
-    assert (index[0]["problems"], index[0]["notes"]) == ("0", "1")
+    assert (index[0]["_prepare_problems_count"], index[0]["_prepare_notes_count"]) == (
+        "0",
+        "1",
+    )
