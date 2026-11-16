@@ -152,16 +152,12 @@ class Problems:
 
     def start_run(self):
         self.run_lines = []
-        self.run_problems = 0
-        self.run_notes = 0
 
     def __call__(self, where, message):
         self.count += 1
-        self.run_problems += 1
         self._report("problem", where, message)
 
     def note(self, where, message):
-        self.run_notes += 1
         self._report("note", where, message)
 
     def _report(self, kind, where, message):
@@ -462,7 +458,7 @@ def read_index(path):
         return {row["run_id"]: row for row in csv.DictReader(f)}
 
 
-def index_row(run, path, rows, problems, notes):
+def index_row(run, path, rows, check_log):
     media = run.get("media", [])
     key = {column_for(n): run["parameters"].get(n) for n in run["run_key_parameters"]}
     return {
@@ -477,8 +473,9 @@ def index_row(run, path, rows, problems, notes):
         "events": len(rows),
         "media": len(media),
         "unfinished_media": sum(1 for m in media if not m["finished"]),
-        "_prepare_problems_count": problems,
-        "_prepare_notes_count": notes,
+        # Whether anything went wrong, or was worth a note, preparing it: if so, it's
+        # in the run's prepare.log. The prefix says this script made the column.
+        "_prepare_check_log": cell(check_log),
         "prepared_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
@@ -653,9 +650,7 @@ def main(argv=None):
             check_parameters(out_dir, run, rows, problem)
             write_log(out_dir / "prepare.log", problem.run_lines)
             write_run_csv(out_dir / "events.csv", run, rows)
-            index[run_id] = index_row(
-                run, path, rows, problem.run_problems, problem.run_notes
-            )
+            index[run_id] = index_row(run, path, rows, bool(problem.run_lines))
             taken[path.as_posix()] = run_id
             done += 1
     finally:

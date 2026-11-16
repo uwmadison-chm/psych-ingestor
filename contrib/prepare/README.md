@@ -30,7 +30,7 @@ prepared/
     stroop/10351/baseline_0002/   that participant's second run of that session
 ```
 
-`runs.csv` is the place to start an analysis. Each row has the task code, the run key, `run_number`, `path`, `run_id`, `disposition` (`finalized`, or `expired` if Pig closed the run before the task finished it), when the run started and closed, how many events and media items it has, how many media items the task never finished, how many problems and notes preparing it reported (`_prepare_problems_count` and `_prepare_notes_count`, named so it's clear they come from this script, not from Pig or the task), and when it was prepared. Filter on those counts to find the runs worth a look, then read their `prepare.log`.
+`runs.csv` is the place to start an analysis. Each row has the task code, the run key, `run_number`, `path`, `run_id`, `disposition` (`finalized`, or `expired` if Pig closed the run before the task finished it), when the run started and closed, how many events and media items it has, how many media items the task never finished, `_prepare_check_log`, and when it was prepared. `_prepare_check_log` is `true` when anything about preparing the run was off, and its `prepare.log` says what. Its name starts with `_prepare_` so it's clear the column comes from this script, not from Pig or the task.
 
 Each `events.csv` has a row per event, in event ID order, with a repeated event (a retry Pig stored twice) dropped. Every row carries the run's task code, run number, run ID, disposition, and link parameters, so rows from different runs can be put together. An event field that's an object of plain values becomes dotted columns: `{"stimulus": {"word": "owl"}}` is `stimulus.word`. Anything more deeply nested stays whole, as JSON, in one cell.
 
