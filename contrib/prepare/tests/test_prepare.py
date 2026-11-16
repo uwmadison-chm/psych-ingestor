@@ -4,7 +4,9 @@ organize` lays one out: pig-run.json, events.jsonl, and media/{event_id}/ parts.
 import csv
 import json
 import shutil
+import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -183,8 +185,8 @@ def test_a_directory_without_pig_run_json_is_not_a_run(tmp_path):
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg and ffprobe")
 def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
-    # Vorbis, not Opus: on GitHub's runners, ffmpeg warns "Error parsing Opus packet
-    # header" remuxing the Opus it just made, which this test isn't about.
+    # Opus, as browsers record it. On GitHub's runners, ffmpeg warns "Error parsing Opus
+    # packet header" remuxing the Opus it just made, and that mustn't count as a problem.
     recording = tmp_path / "source.webm"
     subprocess.run(
         [
@@ -196,7 +198,7 @@ def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
             "-i",
             "sine=d=1",
             "-c:a",
-            "libvorbis",
+            "libopus",
             "-f",
             "webm",
             recording,
@@ -213,7 +215,7 @@ def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
         [
             event(
                 "0",
-                {"content_type": "audio/webm;codecs=vorbis", "name": "prompt3"},
+                {"content_type": "audio/webm;codecs=opus", "name": "prompt3"},
                 media_id=1,
             )
         ],
@@ -230,3 +232,36 @@ def test_a_recording_in_parts_is_joined_and_remuxed(tmp_path):
     assert rows[0]["media_file"] == "prompt3.webm"
     assert rows[0]["media_finished"] == "true"
     assert float(rows[0]["media_duration_s"]) == pytest.approx(1.0, abs=0.1)
+
+
+def test_ffmpeg_warnings_are_passed_on_but_not_problems(tmp_path, monkeypatch, capsys):
+    # A stand-in for ffmpeg that copies its input to its output, as `-c copy` would, and
+    # complains on the way, as ffmpeg often does about recordings from browsers.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ffmpeg = bin_dir / "ffmpeg"
+    ffmpeg.write_text(
+        f"#!{sys.executable}\n"
+        "import shutil, sys\n"
+        "args = sys.argv[1:]\n"
+        "shutil.copyfile(args[args.index('-i') + 1], args[-1])\n"
+        "print('[opus @ 0x0] Error parsing Opus packet header.', file=sys.stderr)\n"
+    )
+    ffmpeg.chmod(ffmpeg.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    organized = tmp_path / "organized"
+    make_run(
+        organized,
+        "run-a",
+        [event("0", {"content_type": "audio/webm", "name": "prompt3"}, media_id=1)],
+        media=[{"media_id": 1, "event_id": "0", "finished": True, "parts": 2}],
+        parts={"0": [b"ab", b"cd"]},
+    )
+
+    assert main([str(organized), str(tmp_path / "prepared")]) == 0
+
+    out = tmp_path / "prepared/circe/10351/baseline"
+    assert (out / "prompt3.webm").read_bytes() == b"abcd"
+    assert "Error parsing Opus packet header" in capsys.readouterr().err
+    assert read_csv(tmp_path / "prepared/runs.csv")[0]["problems"] == "0"

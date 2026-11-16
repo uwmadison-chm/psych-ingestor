@@ -308,7 +308,7 @@ def join_media(run_dir, out_dir, run, rows, force, problem):
                     "the task never finished this item, so it may end early; joined what arrived",
                 )
             if is_recording(content_type):
-                remux(parts, target, where, problem, item["finished"])
+                remux(parts, target, where, problem)
             else:
                 join(parts, target)
         if target.exists() and is_recording(content_type):
@@ -325,7 +325,7 @@ def join(parts, target):
     scratch.replace(target)
 
 
-def remux(parts, target, where, problem, finished):
+def remux(parts, target, where, problem):
     """Joins the parts in order, then copies the streams into a fresh file with ffmpeg. A
     recording sent in parts has no duration or seek index until it's remuxed. If ffmpeg
     can't read the joined file, or isn't installed, the joined file is kept, named
@@ -364,9 +364,10 @@ def remux(parts, target, where, problem, finished):
         )
         return
     if result.stderr.strip():
-        # An unfinished recording is expected to end mid-frame.
-        report = problem if finished else problem.note
-        report(where, f"ffmpeg reported problems remuxing it\n{result.stderr.strip()}")
+        # Recordings from browsers are often a little odd: an unfinished one ends
+        # mid-frame, and some encoders write packets ffmpeg complains about but copies
+        # anyway. ffmpeg made the file, so its warnings are passed on, not counted.
+        problem.note(where, f"ffmpeg warned while remuxing it\n{result.stderr.strip()}")
     scratch.replace(target)
     joined.unlink()
 

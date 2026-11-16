@@ -35,7 +35,7 @@ Each `events.csv` has a row per event, in event ID order, with a repeated event 
 
 ## What media files are called
 
-A media item's file is named by the `name` in its event's data, and its extension comes from `content_type`. A task that starts an item with
+A media item's file is named by the `name` in its event's data, and its extension comes from `content_type`. Pig itself doesn't look at either. `name` is a convention, and it's the current one: we want most studies to be able to run this script without editing it, and we don't yet know enough about how people will use their media to settle every field it reads. Expect it to grow, and send `name` so your files are named sensibly in the meantime. A task that starts an item with
 
 ```javascript
 run.startMedia({ content_type: "image/png", name: "drawing" });
@@ -62,9 +62,9 @@ It never changes the organized tree.
 Everything that goes wrong is reported as it happens, the run carries on where it can, and the script exits with an error at the end, so a scheduled job notices:
 
 - **A media item's parts don't match what Pig recorded.** It joins what's there.
-- **ffmpeg can't remux a recording.** The joined parts are kept as `prompt3.joined.webm`, for a person to look at.
+- **ffmpeg can't remux a recording at all.** The joined parts are kept as `prompt3.joined.webm`, for a person to look at.
 - **An event is stored twice with different data.** The first is kept.
 - **A link parameter has the same name as an event field.** Add its name to `EVENT_FIELDS`, and its column becomes `param.` and the name.
 - **Two runs would land in the same directory.** The second isn't prepared. Pig's run numbers should make that impossible.
 
-A recording the task never finished, because the participant closed the tab, say, is a note rather than a problem: it's joined, and ends where the data does. A recording split across two runs, because a run expired partway through it, is prepared as two files, one in each run. Joining those is up to you.
+Some things are passed on as notes but aren't problems, because they're common and the file is still made. ffmpeg often warns about recordings from browsers, about a packet it can't parse or a recording that ends mid-frame, and copies them anyway; its warnings are printed, and the remuxed file is kept. A recording the task never finished, because the participant closed the tab, say, is joined, and ends where the data does. A recording split across two runs, because a run expired partway through it, is prepared as two files, one in each run. Joining those is up to you.

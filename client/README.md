@@ -251,8 +251,8 @@ at the bytes, so `data` is the only record of what they are.
 
 Give each item a `name` too, like `drawing` or `prompt3`, with no extension. Pig doesn't
 use it, but [contrib/prepare](../contrib/prepare/README.md) names the item's file by it
-(`drawing.png`, from `name` and `content_type`), and it's the obvious thing for any other
-script to look for. Without one, the file is named by the event ID, which the client
+(`drawing.png`, from `name` and `content_type`). It's a convention, not something Pig
+checks, and it's the one to follow for now. Without one, the file is named by the event ID, which the client
 numbers, so it's `media_12.png`. To name a recording, put `name` in `run.record()`'s
 `data`.
 
