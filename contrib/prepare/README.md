@@ -21,7 +21,6 @@ The first argument can be a whole organized tree, any directory in one, or one r
 ```
 prepared/
     runs.csv                   one row per prepared run
-    events.csv                 every run's events in one file
     stroop/10351/baseline/     task, then each value in the task's run key
         events.csv
         prepare.log            what went wrong preparing it, if anything did
@@ -54,7 +53,7 @@ Each recording's `media_file`, `media_finished`, and `media_duration_s` are on i
 
 ## Running it again
 
-Run it after each `pigsty organize`, as runs come in. A run is prepared once: a run listed in `runs.csv` is skipped next time, without reading its events or touching its media. Finding runs lists directories but never goes inside a run's, so the media parts aren't scanned. The combined `events.csv` is rebuilt from the runs' own CSVs only when there's a new run; at thousands of runs it's the slow part, and `--no-combined` skips it. `--force` prepares every run again.
+Run it after each `pigsty organize`, as runs come in. A run is prepared once: a run listed in `runs.csv` is skipped next time, without reading its events or touching its media. Finding runs lists directories but never goes inside a run's, so the media parts aren't scanned. `--force` prepares every run again.
 
 It never changes the organized tree.
 

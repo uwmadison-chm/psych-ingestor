@@ -104,8 +104,6 @@ def test_events_become_rows_with_the_run_and_its_parameters(tmp_path):
     assert [(r["run_id"], r["path"], r["disposition"]) for r in index] == [
         ("run-a", "circe/10351/baseline", "finalized")
     ]
-    combined = read_csv(tmp_path / "prepared/events.csv")
-    assert len(combined) == 2
     # Nothing to say, so no log.
     assert not (tmp_path / "prepared/circe/10351/baseline/prepare.log").exists()
     assert index[0]["_prepare_check_log"] == "false"
@@ -143,8 +141,6 @@ def test_media_is_named_by_data_name_then_event_id(tmp_path):
         "drawing_take2.png",
         "media_2.png",
     ]
-    combined = read_csv(tmp_path / "prepared/events.csv")
-    assert combined[0]["media_file"] == "circe/10351/baseline/drawing.png"
 
 
 def test_media_name_makes_any_name_safe_in_a_path():
@@ -188,7 +184,7 @@ def test_a_directory_without_pig_run_json_is_not_a_run(tmp_path):
     (organized / "circe" / "stray" / "manifest.json").write_text("{}")
 
     assert main([str(organized), str(tmp_path / "prepared")]) == 0
-    assert read_csv(tmp_path / "prepared/events.csv") == []
+    assert not (tmp_path / "prepared/runs.csv").exists()
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg and ffprobe")

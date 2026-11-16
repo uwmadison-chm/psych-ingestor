@@ -15,15 +15,13 @@ participant's second run:
 - one file per media item, its parts joined, and remuxed with ffmpeg if it's audio
   or video so that it plays and seeks
 
-It also keeps PREPARED/runs.csv, one row per prepared run, and PREPARED/events.csv,
-every run's rows in one file.
+It also keeps PREPARED/runs.csv, one row per prepared run.
 
 A media item's file is named by the `name` in its event's data, if the task sent
 one, and by its event ID otherwise. Its extension comes from `content_type`.
 
 It never changes ORGANIZED. A run is prepared once: a run listed in runs.csv is
-skipped next time (unless --force), and PREPARED/events.csv is rebuilt only when a
-run was added.
+skipped next time (unless --force).
 
 This is a starting point. Copy it into your study and change what you need; the
 parts most likely to change are near the top.
@@ -550,33 +548,6 @@ def write_run_csv(path, run, rows):
     write_csv(path, columns, ({**fields, **row} for _, _, row in rows))
 
 
-def write_combined(path, prepared, run_dirs):
-    """Every run's events.csv in one file, read back from the runs' own CSVs so nothing
-    has to be held in memory. Its columns are every run's columns: run fields, then
-    every parameter, then every event field, so a column one run doesn't have is empty
-    in its rows."""
-    csvs = [d / "events.csv" for d in run_dirs if (d / "events.csv").exists()]
-    params, fields = [], list(EVENT_COLUMNS)
-    for run_csv in csvs:
-        with open(run_csv, newline="", encoding="utf-8") as f:
-            header = next(csv.reader(f), [])
-        split = header.index("event_id") if "event_id" in header else len(header)
-        params += [c for c in header[len(RUN_COLUMNS) : split] if c not in params]
-        fields += [c for c in header[split:] if c not in fields]
-
-    def rows():
-        for run_csv in csvs:
-            here = run_csv.parent.relative_to(prepared).as_posix()
-            with open(run_csv, newline="", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    if row.get("media_file"):
-                        row["media_file"] = f"{here}/{row['media_file']}"
-                    yield row
-
-    write_csv(path, RUN_COLUMNS + params + fields, rows())
-    return len(csvs)
-
-
 def write_csv(path, columns, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     scratch = path.with_name(path.name + ".partial")
@@ -601,9 +572,6 @@ def main(argv=None):
         "--force",
         action="store_true",
         help="prepare every run again, even ones already in PREPARED",
-    )
-    parser.add_argument(
-        "--no-combined", action="store_true", help="don't rebuild PREPARED/events.csv"
     )
     args = parser.parse_args(argv)
 
@@ -659,16 +627,6 @@ def main(argv=None):
             write_index(index_path, index)
 
     print(f"Prepared {done} new run(s); {len(index)} in {index_path}.")
-    # Rebuilt only when it's missing or a run was added, since at thousands of runs it's
-    # the slowest part of a run with nothing new.
-    combined = prepared / "events.csv"
-    if not args.no_combined and (done or not combined.exists()):
-        run_dirs = [
-            prepared / row["path"]
-            for row in sorted(index.values(), key=lambda r: r["path"])
-        ]
-        count = write_combined(combined, prepared, run_dirs)
-        print(f"Wrote {combined}, with {count} run(s).")
     if problem.count:
         sys.exit(f"{problem.count} problem(s); see above.")
     return 0
