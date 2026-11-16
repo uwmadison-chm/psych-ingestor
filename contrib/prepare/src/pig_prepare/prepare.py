@@ -11,6 +11,7 @@ participant's second run:
 
 - events.csv: one row per event, with the run's fields and link parameters on
   every row, and nested fields flattened into dotted columns
+- prepare.log: every problem and note from preparing the run, if there were any
 - one file per media item, its parts joined, and remuxed with ffmpeg if it's audio
   or video so that it plays and seeks
 
@@ -138,19 +139,34 @@ def is_recording(content_type):
 
 
 class Problems:
-    """Everything that went wrong, reported as it happens and counted at the end. A note
+    """Everything that went wrong, printed as it happens and counted at the end. A note
     is something worth knowing that nobody needs to fix, like a recording cut short by
-    a closed tab; notes don't count."""
+    a closed tab, or ffmpeg's warnings; notes don't count.
+
+    Each run's problems and notes are also kept, from `start_run()` on, for its
+    prepare.log."""
 
     def __init__(self):
         self.count = 0
+        self.start_run()
+
+    def start_run(self):
+        self.run_lines = []
+        self.run_problems = 0
+        self.run_notes = 0
 
     def __call__(self, where, message):
         self.count += 1
-        print(f"{where}: {message}", file=sys.stderr)
+        self.run_problems += 1
+        self._report("problem", where, message)
 
     def note(self, where, message):
+        self.run_notes += 1
+        self._report("note", where, message)
+
+    def _report(self, kind, where, message):
         print(f"{where}: {message}", file=sys.stderr)
+        self.run_lines.append(f"{kind}: {where}: {message}")
 
 
 # ---------------------------------------------------------------- reading runs
@@ -446,7 +462,7 @@ def read_index(path):
         return {row["run_id"]: row for row in csv.DictReader(f)}
 
 
-def index_row(run, path, rows, problems):
+def index_row(run, path, rows, problems, notes):
     media = run.get("media", [])
     key = {column_for(n): run["parameters"].get(n) for n in run["run_key_parameters"]}
     return {
@@ -462,6 +478,7 @@ def index_row(run, path, rows, problems):
         "media": len(media),
         "unfinished_media": sum(1 for m in media if not m["finished"]),
         "problems": problems,
+        "notes": notes,
         "prepared_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
@@ -501,19 +518,34 @@ def column_for(parameter):
     return parameter
 
 
-def write_run_csv(path, run, rows, problem):
-    """The run's events.csv. It's written last, once its media files are, and appears
-    all at once, since its being there is what says the run is done."""
-    fields = {c: run.get(c) for c in RUN_COLUMNS}
-    params = parameters(run)
+def check_parameters(out_dir, run, rows, problem):
+    """A link parameter whose column an event field already has would be lost."""
     seen = {c for _, _, row in rows for c in row}
-    for column in params:
+    for column in parameters(run):
         if column in seen:
             problem(
-                path.parent,
+                out_dir,
                 f"the link parameter {column} is also an event field; add it to "
                 f"EVENT_FIELDS so it gets a {PARAMETER_PREFIX} prefix",
             )
+
+
+def write_log(path, lines):
+    """The run's prepare.log: every problem and note from preparing it, or no file if
+    there were none. One left from preparing it before is replaced, or removed."""
+    if not lines:
+        path.unlink(missing_ok=True)
+        return
+    scratch = path.with_name(path.name + ".partial")
+    scratch.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    scratch.replace(path)
+
+
+def write_run_csv(path, run, rows):
+    """The run's events.csv. It's written last, once its media files and prepare.log
+    are, and appears all at once, since its being there is what says the run is done."""
+    fields = {c: run.get(c) for c in RUN_COLUMNS}
+    params = parameters(run)
     fields.update(params)
     columns = list(fields) + EVENT_COLUMNS
     for _, _, row in rows:
@@ -595,6 +627,7 @@ def main(argv=None):
     done = 0
     try:
         for run_dir in run_dirs:
+            problem.start_run()
             run = read_run_file(run_dir, problem)
             if run is None:
                 continue
@@ -614,12 +647,15 @@ def main(argv=None):
             if not args.force and run_id in index and (out_dir / "events.csv").exists():
                 continue
 
-            before = problem.count
             rows = read_events(run_dir, problem)
             out_dir.mkdir(parents=True, exist_ok=True)
             join_media(run_dir, out_dir, run, rows, args.force, problem)
-            write_run_csv(out_dir / "events.csv", run, rows, problem)
-            index[run_id] = index_row(run, path, rows, problem.count - before)
+            check_parameters(out_dir, run, rows, problem)
+            write_log(out_dir / "prepare.log", problem.run_lines)
+            write_run_csv(out_dir / "events.csv", run, rows)
+            index[run_id] = index_row(
+                run, path, rows, problem.run_problems, problem.run_notes
+            )
             taken[path.as_posix()] = run_id
             done += 1
     finally:

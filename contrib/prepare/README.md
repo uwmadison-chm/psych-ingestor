@@ -24,12 +24,13 @@ prepared/
     events.csv                 every run's events in one file
     stroop/10351/baseline/     task, then each value in the task's run key
         events.csv
+        prepare.log            what went wrong preparing it, if anything did
         prompt3.webm
         drawing.png
     stroop/10351/baseline_0002/   that participant's second run of that session
 ```
 
-`runs.csv` is the place to start an analysis. Each row has the task code, the run key, `run_number`, `path`, `run_id`, `disposition` (`finalized`, or `expired` if Pig closed the run before the task finished it), when the run started and closed, how many events and media items it has, how many media items the task never finished, how many problems preparing it reported, and when it was prepared.
+`runs.csv` is the place to start an analysis. Each row has the task code, the run key, `run_number`, `path`, `run_id`, `disposition` (`finalized`, or `expired` if Pig closed the run before the task finished it), when the run started and closed, how many events and media items it has, how many media items the task never finished, how many problems and notes preparing it reported, and when it was prepared. Filter on `problems` or `notes` to find the runs worth a look, then read their `prepare.log`.
 
 Each `events.csv` has a row per event, in event ID order, with a repeated event (a retry Pig stored twice) dropped. Every row carries the run's task code, run number, run ID, disposition, and link parameters, so rows from different runs can be put together. An event field that's an object of plain values becomes dotted columns: `{"stimulus": {"word": "owl"}}` is `stimulus.word`. Anything more deeply nested stays whole, as JSON, in one cell.
 
@@ -59,12 +60,14 @@ It never changes the organized tree.
 
 ## Problems
 
-Everything that goes wrong is reported as it happens, the run carries on where it can, and the script exits with an error at the end, so a scheduled job notices:
+Everything that goes wrong is printed as it happens, and written to the run's `prepare.log`, next to its `events.csv`. Each line there starts with `problem:` or `note:`. A run with nothing to report has no log. The run carries on where it can, and the script exits with an error at the end if there were any problems, so a scheduled job notices:
 
 - **A media item's parts don't match what Pig recorded.** It joins what's there.
 - **ffmpeg can't remux a recording at all.** The joined parts are kept as `prompt3.joined.webm`, for a person to look at.
 - **An event is stored twice with different data.** The first is kept.
 - **A link parameter has the same name as an event field.** Add its name to `EVENT_FIELDS`, and its column becomes `param.` and the name.
 - **Two runs would land in the same directory.** The second isn't prepared. Pig's run numbers should make that impossible.
+
+A run that isn't prepared at all, like the second of those two, or one whose `pig-run.json` can't be read, has no directory to put a log in, so its problem is only printed.
 
 Some things are passed on as notes but aren't problems, because they're common and the file is still made. ffmpeg often warns about recordings from browsers, about a packet it can't parse or a recording that ends mid-frame, and copies them anyway; its warnings are printed, and the remuxed file is kept. A recording the task never finished, because the participant closed the tab, say, is joined, and ends where the data does. A recording split across two runs, because a run expired partway through it, is prepared as two files, one in each run. Joining those is up to you.

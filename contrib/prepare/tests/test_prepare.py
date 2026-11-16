@@ -106,6 +106,8 @@ def test_events_become_rows_with_the_run_and_its_parameters(tmp_path):
     ]
     combined = read_csv(tmp_path / "prepared/events.csv")
     assert len(combined) == 2
+    # Nothing to say, so no log.
+    assert not (tmp_path / "prepared/circe/10351/baseline/prepare.log").exists()
 
 
 def test_media_is_named_by_data_name_then_event_id(tmp_path):
@@ -172,6 +174,11 @@ def test_a_parameter_that_collides_with_an_event_field_is_a_problem(tmp_path):
     with pytest.raises(SystemExit) as exited:
         main([str(organized), str(tmp_path / "prepared")])
     assert "1 problem" in str(exited.value)
+
+    log = (tmp_path / "prepared/circe/10351/baseline/prepare.log").read_text()
+    assert log.startswith("problem: ")
+    assert "the link parameter utm_source is also an event field" in log
+    assert read_csv(tmp_path / "prepared/runs.csv")[0]["problems"] == "1"
 
 
 def test_a_directory_without_pig_run_json_is_not_a_run(tmp_path):
@@ -264,4 +271,8 @@ def test_ffmpeg_warnings_are_passed_on_but_not_problems(tmp_path, monkeypatch, c
     out = tmp_path / "prepared/circe/10351/baseline"
     assert (out / "prompt3.webm").read_bytes() == b"abcd"
     assert "Error parsing Opus packet header" in capsys.readouterr().err
-    assert read_csv(tmp_path / "prepared/runs.csv")[0]["problems"] == "0"
+    log = (out / "prepare.log").read_text()
+    assert log.startswith("note: ")
+    assert "Error parsing Opus packet header" in log
+    index = read_csv(tmp_path / "prepared/runs.csv")
+    assert (index[0]["problems"], index[0]["notes"]) == ("0", "1")
