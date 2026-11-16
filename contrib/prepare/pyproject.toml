@@ -1,0 +1,19 @@
+[project]
+name = "pig-prepare"
+version = "0.1.0"
+description = "Turn a pigsty organize tree into CSVs and playable media files: a starting point to copy into your study"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+pig-prepare = "pig_prepare.prepare:main"
+
+[build-system]
+requires = ["uv_build>=0.11.22,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.16.0",
+]

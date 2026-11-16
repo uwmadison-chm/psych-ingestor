@@ -401,7 +401,7 @@ next to the data file, in a directory named for the media ID.
 ```json
 {
   "event_id": "prompt3_audio",
-  "data": { "content_type": "audio/webm;codecs=opus", "prompt": 3 }
+  "data": { "content_type": "audio/webm;codecs=opus", "name": "prompt3", "prompt": 3 }
 }
 ```
 
@@ -410,7 +410,8 @@ yours and Pig doesn't look inside it, and the same size limit applies. Pig defin
 fields for media. The content type, a filename you'd like the assembled recording to
 have, which trial it belongs to: all of that goes in `data`, if you want it. Do record
 the content type, though. It's what tells someone how to play a recording later, and
-Pig has no other way of knowing.
+Pig has no other way of knowing. A `name`, like `prompt3`, is worth sending too: it's
+what [contrib/prepare](../contrib/prepare/README.md) names the assembled file by.
 
 You get back the media ID and the largest part this task will take:
 
