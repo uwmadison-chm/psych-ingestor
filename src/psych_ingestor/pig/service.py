@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .. import files, formats, keys, signing
@@ -21,12 +23,11 @@ from ..rules import (
     is_safe_value,
     is_text_value,
 )
-from . import db, media, purge, runs, storage
+from . import db, media, purge, requests, runs, storage
 from .config import Config, TaskDefinition
 from .media import MediaItem
+from .requests import BadEvent
 from .runs import Disposition, Phase, RequestProblem, Run
-
-MAX_EVENT_ID_LENGTH = 256
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +60,15 @@ class Reply:
 
     status_code: int
     body: dict[str, Any]
+
+
+class RunClosed(Exception):
+    """The run stopped taking data. Raised by `Pig._collecting`, and answered by each
+    request in its own shape, since what a task needs to hear differs between them."""
+
+    def __init__(self, run: Run):
+        super().__init__(run.run_id)
+        self.run = run
 
 
 def _problem(message: str, can_retry: bool) -> dict[str, Any]:
@@ -219,6 +229,51 @@ class Pig:
         }
         return parameters, extra
 
+    # --------------------------------------------------------------- storing
+    #
+    # Every request that adds to a run (events, a media start, a part, a media finish)
+    # does its writing inside `_collecting`, and nowhere else. That's what makes "stored
+    # means on disk" true.
+
+    @contextmanager
+    def _collecting(self, task_code: str, run_id: str) -> Iterator[Run]:
+        """Hold the database's write lock for a block that adds to a run, and give it the
+        run as it is under the lock. Raises `RunClosed` if the run isn't taking data.
+
+        From reading the run's phase to recording the receipts, nothing else can write
+        to the database, so nothing can close the run in between, and the sweep can't
+        move its directory into done/ while we're about to write to it. Without the
+        lock, a task could be told something was stored that the finished run doesn't
+        have. See #52. Whatever the request read about the run before this is a guess;
+        the run this yields is the one that counts.
+
+        Inside the block, the file goes first and the database second. A process that
+        dies between them leaves something on disk the database doesn't know about; the
+        retry that follows writes it again, and the repeat stays. The other order would
+        tell a task its data was stored when it wasn't. Duplicated and visible, never
+        missing and silent. See docs/design_assumptions.md.
+
+        Raising anything inside the block rolls the database back.
+        """
+        with db.write_transaction(self.connection):
+            run = self._run_for_task(task_code, run_id)
+            if not run.accepting_data:
+                raise RunClosed(run)
+            yield run
+
+    def _record_receipt(
+        self, run_id: str, event_id: str, digest: str, stored_at: datetime
+    ) -> None:
+        """Record that an event is on disk. Only inside `_collecting`, after the write."""
+        if not runs.record_receipt(
+            self.connection, run_id, event_id, digest, stored_at
+        ):
+            # Can't happen under the write lock we hold; if it does, the transaction
+            # rolls back and the line already written stays as a harmless repeat.
+            raise RuntimeError(
+                f"a receipt for {event_id!r} appeared under the write lock"
+            )
+
     # --------------------------------------------------------------- events
 
     def store_events(
@@ -227,69 +282,57 @@ class Pig:
         # An unknown task or run is a 404 before anything else.
         run = self._run_for_task(task_code, run_id)
         task = self.task(task_code)
-        events = _as_event_dict(submitted)
+        events = requests.as_event_dict(submitted)
 
         # Everything that can be checked without the database, before taking its lock.
         errors: dict[str, dict[str, Any]] = {}
         checked: dict[str, tuple[Any, str]] = {}
         for event_id, event in events.items():
-            problem, digest = _check_event(task, run, event_id, event)
-            if problem:
-                errors[event_id] = problem
-            else:
-                checked[event_id] = (event["data"], digest)
+            try:
+                data = requests.event_data(event)
+                checked[event_id] = (
+                    data,
+                    requests.check_event(task, run, event_id, data),
+                )
+            except BadEvent as bad:
+                errors[event_id] = _problem(bad.message, can_retry=False)
 
         events_file = (
             formats.run_directory(self.config.in_progress_root, task_code, run_id)
             / formats.EVENTS_FILE
         )
 
-        # From reading the run's phase to recording the receipts, under the database's
-        # write lock. Nothing can close the run in between, so the sweep can't move its
-        # directory into done/ while we're about to append to it. Without the lock, a
-        # task could be told an event was stored that the finished run doesn't have.
-        # See #52.
-        with db.write_transaction(self.connection):
-            run = self._run_for_task(task_code, run_id)
-            if not run.accepting_data:
-                # Nothing is wrong with the events; it's the run that's closed. Sending
-                # them to a new run will work, so they're retryable, just not here.
-                refused = {
-                    event_id: _problem(_run_closed(run.disposition), can_retry=True)
-                    for event_id in events
-                }
-                return StoreResult(
-                    RUN_CLOSED, run.api_status, self._stored_ids(run_id), refused
-                )
+        try:
+            with self._collecting(task_code, run_id):
+                stored_at = db.now()
+                new: dict[str, tuple[dict[str, Any], str]] = {}
+                for event_id, (data, digest) in checked.items():
+                    known = runs.receipt_hash(self.connection, run_id, event_id)
+                    if known is None:
+                        line = formats.event_line(event_id, data, stored_at)
+                        new[event_id] = (line, digest)
+                    elif known != digest:
+                        errors[event_id] = _collision(event_id)
+                    # Otherwise it's a retry, and we already have it.
 
-            stored_at = db.now()
-            new: dict[str, tuple[dict[str, Any], str]] = {}
-            for event_id, (data, digest) in checked.items():
-                known = runs.receipt_hash(self.connection, run_id, event_id)
-                if known is None:
-                    line = formats.event_line(event_id, data, stored_at)
-                    new[event_id] = (line, digest)
-                elif known != digest:
-                    errors[event_id] = _collision(event_id)
-                # Otherwise it's a retry, and we already have it.
-
-            # The file first, then the database. A process that dies between them
-            # leaves lines the index doesn't know about; the retry that follows writes
-            # them again, and the repeated lines stay. The other order would tell a
-            # task its event was stored when it wasn't. See docs/design_assumptions.md.
-            if new:
-                storage.append_lines(
-                    events_file, [formats.canonical(line) for line, _ in new.values()]
-                )
-            for event_id, (_, digest) in new.items():
-                if not runs.record_receipt(
-                    self.connection, run_id, event_id, digest, stored_at
-                ):
-                    # Can't happen under the write lock we hold; if it does, the
-                    # transaction rolls back and the appended lines stay as repeats.
-                    raise RuntimeError(
-                        f"a receipt for {event_id!r} appeared under the write lock"
+                # The file first, then the database. See `_collecting`.
+                if new:
+                    storage.append_lines(
+                        events_file,
+                        [formats.canonical(line) for line, _ in new.values()],
                     )
+                for event_id, (_, digest) in new.items():
+                    self._record_receipt(run_id, event_id, digest, stored_at)
+        except RunClosed as closed:
+            # Nothing is wrong with the events; it's the run that's closed. Sending
+            # them to a new run will work, so they're retryable, just not here.
+            refused = {
+                event_id: _problem(_run_closed(closed.run.disposition), can_retry=True)
+                for event_id in events
+            }
+            return StoreResult(
+                RUN_CLOSED, closed.run.api_status, self._stored_ids(run_id), refused
+            )
 
         stored = self._stored_ids(run_id)
         if errors:
@@ -365,89 +408,65 @@ class Pig:
     def start_media(self, task_code: str, run_id: str, submitted: Any) -> Reply:
         task = self._media_task(task_code)
         run = self._run_for_task(task_code, run_id)
-        event_id, data = _as_media_start(submitted)
-
-        if len(event_id) > MAX_EVENT_ID_LENGTH:
-            return self._start_refused(
-                run,
-                event_id,
-                f"Event IDs can be at most {MAX_EVENT_ID_LENGTH} characters.",
-            )
-        if run.encrypted_to and not keys.is_encrypted_text(data):
-            return self._start_refused(run, event_id, _NOT_ENCRYPTED)
-
-        stored_at = db.now()
-        # The hash and the size limit cover what the task sent, and the media ID isn't
-        # part of that, so both are settled before there is a media ID.
-        hashed = formats.hashed_text(formats.event_line(event_id, data, stored_at))
-        if len(hashed.encode("utf-8")) > task.max_event_size:
-            return self._start_refused(
-                run,
-                event_id,
-                f"This event is bigger than this task allows ({task.max_event_size} "
-                "bytes).",
-            )
-        digest = formats.content_hash(hashed)
+        event_id, data = requests.as_media_start(submitted)
+        try:
+            digest = requests.check_event(task, run, event_id, data)
+        except BadEvent as bad:
+            return self._start_refused(run, event_id, bad.message)
 
         run_dir = formats.run_directory(self.config.in_progress_root, task_code, run_id)
         events_file = run_dir / formats.EVENTS_FILE
 
-        # One transaction from the phase check to the row, because the media ID is
-        # handed out inside it and has to be written on the event's line before the row
-        # that records it exists, and because nothing may close the run in between (see
-        # `store_events`). The file is still written before the database: a crash after
-        # the append leaves a line the index doesn't know about, and the retry hands
-        # out the same ID again and writes the same line again.
-        with db.write_transaction(self.connection):
-            run = self._run_for_task(task_code, run_id)
-            if not run.accepting_data:
-                refused = StoreResult(
-                    RUN_CLOSED,
-                    run.api_status,
-                    self._stored_ids(run_id),
-                    {event_id: _problem(_run_closed(run.disposition), can_retry=True)},
-                )
-                return Reply(refused.status_code, refused.body())
+        # The media ID is handed out under the lock, and written on the event's line
+        # before the row that records it exists. A crash after the append leaves a line
+        # the database doesn't know about, and the retry hands out the same ID again and
+        # writes the same line again.
+        try:
+            with self._collecting(task_code, run_id) as run:
+                known = runs.receipt_hash(self.connection, run_id, event_id)
+                if known is not None:
+                    item = media.by_event_id(self.connection, run_id, event_id)
+                    if item is None:
+                        return self._start_refused(
+                            run,
+                            event_id,
+                            f"This run already has an ordinary event with the ID "
+                            f"{event_id!r}, sent without media. Pig kept it. Use a "
+                            "different event ID for the media item.",
+                        )
+                    if known == digest:
+                        return Reply(200, self._started(task, item))  # A retry.
+                    return self._start_refused(
+                        run, event_id, _collision(event_id)["message"]
+                    )
 
-            known = runs.receipt_hash(self.connection, run_id, event_id)
-            if known is not None:
-                item = media.by_event_id(self.connection, run_id, event_id)
-                if item is None:
+                media_id = media.next_media_id(self.connection, run_id)
+                if media_id > media.MAX_MEDIA_ID:
                     return self._start_refused(
                         run,
                         event_id,
-                        f"This run already has an ordinary event with the ID "
-                        f"{event_id!r}, sent without media. Pig kept it. Use a "
-                        "different event ID for the media item.",
+                        f"This run already has {media.MAX_MEDIA_ID} media items, which "
+                        "is as many as media IDs go.",
                     )
-                if known == digest:
-                    return Reply(200, self._started(task, item))  # A retry.
-                return self._start_refused(
-                    run, event_id, _collision(event_id)["message"]
-                )
-
-            media_id = media.next_media_id(self.connection, run_id)
-            if media_id > media.MAX_MEDIA_ID:
-                return self._start_refused(
-                    run,
-                    event_id,
-                    f"This run already has {media.MAX_MEDIA_ID} media items, which is "
-                    "as many as media IDs go.",
-                )
-            line = formats.event_line(event_id, data, stored_at, media_id)
-            files.make_directories(formats.media_directory(run_dir, media_id))
-            storage.append_lines(events_file, [formats.canonical(line)])
-            media.insert(self.connection, run_id, media_id, event_id)
-            if not runs.record_receipt(
-                self.connection, run_id, event_id, digest, stored_at
-            ):
-                # Can't happen under the write lock we hold; if it does, the
-                # transaction rolls back and the appended line stays as a harmless
-                # repeat.
-                raise RuntimeError(
-                    f"a receipt for {event_id!r} appeared under the write lock"
-                )
-            item = media.get(self.connection, run_id, media_id)
+                stored_at = db.now()
+                line = formats.event_line(event_id, data, stored_at, media_id)
+                files.make_directories(formats.media_directory(run_dir, media_id))
+                storage.append_lines(events_file, [formats.canonical(line)])
+                media.insert(self.connection, run_id, media_id, event_id)
+                self._record_receipt(run_id, event_id, digest, stored_at)
+                item = media.get(self.connection, run_id, media_id)
+        except RunClosed as closed:
+            refused = StoreResult(
+                RUN_CLOSED,
+                closed.run.api_status,
+                self._stored_ids(run_id),
+                {
+                    event_id: _problem(
+                        _run_closed(closed.run.disposition), can_retry=True
+                    )
+                },
+            )
+            return Reply(refused.status_code, refused.body())
         assert item is not None
         return Reply(201, self._started(task, item))
 
@@ -485,6 +504,8 @@ class Pig:
         task, run, item = self._media_item(task_code, run_id, media_id)
         key = str(part)
 
+        # Saves reading the body for a run or an item that's already closed. The checks
+        # that count are the ones under the lock, below.
         if not run.accepting_data:
             return self._media_refused(
                 RUN_CLOSED, run, item, key, _run_closed(run.disposition), can_retry=True
@@ -536,49 +557,48 @@ class Pig:
         # uploads of the same part number can't be allowed to both get past the check:
         # the loser would leave its bytes on disk under the winner's receipt.
         now = db.now()
-        with db.write_transaction(self.connection):
-            run = self._run_for_task(task_code, run_id)
-            current = media.get(self.connection, run_id, media_id)
-            assert current is not None
-            if not run.accepting_data:
-                writer.discard()
-                return self._media_refused(
-                    RUN_CLOSED,
-                    run,
-                    current,
-                    key,
-                    _run_closed(run.disposition),
-                    can_retry=True,
+        try:
+            with self._collecting(task_code, run_id) as run:
+                current = self._current_item(run_id, media_id)
+                if current.finished:
+                    writer.discard()
+                    return self._media_refused(
+                        RUN_CLOSED,
+                        run,
+                        current,
+                        key,
+                        _item_finished(current),
+                        can_retry=False,
+                    )
+                known = media.part_hash(self.connection, run_id, media_id, part)
+                if known == digest:
+                    writer.discard()
+                    return Reply(200, self._media_body(run, current))  # A retry.
+                if known is not None:
+                    writer.discard()
+                    return self._media_refused(
+                        422,
+                        run,
+                        current,
+                        key,
+                        f"This media item already has a different part {part}. Pig "
+                        "kept the one it had. Two parts were given the same number, "
+                        "which is a bug in the task rather than a network problem.",
+                        can_retry=False,
+                    )
+                writer.keep()
+                media.record_part(
+                    self.connection, run_id, media_id, part, writer.size, digest, now
                 )
-            if current.finished:
-                writer.discard()
-                return self._media_refused(
-                    RUN_CLOSED,
-                    run,
-                    current,
-                    key,
-                    _item_finished(current),
-                    can_retry=False,
-                )
-            known = media.part_hash(self.connection, run_id, media_id, part)
-            if known == digest:
-                writer.discard()
-                return Reply(200, self._media_body(run, current))  # A retry.
-            if known is not None:
-                writer.discard()
-                return self._media_refused(
-                    422,
-                    run,
-                    current,
-                    key,
-                    f"This media item already has a different part {part}. Pig kept "
-                    "the one it had. Two parts were given the same number, which is a "
-                    "bug in the task rather than a network problem.",
-                    can_retry=False,
-                )
-            writer.keep()
-            media.record_part(
-                self.connection, run_id, media_id, part, writer.size, digest, now
+        except RunClosed as closed:
+            writer.discard()
+            return self._media_refused(
+                RUN_CLOSED,
+                closed.run,
+                self._current_item(run_id, media_id),
+                key,
+                _run_closed(closed.run.disposition),
+                can_retry=True,
             )
         return Reply(201, self._media_body(run, current))
 
@@ -587,68 +607,67 @@ class Pig:
     ) -> Reply:
         """The task says how many parts it sent. Pig checks it holds exactly those."""
         self._media_item(task_code, run_id, media_id)
-        declared = _as_declared_parts(submitted)
+        declared = requests.as_declared_parts(submitted)
 
         # Under the write lock so no part lands, and the run doesn't close, between the
-        # checks and the mark.
-        with db.write_transaction(self.connection):
-            run = self._run_for_task(task_code, run_id)
-            current = media.get(self.connection, run_id, media_id)
-            assert current is not None
-            if not run.accepting_data:
-                return self._media_refused(
-                    RUN_CLOSED,
-                    run,
-                    current,
-                    "media",
-                    "This run has closed, so nothing in it can be finished now. Every "
-                    "part Pig received is saved, and the run's manifest will say the "
-                    "item wasn't finished.",
-                    can_retry=False,
-                )
-            if current.finished:
-                if current.declared_parts == declared:
-                    return Reply(200, self._media_body(run, current))  # A retry.
-                return self._media_refused(
-                    422,
-                    run,
-                    current,
-                    "media",
-                    f"This media item was already finished with "
-                    f"{current.declared_parts} part(s), and that can't change.",
-                    can_retry=False,
-                )
+        # checks and the mark. Nothing is written to disk.
+        try:
+            with self._collecting(task_code, run_id) as run:
+                current = self._current_item(run_id, media_id)
+                if current.finished:
+                    if current.declared_parts == declared:
+                        return Reply(200, self._media_body(run, current))  # A retry.
+                    return self._media_refused(
+                        422,
+                        run,
+                        current,
+                        "media",
+                        f"This media item was already finished with "
+                        f"{current.declared_parts} part(s), and that can't change.",
+                        can_retry=False,
+                    )
 
-            stored = media.stored_parts(self.connection, run_id, media_id)
-            held = set(stored)
-            missing = [
-                number for number in range(1, declared + 1) if number not in held
-            ]
-            extra = [number for number in stored if number > declared]
-            if extra:
-                return self._media_refused(
-                    422,
-                    run,
-                    current,
-                    "media",
-                    f"You said this media item has {declared} part(s), but Pig holds "
-                    f"part(s) {_list(extra)} beyond that. Pig kept them. Check the "
-                    "count your task sends.",
-                    can_retry=False,
-                )
-            if missing:
-                return self._media_refused(
-                    422,
-                    run,
-                    current,
-                    "media",
-                    f"You said this media item has {declared} part(s), but Pig doesn't "
-                    f"have part(s) {_list(missing)}. Send them, then finish again.",
-                    can_retry=True,
-                )
-            media.mark_finished(self.connection, current, declared, db.now())
-            finished = media.get(self.connection, run_id, media_id)
-        assert finished is not None
+                stored = media.stored_parts(self.connection, run_id, media_id)
+                held = set(stored)
+                missing = [
+                    number for number in range(1, declared + 1) if number not in held
+                ]
+                extra = [number for number in stored if number > declared]
+                if extra:
+                    return self._media_refused(
+                        422,
+                        run,
+                        current,
+                        "media",
+                        f"You said this media item has {declared} part(s), but Pig "
+                        f"holds part(s) {_list(extra)} beyond that. Pig kept them. "
+                        "Check the count your task sends.",
+                        can_retry=False,
+                    )
+                if missing:
+                    return self._media_refused(
+                        422,
+                        run,
+                        current,
+                        "media",
+                        f"You said this media item has {declared} part(s), but Pig "
+                        f"doesn't have part(s) {_list(missing)}. Send them, then finish "
+                        "again.",
+                        can_retry=True,
+                    )
+                media.mark_finished(self.connection, current, declared, db.now())
+                finished = self._current_item(run_id, media_id)
+        except RunClosed as closed:
+            return self._media_refused(
+                RUN_CLOSED,
+                closed.run,
+                self._current_item(run_id, media_id),
+                "media",
+                "This run has closed, so nothing in it can be finished now. Every "
+                "part Pig received is saved, and the run's manifest will say the "
+                "item wasn't finished.",
+                can_retry=False,
+            )
         return Reply(200, self._media_body(run, finished))
 
     def _media_task(self, task_code: str) -> TaskDefinition:
@@ -678,6 +697,12 @@ class Pig:
             )
         return task, run, item
 
+    def _current_item(self, run_id: str, media_id: int) -> MediaItem:
+        """A media item `_media_item` has already found, as the database has it now."""
+        item = media.get(self.connection, run_id, media_id)
+        assert item is not None
+        return item
+
     def _media_body(self, run: Run, item: MediaItem) -> dict[str, Any]:
         return {
             "status": run.api_status,
@@ -704,7 +729,7 @@ class Pig:
     # match this one. See formats.py, and docs/api.md for why there's no key.
 
     def purge_run(self, task_code: str, run_id: str, submitted: Any) -> dict[str, Any]:
-        sent = _as_purge_hashes(submitted)
+        sent = requests.as_purge_hashes(submitted)
         # Not `_run_for_task`: a task taken out of pig.toml still has runs in `done/`,
         # and they still need purging.
         run = runs.get(self.connection, run_id)
@@ -772,54 +797,9 @@ class Pig:
         return runs.stored_event_ids(self.connection, run_id)
 
 
-# What an encrypting run says to plaintext. The usual cause is a browser that loaded the
-# task's settings before it encrypted, and kept them while it was offline.
-_NOT_ENCRYPTED = (
-    "This run is encrypted, and this event isn't. Pig only takes encrypted events for "
-    "it. The page probably has an old copy of this task's settings; reloading it fetches "
-    "the current ones, and a new run will encrypt."
-)
 _PART_NOT_ENCRYPTED = (
     "This run is encrypted, and this part isn't. Pig only takes encrypted parts for it."
 )
-
-
-def _check_event(
-    task: TaskDefinition, run: Run, event_id: str, event: Any
-) -> tuple[dict[str, Any] | None, str]:
-    """Check one event against everything that doesn't need the database. Returns a
-    problem, or None and the hash of what the task sent."""
-    if len(event_id) > MAX_EVENT_ID_LENGTH:
-        return _problem(
-            f"Event IDs can be at most {MAX_EVENT_ID_LENGTH} characters.", False
-        ), ""
-    if not isinstance(event, dict):
-        return _problem(
-            "An event has to be a JSON object with a 'data' field.", False
-        ), ""
-    if "data" not in event:
-        return _problem("This event has no 'data' field.", False), ""
-
-    # Anything outside `data` would be dropped on the floor, and a task that put a
-    # timestamp there would never know. Refusing is the only way it finds out.
-    unexpected = sorted(key for key in event if key != "data")
-    if unexpected:
-        return _problem(
-            f"This event has {unexpected} outside 'data'. Pig stores only what's "
-            "inside 'data', so put everything you want to keep in there.",
-            False,
-        ), ""
-    if run.encrypted_to and not keys.is_encrypted_text(event["data"]):
-        return _problem(_NOT_ENCRYPTED, False), ""
-
-    # The size limit and the hash both cover what the task sent, not what Pig adds.
-    hashed = formats.hashed_text({"event_id": event_id, "data": event["data"]})
-    if len(hashed.encode("utf-8")) > task.max_event_size:
-        return _problem(
-            f"This event is bigger than this task allows ({task.max_event_size} bytes).",
-            False,
-        ), ""
-    return None, formats.content_hash(hashed)
 
 
 def _run_closed(disposition: Disposition | None) -> str:
@@ -866,73 +846,6 @@ def _list(numbers: list[int]) -> str:
     return shown
 
 
-def _as_media_start(submitted: Any) -> tuple[str, Any]:
-    """The event that starts a media item: `{"event_id": ..., "data": {...}}`."""
-    expected = 'Expected {"event_id": "...", "data": {...}}.'
-    if not isinstance(submitted, dict):
-        raise RequestProblem(422, expected)
-    if "event_id" not in submitted:
-        raise RequestProblem(422, f"This media item has no 'event_id'. {expected}")
-    if "data" not in submitted:
-        raise RequestProblem(422, f"This media item has no 'data'. {expected}")
-    unexpected = sorted(key for key in submitted if key not in ("event_id", "data"))
-    if unexpected:
-        raise RequestProblem(
-            422,
-            f"This media item has {unexpected} outside 'data'. Pig stores only what's "
-            "inside 'data', so put everything you want to keep in there.",
-        )
-    event_id = submitted["event_id"]
-    if isinstance(event_id, int) and not isinstance(event_id, bool):
-        event_id = str(event_id)  # A counter, as JavaScript would send it.
-    if not isinstance(event_id, str):
-        raise RequestProblem(422, "'event_id' has to be text.")
-    return event_id, submitted["data"]
-
-
-def _as_declared_parts(submitted: Any) -> int:
-    """The body of a finish request: `{"parts": 37}` and nothing else."""
-    expected = 'Expected {"parts": N}, the number of parts you sent, counting from 1.'
-    if not isinstance(submitted, dict) or "parts" not in submitted:
-        raise RequestProblem(422, expected)
-    unexpected = sorted(key for key in submitted if key != "parts")
-    if unexpected:
-        raise RequestProblem(422, f"Unexpected {unexpected} in the request. {expected}")
-    parts = submitted["parts"]
-    if isinstance(parts, bool) or not isinstance(parts, int) or parts < 1:
-        raise RequestProblem(
-            422, f"'parts' has to be a whole number, 1 or more. {expected}"
-        )
-    # Refused here, before anything counts up to it: checking which of a billion
-    # parts are missing would take minutes, under the database's write lock.
-    if parts > media.MAX_PART:
-        raise RequestProblem(
-            422,
-            f"'parts' is {parts}, and a media item can have at most {media.MAX_PART} "
-            f"parts. {expected}",
-        )
-    return parts
-
-
-def _as_purge_hashes(submitted: Any) -> dict[str, str]:
-    """The `purge_hashes` of a purge request, or a 422 saying what's wrong with it."""
-    hashes = submitted.get("purge_hashes") if isinstance(submitted, dict) else None
-    if (
-        not isinstance(hashes, dict)
-        or not hashes
-        or not all(
-            isinstance(path, str) and isinstance(value, str)
-            for path, value in hashes.items()
-        )
-    ):
-        raise RequestProblem(
-            422,
-            'A purge request is {"purge_hashes": {path: hash, ...}}, with the purge '
-            "hash of every file in the run. See docs/api.md.",
-        )
-    return hashes
-
-
 def _check_signature(
     task: TaskDefinition, parameters: dict[str, str], signature: Any
 ) -> str:
@@ -952,57 +865,3 @@ def _check_signature(
             f"This link can't start a run of {task.code!r}, because {bad} Use the link "
             "you were sent, exactly as it is.",
         ) from None
-
-
-def read_start_request(body: Any) -> tuple[Any, Any]:
-    """The parameters and the signature in a request to start a run.
-
-    Each request body is an object with named fields, rather than the parameters or the
-    events themselves, so there's room for something new beside them without taking a
-    name a task might want.
-    """
-    _check_fields(
-        body,
-        required="parameters",
-        allowed={"parameters", "signature"},
-        example='{"parameters": {"participant_id": "10351"}}',
-    )
-    return body["parameters"], body.get("signature")
-
-
-def read_events_request(body: Any) -> Any:
-    """The events in a request that sends them. See `read_start_request`."""
-    _check_fields(
-        body,
-        required="events",
-        allowed={"events"},
-        example='{"events": {"1": {"data": {...}}}}',
-    )
-    return body["events"]
-
-
-def _check_fields(body: Any, required: str, allowed: set[str], example: str) -> None:
-    if not isinstance(body, dict) or required not in body:
-        raise RequestProblem(
-            422, f"Expected a JSON object with {required!r} in it, like {example}."
-        )
-    unexpected = sorted(str(name) for name in set(body) - allowed)
-    if unexpected:
-        # Refused rather than ignored: a parameter or an event put here by mistake would
-        # otherwise be dropped without anyone being told.
-        raise RequestProblem(
-            422,
-            f"This request can only have {' and '.join(map(repr, sorted(allowed)))} "
-            f"in it, and it also has {', '.join(map(repr, unexpected))}. Did that "
-            f"belong inside {required!r}?",
-        )
-
-
-def _as_event_dict(submitted: Any) -> dict[str, Any]:
-    if not isinstance(submitted, dict):
-        raise RequestProblem(
-            422,
-            "Expected the events as a JSON object whose keys are your event IDs, like "
-            '{"events": {"1": {"data": {...}}}}.',
-        )
-    return {str(event_id): event for event_id, event in submitted.items()}

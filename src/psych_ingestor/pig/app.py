@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import db, health, service
+from . import db, health, requests
 from .config import DEFAULT_CONFIG, ConfigSource
 from .runs import RequestProblem
 from .service import Pig
@@ -69,7 +69,7 @@ def create_app(config_path: Path) -> FastAPI:
 
     @v1.post("/task/{task_code}/run")
     def start_run(task_code: str, submitted: Annotated[Any, Body()]) -> JSONResponse:
-        parameters, signature = service.read_start_request(submitted)
+        parameters, signature = requests.read_start_request(submitted)
         with _pig(source) as pig:
             return JSONResponse(
                 status_code=201,
@@ -80,7 +80,7 @@ def create_app(config_path: Path) -> FastAPI:
     def store_events(
         task_code: str, run_id: str, submitted: Annotated[Any, Body()]
     ) -> JSONResponse:
-        events = service.read_events_request(submitted)
+        events = requests.read_events_request(submitted)
         with _pig(source) as pig:
             result = pig.store_events(task_code, run_id, events)
             return JSONResponse(status_code=result.status_code, content=result.body())

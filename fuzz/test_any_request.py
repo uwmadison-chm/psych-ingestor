@@ -30,7 +30,7 @@ from support import (
 )
 
 from psych_ingestor import signing
-from psych_ingestor.pig import service, sweep
+from psych_ingestor.pig import requests, sweep
 
 # ----------------------------------------------------------------- what a body holds
 
@@ -287,12 +287,12 @@ def test_nan_and_infinity_are_refused(data: dict[str, Any], name: str, value: fl
 
 
 def start(pig, task_code: str, body: Any) -> dict[str, Any]:
-    parameters, signature = service.read_start_request(body)
+    parameters, signature = requests.read_start_request(body)
     return pig.start_run(task_code, parameters, signature)
 
 
 def send_events(pig, task_code: str, run_id: str, body: Any):
-    return pig.store_events(task_code, run_id, service.read_events_request(body))
+    return pig.store_events(task_code, run_id, requests.read_events_request(body))
 
 
 def started(pig, task_code: str) -> str:
